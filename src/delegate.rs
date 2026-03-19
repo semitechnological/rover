@@ -21,9 +21,7 @@ impl RoverDelegate {
             .enumerate()
             .map(|(i, c)| StringMatchCandidate::new(i, &c.name))
             .collect();
-
         let matches = match_strings(&candidates, "", 50);
-
         Self {
             all_commands: commands,
             matches,
@@ -39,15 +37,14 @@ impl RoverDelegate {
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
         let result = self.calculator_result.as_ref().unwrap();
-        let mut row = div().px_3().py(px(6.0)).w_full().rounded_lg();
-
+        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
         if selected {
             row = row.bg(colors.element_selected);
         }
-
         row.child(
             div()
                 .flex()
+                .items_center()
                 .gap_3()
                 .child(
                     div()
@@ -72,16 +69,15 @@ impl RoverDelegate {
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let mut row = div().px_3().py(px(6.0)).w_full().rounded_lg();
-
+        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
         if selected {
             row = row.bg(colors.element_selected);
         }
-
         row.child(
             div()
                 .flex()
-                .gap_3()
+                .items_center()
+                .gap_2()
                 .child(
                     div()
                         .text_color(colors.text)
@@ -147,13 +143,13 @@ impl PickerDelegate for RoverDelegate {
 
         self.matches = match_strings(&candidates, &normalized, 50);
         self.selected_ix = 0;
-
         Task::ready(())
     }
 
-    fn confirm(&mut self, _cx: &mut Context<Picker<Self>>) {
+    fn confirm(&mut self, _cx: &mut Context<Picker<Self>>) -> bool {
         if self.calculator_result.is_some() && self.selected_ix == 0 {
-            return;
+            // TODO: copy calc result to clipboard
+            return false;
         }
 
         let match_ix = if self.calculator_result.is_some() {
@@ -165,8 +161,10 @@ impl PickerDelegate for RoverDelegate {
         if let Some(string_match) = self.matches.get(match_ix) {
             if let Some(command) = self.all_commands.get(string_match.candidate_id) {
                 CommandRegistry::execute(command);
+                return true;
             }
         }
+        false
     }
 
     fn dismissed(&mut self, _cx: &mut Context<Picker<Self>>) {}
@@ -189,10 +187,8 @@ impl PickerDelegate for RoverDelegate {
         } else {
             ix
         };
-
         let string_match = self.matches.get(match_ix)?;
         let command = self.all_commands.get(string_match.candidate_id)?;
-
         Some(self.render_command_row(command, selected, colors))
     }
 }

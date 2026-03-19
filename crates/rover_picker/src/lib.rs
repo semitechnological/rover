@@ -1,6 +1,6 @@
 mod text_input;
 
-pub use text_input::{TextInput, TextInputEvent, bind_input_keys};
+pub use text_input::{bind_input_keys, TextInput, TextInputEvent};
 
 use gpui::*;
 use rover_theme::theme;
@@ -18,6 +18,10 @@ pub fn bind_picker_keys(cx: &mut App) {
     bind_input_keys(cx);
 }
 
+pub enum PickerEvent {
+    Dismiss,
+}
+
 pub trait PickerDelegate: Sized + 'static {
     type ListItem: IntoElement;
 
@@ -31,7 +35,8 @@ pub trait PickerDelegate: Sized + 'static {
     }
 
     fn update_matches(&mut self, query: String, cx: &mut Context<Picker<Self>>) -> Task<()>;
-    fn confirm(&mut self, cx: &mut Context<Picker<Self>>);
+    /// Returns true if the picker should be dismissed after confirm.
+    fn confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool;
     fn dismissed(&mut self, cx: &mut Context<Picker<Self>>);
 
     fn render_match(
@@ -49,19 +54,22 @@ pub struct Picker<D: PickerDelegate> {
     focus_handle: FocusHandle,
 }
 
+impl<D: PickerDelegate> EventEmitter<PickerEvent> for Picker<D> {}
+
 impl<D: PickerDelegate> Picker<D> {
     pub fn new(delegate: D, cx: &mut Context<Self>) -> Self {
         let placeholder = delegate.placeholder_text();
         let text_input = cx.new(|cx| TextInput::new(placeholder, cx));
 
-        cx.subscribe(&text_input, |picker: &mut Self, _input, event: &TextInputEvent, cx| {
-            match event {
+        cx.subscribe(
+            &text_input,
+            |picker: &mut Self, _input, event: &TextInputEvent, cx| match event {
                 TextInputEvent::Changed { text } => {
                     picker.delegate.update_matches(text.clone(), cx).detach();
                     cx.notify();
                 }
-            }
-        })
+            },
+        )
         .detach();
 
         let mut picker = Self {
@@ -72,6 +80,13 @@ impl<D: PickerDelegate> Picker<D> {
         };
         picker.delegate.update_matches(String::new(), cx).detach();
         picker
+    }
+
+    pub fn clear_and_reset(&mut self, cx: &mut Context<Self>) {
+        self.text_input.update(cx, |input, cx| input.clear(cx));
+        self.delegate.update_matches(String::new(), cx).detach();
+        self.delegate.set_selected_index(0, cx);
+        cx.notify();
     }
 
     fn handle_select_next(&mut self, _: &SelectNext, _window: &mut Window, cx: &mut Context<Self>) {
@@ -96,11 +111,21 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     fn handle_confirm(&mut self, _: &Confirm, _window: &mut Window, cx: &mut Context<Self>) {
-        self.delegate.confirm(cx);
+        let should_dismiss = self.delegate.confirm(cx);
+        if should_dismiss {
+            self.clear_and_reset(cx);
+            cx.emit(PickerEvent::Dismiss);
+        }
     }
 
     fn handle_cancel(&mut self, _: &Cancel, _window: &mut Window, cx: &mut Context<Self>) {
-        self.delegate.dismissed(cx);
+        let has_text = !self.text_input.read(cx).text().is_empty();
+        if has_text {
+            self.clear_and_reset(cx);
+        } else {
+            self.delegate.dismissed(cx);
+            cx.emit(PickerEvent::Dismiss);
+        }
     }
 }
 
@@ -119,7 +144,6 @@ impl<D: PickerDelegate> Render for Picker<D> {
 
         let no_matches = self.delegate.no_matches_text();
         let bg = colors.surface_background;
-        let border = colors.border;
         let border_v = colors.border_variant;
         let text_muted = colors.text_muted;
 
@@ -152,28 +176,28 @@ impl<D: PickerDelegate> Render for Picker<D> {
 
         if match_count > 0 {
             root = root.child(
-                div().flex_1().py_1().child(
-                    uniform_list(
-                        "picker-list",
-                        match_count,
-                        cx.processor(
-                            |picker: &mut Self,
-                             range: std::ops::Range<usize>,
-                             _window: &mut Window,
-                             cx: &mut Context<Self>| {
-                                range
-                                    .filter_map(|ix| {
-                                        let selected = ix == picker.delegate.selected_index();
-                                        picker.delegate.render_match(ix, selected, cx)
-                                    })
-                                    .map(|el: D::ListItem| el.into_any_element())
-                                    .collect::<Vec<_>>()
-                            },
-                        ),
-                    )
-                    .flex_1()
-                    .track_scroll(self.scroll_handle.clone()),
-                ),
+                uniform_list(
+                    "picker-list",
+                    match_count,
+                    cx.processor(
+                        |picker: &mut Self,
+                         range: std::ops::Range<usize>,
+                         _window: &mut Window,
+                         cx: &mut Context<Self>| {
+                            range
+                                .filter_map(|ix| {
+                                    let selected = ix == picker.delegate.selected_index();
+                                    picker.delegate.render_match(ix, selected, cx)
+                                })
+                                .map(|el: D::ListItem| el.into_any_element())
+                                .collect::<Vec<_>>()
+                        },
+                    ),
+                )
+                .flex_grow()
+                .px_1()
+                .py_1()
+                .track_scroll(self.scroll_handle.clone()),
             );
         } else if !query_is_empty {
             root = root.child(div().px_3().py_4().text_color(text_muted).child(no_matches));

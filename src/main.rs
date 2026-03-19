@@ -5,7 +5,7 @@ use delegate::RoverDelegate;
 use gpui::*;
 use rover_commands::{register_apps, CommandRegistry};
 use rover_extensions::{load_extensions, register_extension_themes};
-use rover_picker::{Picker, bind_picker_keys};
+use rover_picker::{bind_picker_keys, Picker, PickerEvent};
 use rover_theme::{self, ThemeRegistry};
 
 actions!(rover, [Toggle, Quit]);
@@ -22,7 +22,6 @@ fn main() {
         let mut cmd_registry = CommandRegistry::new();
         register_apps(&mut cmd_registry);
         let commands: Vec<_> = cmd_registry.commands().to_vec();
-        eprintln!("[rover] discovered {} apps", commands.len());
 
         bind_picker_keys(cx);
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -59,6 +58,17 @@ fn open_window(commands: Vec<rover_commands::Command>, cx: &mut App) {
                 cx.new(|cx| {
                     let delegate = RoverDelegate::new(commands);
                     let picker = cx.new(|cx| Picker::new(delegate, cx));
+
+                    cx.subscribe(
+                        &picker,
+                        |_this: &mut RoverWindow, _picker, event: &PickerEvent, cx| match event {
+                            PickerEvent::Dismiss => {
+                                cx.hide();
+                            }
+                        },
+                    )
+                    .detach();
+
                     RoverWindow { picker }
                 })
             },
@@ -79,12 +89,7 @@ struct RoverWindow {
 }
 
 impl Render for RoverWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = rover_theme::theme(cx);
-        let colors = &theme.colors;
-
-        div()
-            .size_full()
-            .child(self.picker.clone())
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.picker.clone())
     }
 }

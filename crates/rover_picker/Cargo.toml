@@ -1,0 +1,10 @@
+[package]
+name = "rover_picker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpui.workspace = true
+unicode-segmentation.workspace = true
+rover_fuzzy.workspace = true
+rover_theme.workspace = true

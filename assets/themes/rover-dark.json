@@ -1,0 +1,52 @@
+{
+  "name": "Rover",
+  "author": "Rover",
+  "themes": [
+    {
+      "name": "Rover Dark",
+      "appearance": "dark",
+      "style": {
+        "background": "#1e1e2e",
+        "surface.background": "#181825",
+        "elevated_surface.background": "#313244",
+        "text": "#cdd6f4",
+        "text.muted": "#a6adc8",
+        "text.placeholder": "#6c7086",
+        "text.accent": "#89b4fa",
+        "border": "#45475a",
+        "border.variant": "#313244",
+        "border.focused": "#89b4fa",
+        "element.background": "#313244",
+        "element.hover": "#45475a",
+        "element.selected": "#585b70",
+        "icon": "#cdd6f4",
+        "icon.muted": "#6c7086",
+        "scrollbar.thumb": "#45475a",
+        "scrollbar.track": "#1e1e2e"
+      }
+    },
+    {
+      "name": "Rover Light",
+      "appearance": "light",
+      "style": {
+        "background": "#eff1f5",
+        "surface.background": "#e6e9ef",
+        "elevated_surface.background": "#dce0e8",
+        "text": "#4c4f69",
+        "text.muted": "#6c6f85",
+        "text.placeholder": "#9ca0b0",
+        "text.accent": "#1e66f5",
+        "border": "#ccd0da",
+        "border.variant": "#dce0e8",
+        "border.focused": "#1e66f5",
+        "element.background": "#dce0e8",
+        "element.hover": "#ccd0da",
+        "element.selected": "#bcc0cc",
+        "icon": "#4c4f69",
+        "icon.muted": "#9ca0b0",
+        "scrollbar.thumb": "#ccd0da",
+        "scrollbar.track": "#eff1f5"
+      }
+    }
+  ]
+}

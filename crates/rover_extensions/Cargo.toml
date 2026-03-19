@@ -1,0 +1,16 @@
+[package]
+name = "rover_extensions"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpui.workspace = true
+anyhow.workspace = true
+log.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+wasmtime.workspace = true
+rover_theme.workspace = true
+rover_extension_api.workspace = true

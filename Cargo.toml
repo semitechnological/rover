@@ -1,0 +1,48 @@
+[workspace]
+members = [
+    "crates/rover_fuzzy",
+    "crates/rover_theme",
+    "crates/rover_picker",
+    "crates/rover_commands",
+    "crates/rover_extensions",
+    "crates/rover_extension_api",
+]
+resolver = "2"
+
+[workspace.dependencies]
+gpui = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+log = "0.4"
+dirs = "6"
+toml = "0.8"
+wasmtime = "29"
+fuzzy-matcher = "0.3"
+unicode-segmentation = "1"
+
+rover_fuzzy = { path = "crates/rover_fuzzy" }
+rover_theme = { path = "crates/rover_theme" }
+rover_picker = { path = "crates/rover_picker" }
+rover_commands = { path = "crates/rover_commands" }
+rover_extensions = { path = "crates/rover_extensions" }
+rover_extension_api = { path = "crates/rover_extension_api" }
+
+[package]
+name = "rover"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpui.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+log.workspace = true
+dirs.workspace = true
+rover_fuzzy.workspace = true
+rover_theme.workspace = true
+rover_picker.workspace = true
+rover_commands.workspace = true
+rover_extensions.workspace = true

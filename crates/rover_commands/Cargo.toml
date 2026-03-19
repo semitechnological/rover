@@ -1,0 +1,15 @@
+[package]
+name = "rover_commands"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gpui.workspace = true
+anyhow.workspace = true
+log.workspace = true
+dirs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rover_fuzzy.workspace = true
+rover_picker.workspace = true
+rover_theme.workspace = true

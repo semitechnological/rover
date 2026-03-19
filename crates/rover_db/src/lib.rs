@@ -15,6 +15,10 @@ pub struct ClipboardEntry {
 }
 
 impl RoverDb {
+    pub fn conn(&self) -> &Arc<Mutex<Connection>> {
+        &self.conn
+    }
+
     pub fn open() -> Result<Self> {
         let path = Self::db_path()?;
         if let Some(parent) = path.parent() {

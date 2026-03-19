@@ -7,7 +7,10 @@ use gpui::*;
 use rover_theme::theme;
 use std::sync::Arc;
 
-actions!(rover_picker, [SelectNext, SelectPrev, Confirm, Cancel]);
+actions!(
+    rover_picker,
+    [SelectNext, SelectPrev, Confirm, Cancel, ShowActions]
+);
 
 pub fn bind_picker_keys(cx: &mut App) {
     cx.bind_keys([
@@ -15,6 +18,7 @@ pub fn bind_picker_keys(cx: &mut App) {
         KeyBinding::new("down", SelectNext, Some("Picker")),
         KeyBinding::new("enter", Confirm, Some("Picker")),
         KeyBinding::new("escape", Cancel, Some("Picker")),
+        KeyBinding::new("cmd-k", ShowActions, Some("Picker")),
     ]);
     bind_input_keys(cx);
 }
@@ -22,6 +26,7 @@ pub fn bind_picker_keys(cx: &mut App) {
 pub enum PickerEvent {
     Dismiss,
     OpenSettings,
+    ToggleActions,
 }
 
 pub trait PickerDelegate: Sized + 'static {
@@ -61,6 +66,22 @@ pub trait PickerDelegate: Sized + 'static {
 
     /// Exit the current sub-view
     fn exit_submenu(&mut self, _cx: &mut Context<Picker<Self>>) {}
+
+    /// Return sub-actions for the currently selected item (shown on Cmd+K)
+    fn actions_for_selected(&self) -> Vec<ItemAction> {
+        Vec::new()
+    }
+
+    /// Execute a sub-action by index
+    fn execute_action(&mut self, _action_ix: usize, _cx: &mut Context<Picker<Self>>) -> bool {
+        false
+    }
+}
+
+#[derive(Clone)]
+pub struct ItemAction {
+    pub name: SharedString,
+    pub shortcut: Option<SharedString>,
 }
 
 pub struct Picker<D: PickerDelegate> {
@@ -68,6 +89,8 @@ pub struct Picker<D: PickerDelegate> {
     pub text_input: Entity<TextInput>,
     scroll_handle: UniformListScrollHandle,
     focus_handle: FocusHandle,
+    show_actions: bool,
+    action_selected_ix: usize,
 }
 
 impl<D: PickerDelegate> EventEmitter<PickerEvent> for Picker<D> {}
@@ -93,6 +116,8 @@ impl<D: PickerDelegate> Picker<D> {
             text_input,
             scroll_handle: UniformListScrollHandle::new(),
             focus_handle: cx.focus_handle(),
+            show_actions: false,
+            action_selected_ix: 0,
         };
         picker.delegate.update_matches(String::new(), cx).detach();
         picker
@@ -117,6 +142,14 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     fn handle_select_next(&mut self, _: &SelectNext, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_actions {
+            let actions = self.delegate.actions_for_selected();
+            if !actions.is_empty() {
+                self.action_selected_ix = (self.action_selected_ix + 1).min(actions.len() - 1);
+                cx.notify();
+            }
+            return;
+        }
         let query = self.text_input.read(cx).text().to_string();
         if let Some(new_query) = self.delegate.select_history(false, &query) {
             self.set_query(&new_query, cx);
@@ -133,6 +166,11 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     fn handle_select_prev(&mut self, _: &SelectPrev, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_actions {
+            self.action_selected_ix = self.action_selected_ix.saturating_sub(1);
+            cx.notify();
+            return;
+        }
         let query = self.text_input.read(cx).text().to_string();
         if let Some(new_query) = self.delegate.select_history(true, &query) {
             self.set_query(&new_query, cx);
@@ -148,12 +186,23 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     fn handle_confirm(&mut self, _: &Confirm, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_actions {
+            let should_dismiss = self.delegate.execute_action(self.action_selected_ix, cx);
+            self.show_actions = false;
+            self.action_selected_ix = 0;
+            if should_dismiss {
+                self.clear_and_reset(cx);
+                cx.emit(PickerEvent::Dismiss);
+            } else {
+                cx.notify();
+            }
+            return;
+        }
         let should_dismiss = self.delegate.confirm(cx);
         if should_dismiss {
             self.clear_and_reset(cx);
             cx.emit(PickerEvent::Dismiss);
         } else {
-            // After submenu enter, refresh placeholder and clear input
             self.refresh_placeholder(cx);
             self.text_input.update(cx, |input, cx| input.clear(cx));
             cx.notify();
@@ -161,6 +210,12 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     fn handle_cancel(&mut self, _: &Cancel, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.show_actions {
+            self.show_actions = false;
+            self.action_selected_ix = 0;
+            cx.notify();
+            return;
+        }
         if self.delegate.in_submenu() {
             self.delegate.exit_submenu(cx);
             self.refresh_placeholder(cx);
@@ -176,6 +231,25 @@ impl<D: PickerDelegate> Picker<D> {
             self.delegate.dismissed(cx);
             cx.emit(PickerEvent::Dismiss);
         }
+    }
+
+    fn handle_show_actions(
+        &mut self,
+        _: &ShowActions,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.show_actions {
+            self.show_actions = false;
+            self.action_selected_ix = 0;
+        } else {
+            let actions = self.delegate.actions_for_selected();
+            if !actions.is_empty() {
+                self.show_actions = true;
+                self.action_selected_ix = 0;
+            }
+        }
+        cx.notify();
     }
 }
 
@@ -214,6 +288,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .on_action(cx.listener(Self::handle_select_prev))
             .on_action(cx.listener(Self::handle_confirm))
             .on_action(cx.listener(Self::handle_cancel))
+            .on_action(cx.listener(Self::handle_show_actions))
             .child(
                 div()
                     .px_3()
@@ -270,8 +345,75 @@ impl<D: PickerDelegate> Render for Picker<D> {
             root = root.child(div().px_3().py_4().text_color(text_muted).child(no_matches));
         }
 
-        // Footer with mode indicator
-        if in_submenu {
+        // Action bar overlay
+        if self.show_actions {
+            let actions = self.delegate.actions_for_selected();
+            if !actions.is_empty() {
+                root = root.child(
+                    div()
+                        .border_t_1()
+                        .border_color(border_v)
+                        .bg(colors.surface_background)
+                        .px_1()
+                        .py_1()
+                        .flex()
+                        .flex_col()
+                        .gap(px(2.0))
+                        .children(actions.iter().enumerate().map(|(ix, action)| {
+                            let selected = ix == self.action_selected_ix;
+                            let mut row = div()
+                                .px_2()
+                                .py(px(4.0))
+                                .rounded_md()
+                                .flex()
+                                .items_center()
+                                .justify_between();
+                            if selected {
+                                row = row.bg(colors.element_selected);
+                            }
+                            row.child(
+                                div()
+                                    .text_color(colors.text)
+                                    .text_size(px(13.0))
+                                    .child(action.name.clone()),
+                            )
+                            .when(
+                                action.shortcut.is_some(),
+                                |el: Div| {
+                                    let shortcut = action.shortcut.clone().unwrap();
+                                    el.child(
+                                        div()
+                                            .text_color(colors.text_muted)
+                                            .text_size(px(11.0))
+                                            .child(shortcut),
+                                    )
+                                },
+                            )
+                        })),
+                );
+            }
+        }
+
+        // Footer
+        let footer_left = if in_submenu {
+            "ESC to go back"
+        } else if self.show_actions {
+            "ESC to close"
+        } else {
+            ""
+        };
+
+        let footer_right = if self.show_actions {
+            SharedString::from("Actions")
+        } else if in_submenu {
+            SharedString::from(format!("{} items", match_count))
+        } else if match_count > 0 {
+            SharedString::from("\u{2318}K Actions")
+        } else {
+            SharedString::default()
+        };
+
+        if !footer_left.is_empty() || !footer_right.is_empty() {
             root = root.child(
                 div()
                     .px_3()
@@ -285,13 +427,13 @@ impl<D: PickerDelegate> Render for Picker<D> {
                         div()
                             .text_color(colors.text_muted)
                             .text_size(px(11.0))
-                            .child(SharedString::from("ESC to go back")),
+                            .child(SharedString::from(footer_left)),
                     )
                     .child(
                         div()
                             .text_color(colors.text_muted)
                             .text_size(px(11.0))
-                            .child(SharedString::from(format!("{} items", match_count))),
+                            .child(footer_right),
                     ),
             );
         }

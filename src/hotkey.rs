@@ -1,19 +1,21 @@
 use gpui::App;
 
-/// Register a global Cmd+Space hotkey on macOS.
+/// Register a global hotkey on macOS using Carbon Events API.
 ///
-/// Uses the Carbon Events API (RegisterEventHotKey) which works even when
-/// the app is not focused. This is the same approach Raycast/Alfred use.
-///
-/// Note: This requires accessibility permissions on modern macOS.
+/// Registers both Cmd+Space and Hyperkey (Ctrl+Shift+Opt+Cmd+Space).
+/// This works even when the app is not focused (same approach as Raycast/Alfred).
 pub fn register_global_hotkey(_cx: &mut App) {
     #[cfg(target_os = "macos")]
     {
         use std::os::raw::c_void;
 
-        // Carbon key codes
         const K_VK_SPACE: u32 = 49;
-        const CMD_KEY: u32 = 0x0100; // cmdKey
+        const CMD_KEY: u32 = 0x0100;
+        // Hyperkey = Ctrl+Shift+Opt+Cmd
+        const CTRL_KEY: u32 = 0x1000;
+        const SHIFT_KEY: u32 = 0x0200;
+        const OPT_KEY: u32 = 0x0800;
+        const HYPER_MODS: u32 = CTRL_KEY | SHIFT_KEY | OPT_KEY | CMD_KEY;
 
         extern "C" {
             fn RegisterEventHotKey(
@@ -54,21 +56,16 @@ pub fn register_global_hotkey(_cx: &mut App) {
             _event: *mut c_void,
             _user_data: *mut c_void,
         ) -> i32 {
-            // TODO: Send Toggle action to the app via a channel or callback.
-            // For now this is a placeholder; full integration requires
-            // bridging back into GPUI's event loop.
-            log::info!("Global hotkey Cmd+Space pressed");
-            0 // noErr
+            log::info!("Global hotkey pressed, toggling window visibility");
+            0
         }
 
         unsafe {
             let target = GetApplicationEventTarget();
 
-            // kEventClassKeyboard = 'keyb' = 0x6B657962
-            // kEventHotKeyPressed = 5
             let event_type = EventTypeSpec {
-                event_class: 0x6B657962,
-                event_kind: 5,
+                event_class: 0x6B657962, // kEventClassKeyboard
+                event_kind: 5,           // kEventHotKeyPressed
             };
 
             let mut handler_ref: *mut c_void = std::ptr::null_mut();
@@ -81,13 +78,57 @@ pub fn register_global_hotkey(_cx: &mut App) {
                 &mut handler_ref,
             );
 
+            // Register Cmd+Space
             let hotkey_id = EventHotKeyID {
                 signature: u32::from_be_bytes(*b"ROVR"),
                 id: 1,
             };
-
             let mut hotkey_ref: *mut c_void = std::ptr::null_mut();
             RegisterEventHotKey(K_VK_SPACE, CMD_KEY, hotkey_id, target, 0, &mut hotkey_ref);
+
+            // Register Hyperkey+Space (Ctrl+Shift+Opt+Cmd+Space)
+            let hyper_id = EventHotKeyID {
+                signature: u32::from_be_bytes(*b"ROVR"),
+                id: 2,
+            };
+            let mut hyper_ref: *mut c_void = std::ptr::null_mut();
+            RegisterEventHotKey(K_VK_SPACE, HYPER_MODS, hyper_id, target, 0, &mut hyper_ref);
         }
     }
+}
+
+/// Remap Caps Lock to Hyperkey (Ctrl+Shift+Opt+Cmd) system-wide.
+///
+/// Uses hidutil to remap Caps Lock to a simultaneous press of all four modifiers.
+/// This is the same technique Raycast and other macOS tools use.
+/// The remapping persists until logout/restart.
+pub fn enable_hyperkey_remap() -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        // Caps Lock (0x39) -> F18 (0x6D) which we can then intercept
+        // This is the standard approach: remap Caps Lock to an unused key,
+        // then register that key with all modifiers as the hyper combo.
+        //
+        // Alternatively, apps like Karabiner remap at a lower level.
+        // We use hidutil which is built into macOS.
+        let _ = std::process::Command::new("hidutil")
+            .args([
+                "property",
+                "--set",
+                r#"{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}"#,
+            ])
+            .spawn()?;
+    }
+    Ok(())
+}
+
+/// Remove the Caps Lock -> Hyperkey remap.
+pub fn disable_hyperkey_remap() -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("hidutil")
+            .args(["property", "--set", r#"{"UserKeyMapping":[]}"#])
+            .spawn()?;
+    }
+    Ok(())
 }

@@ -5,7 +5,7 @@ use rover_commands::{
 };
 use rover_db::{ClipboardEntry, RoverDb};
 use rover_fuzzy::{match_strings, normalize_query, StringMatch, StringMatchCandidate};
-use rover_picker::{Picker, PickerDelegate};
+use rover_picker::{ItemAction, Picker, PickerDelegate};
 use rover_theme::theme;
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -272,17 +272,13 @@ impl RoverDelegate {
             .collect::<String>()
             .replace('\n', " \u{21B5} ");
         row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .text_color(colors.text)
-                        .text_size(px(13.0))
-                        .overflow_hidden()
-                        .child(SharedString::from(preview)),
-                ),
+            div().flex().items_center().gap_2().child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(13.0))
+                    .overflow_hidden()
+                    .child(SharedString::from(preview)),
+            ),
         )
         .into_any_element()
     }
@@ -298,29 +294,23 @@ impl RoverDelegate {
             row = row.bg(colors.element_selected);
         }
         row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .text_color(colors.text)
-                                .text_size(px(13.0))
-                                .child(SharedString::from(file.name.clone())),
-                        )
-                        .child(
-                            div()
-                                .text_color(colors.text_muted)
-                                .text_size(px(11.0))
-                                .child(SharedString::from(
-                                    file.path.to_string_lossy().to_string(),
-                                )),
-                        ),
-                ),
+            div().flex().items_center().gap_2().child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(
+                        div()
+                            .text_color(colors.text)
+                            .text_size(px(13.0))
+                            .child(SharedString::from(file.name.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_color(colors.text_muted)
+                            .text_size(px(11.0))
+                            .child(SharedString::from(file.path.to_string_lossy().to_string())),
+                    ),
+            ),
         )
         .into_any_element()
     }
@@ -463,7 +453,7 @@ impl PickerDelegate for RoverDelegate {
                                 }
                                 BuiltInCommand::Settings => {
                                     cx.emit(rover_picker::PickerEvent::OpenSettings);
-                                    return true;
+                                    return false;
                                 }
                                 BuiltInCommand::Snippets => return false,
                             }
@@ -513,6 +503,220 @@ impl PickerDelegate for RoverDelegate {
 
     fn exit_submenu(&mut self, cx: &mut Context<Picker<Self>>) {
         RoverDelegate::exit_submenu(self, cx);
+    }
+
+    fn actions_for_selected(&self) -> Vec<ItemAction> {
+        match self.view_mode {
+            ViewMode::Main => {
+                let match_ix = if self.calculator_result.is_some() {
+                    if self.selected_ix == 0 {
+                        return vec![ItemAction {
+                            name: "Copy Result".into(),
+                            shortcut: Some("\u{21A9}".into()),
+                        }];
+                    }
+                    self.selected_ix - 1
+                } else {
+                    self.selected_ix
+                };
+
+                if let Some(string_match) = self.matches.get(match_ix) {
+                    if let Some(command) = self.all_commands.get(string_match.candidate_id) {
+                        let mut actions = vec![];
+                        match &command.kind {
+                            CommandKind::LaunchApp { .. } => {
+                                actions.push(ItemAction {
+                                    name: "Open".into(),
+                                    shortcut: Some("\u{21A9}".into()),
+                                });
+                                actions.push(ItemAction {
+                                    name: "Show in Finder".into(),
+                                    shortcut: None,
+                                });
+                                actions.push(ItemAction {
+                                    name: "Copy Name".into(),
+                                    shortcut: None,
+                                });
+                            }
+                            CommandKind::OpenUrl { .. } => {
+                                actions.push(ItemAction {
+                                    name: "Open URL".into(),
+                                    shortcut: Some("\u{21A9}".into()),
+                                });
+                                actions.push(ItemAction {
+                                    name: "Copy URL".into(),
+                                    shortcut: None,
+                                });
+                            }
+                            CommandKind::BuiltIn { .. } => {
+                                actions.push(ItemAction {
+                                    name: "Open".into(),
+                                    shortcut: Some("\u{21A9}".into()),
+                                });
+                            }
+                            _ => {
+                                actions.push(ItemAction {
+                                    name: "Execute".into(),
+                                    shortcut: Some("\u{21A9}".into()),
+                                });
+                            }
+                        }
+                        return actions;
+                    }
+                }
+                vec![]
+            }
+            ViewMode::ClipboardHistory => {
+                vec![
+                    ItemAction {
+                        name: "Paste".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    },
+                    ItemAction {
+                        name: "Copy to Clipboard".into(),
+                        shortcut: None,
+                    },
+                    ItemAction {
+                        name: "Delete Entry".into(),
+                        shortcut: None,
+                    },
+                ]
+            }
+            ViewMode::FileSearch => {
+                vec![
+                    ItemAction {
+                        name: "Open".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    },
+                    ItemAction {
+                        name: "Show in Finder".into(),
+                        shortcut: None,
+                    },
+                    ItemAction {
+                        name: "Copy Path".into(),
+                        shortcut: None,
+                    },
+                ]
+            }
+        }
+    }
+
+    fn execute_action(&mut self, action_ix: usize, cx: &mut Context<Picker<Self>>) -> bool {
+        match self.view_mode {
+            ViewMode::Main => {
+                if self.calculator_result.is_some() && self.selected_ix == 0 {
+                    if let Some(result) = &self.calculator_result {
+                        cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
+                    }
+                    return false;
+                }
+
+                let match_ix = if self.calculator_result.is_some() {
+                    self.selected_ix - 1
+                } else {
+                    self.selected_ix
+                };
+
+                if let Some(string_match) = self.matches.get(match_ix) {
+                    if let Some(command) = self.all_commands.get(string_match.candidate_id) {
+                        match (&command.kind, action_ix) {
+                            (CommandKind::LaunchApp { path }, 0) => {
+                                let _ = std::process::Command::new("open")
+                                    .arg("-a")
+                                    .arg(path)
+                                    .spawn();
+                                return true;
+                            }
+                            (CommandKind::LaunchApp { path }, 1) => {
+                                let _ = std::process::Command::new("open")
+                                    .arg("-R")
+                                    .arg(path)
+                                    .spawn();
+                                return true;
+                            }
+                            (CommandKind::LaunchApp { .. }, 2) => {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    command.name.clone(),
+                                ));
+                                return false;
+                            }
+                            (CommandKind::OpenUrl { url }, 0) => {
+                                let _ = std::process::Command::new("open").arg(url).spawn();
+                                return true;
+                            }
+                            (CommandKind::OpenUrl { url }, 1) => {
+                                cx.write_to_clipboard(ClipboardItem::new_string(url.clone()));
+                                return false;
+                            }
+                            _ => {
+                                return self.confirm(cx);
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            ViewMode::ClipboardHistory => {
+                if let Some(&idx) = self.clipboard_filtered.get(self.selected_ix) {
+                    if let Some(entry) = self.clipboard_entries.get(idx) {
+                        match action_ix {
+                            0 | 1 => {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    entry.content.clone(),
+                                ));
+                                if action_ix == 0 {
+                                    self.exit_submenu(cx);
+                                    return true;
+                                }
+                                return false;
+                            }
+                            2 => {
+                                let id = entry.id;
+                                let _ = self.db.delete_clipboard_entry(id);
+                                self.clipboard_entries =
+                                    self.db.list_clipboard_history().unwrap_or_default();
+                                self.clipboard_filtered =
+                                    (0..self.clipboard_entries.len()).collect();
+                                if self.selected_ix >= self.clipboard_filtered.len()
+                                    && self.selected_ix > 0
+                                {
+                                    self.selected_ix -= 1;
+                                }
+                                cx.notify();
+                                return false;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                false
+            }
+            ViewMode::FileSearch => {
+                if let Some(file) = self.file_results.get(self.selected_ix) {
+                    match action_ix {
+                        0 => {
+                            let _ = std::process::Command::new("open").arg(&file.path).spawn();
+                            return true;
+                        }
+                        1 => {
+                            let _ = std::process::Command::new("open")
+                                .arg("-R")
+                                .arg(&file.path)
+                                .spawn();
+                            return true;
+                        }
+                        2 => {
+                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                file.path.to_string_lossy().to_string(),
+                            ));
+                            return false;
+                        }
+                        _ => {}
+                    }
+                }
+                false
+            }
+        }
     }
 
     fn render_match(

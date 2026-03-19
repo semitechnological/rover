@@ -37,6 +37,12 @@ impl ThemeRegistry {
         names
     }
 
+    pub fn list(&self) -> Vec<Arc<Theme>> {
+        let mut themes: Vec<_> = self.themes.values().cloned().collect();
+        themes.sort_by(|a, b| a.name.cmp(&b.name));
+        themes
+    }
+
     pub fn insert(&mut self, theme: Theme) {
         self.themes.insert(theme.name.clone(), Arc::new(theme));
     }
@@ -107,6 +113,10 @@ pub fn user_theme_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("rover")
         .join("themes")
+}
+
+pub fn set_active_theme(theme: Arc<Theme>, cx: &mut App) {
+    ActiveTheme::set(theme, cx);
 }
 
 pub fn init(cx: &mut App) {

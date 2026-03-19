@@ -1,12 +1,16 @@
+mod clipboard_monitor;
 mod delegate;
 mod hotkey;
+mod settings_window;
 
 use delegate::RoverDelegate;
 use gpui::*;
-use rover_commands::{register_apps, CommandRegistry};
+use rover_commands::{register_apps, register_builtins, CommandRegistry};
+use rover_db::RoverDb;
 use rover_extensions::{load_extensions, register_extension_themes};
 use rover_picker::{bind_picker_keys, Picker, PickerEvent};
 use rover_theme::{self, ThemeRegistry};
+use std::sync::Arc;
 
 actions!(rover, [Toggle, Quit]);
 
@@ -20,8 +24,14 @@ fn main() {
         }
 
         let mut cmd_registry = CommandRegistry::new();
+        register_builtins(&mut cmd_registry);
         register_apps(&mut cmd_registry);
         let commands: Vec<_> = cmd_registry.commands().to_vec();
+
+        let db = Arc::new(RoverDb::open().expect("Failed to open database"));
+
+        // Start clipboard monitor
+        clipboard_monitor::start(db.clone(), cx);
 
         bind_picker_keys(cx);
         cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
@@ -35,11 +45,11 @@ fn main() {
 
         hotkey::register_global_hotkey(cx);
 
-        open_window(commands, cx);
+        open_window(commands, db, cx);
     });
 }
 
-fn open_window(commands: Vec<rover_commands::Command>, cx: &mut App) {
+fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(680.0), px(420.0)), cx);
 
     let window = cx
@@ -55,21 +65,29 @@ fn open_window(commands: Vec<rover_commands::Command>, cx: &mut App) {
                 ..Default::default()
             },
             |_window, cx| {
+                let settings_db = db.clone();
                 cx.new(|cx| {
-                    let delegate = RoverDelegate::new(commands);
+                    let delegate = RoverDelegate::new(commands, db);
                     let picker = cx.new(|cx| Picker::new(delegate, cx));
 
                     cx.subscribe(
                         &picker,
-                        |_this: &mut RoverWindow, _picker, event: &PickerEvent, cx| match event {
+                        move |this: &mut RoverWindow, _picker, event: &PickerEvent, cx| match event
+                        {
                             PickerEvent::Dismiss => {
                                 cx.hide();
+                            }
+                            PickerEvent::OpenSettings => {
+                                settings_window::open_settings_window(this.settings_db.clone(), cx);
                             }
                         },
                     )
                     .detach();
 
-                    RoverWindow { picker }
+                    RoverWindow {
+                        picker,
+                        settings_db,
+                    }
                 })
             },
         )
@@ -86,6 +104,7 @@ fn open_window(commands: Vec<rover_commands::Command>, cx: &mut App) {
 
 struct RoverWindow {
     picker: Entity<Picker<RoverDelegate>>,
+    settings_db: Arc<RoverDb>,
 }
 
 impl Render for RoverWindow {

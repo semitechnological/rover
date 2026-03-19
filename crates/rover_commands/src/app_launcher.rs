@@ -29,6 +29,7 @@ pub fn discover_apps() -> Vec<Command> {
                         kind: CommandKind::LaunchApp {
                             path: path.to_string_lossy().to_string(),
                         },
+                        has_submenu: false,
                     });
                 }
             }

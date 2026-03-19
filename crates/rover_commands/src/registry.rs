@@ -1,24 +1,39 @@
 use std::sync::Arc;
 
-/// A command that can appear in the picker.
 #[derive(Clone)]
 pub struct Command {
     pub name: String,
     pub description: String,
     pub icon: Option<String>,
     pub kind: CommandKind,
+    /// If true, this command opens a sub-menu when confirmed
+    pub has_submenu: bool,
 }
 
 #[derive(Clone)]
 pub enum CommandKind {
-    /// Launch an application at the given path.
-    LaunchApp { path: String },
-    /// Evaluate a math expression.
-    Calculator { expression: String },
-    /// Open a URL.
-    OpenUrl { url: String },
-    /// A custom action callback.
+    LaunchApp {
+        path: String,
+    },
+    Calculator {
+        expression: String,
+    },
+    OpenUrl {
+        url: String,
+    },
     Action(Arc<dyn Fn() + Send + Sync>),
+    /// A built-in submenu command (e.g. Clipboard History, File Search)
+    BuiltIn {
+        id: BuiltInCommand,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BuiltInCommand {
+    ClipboardHistory,
+    FileSearch,
+    Settings,
+    Snippets,
 }
 
 pub struct CommandRegistry {
@@ -53,6 +68,38 @@ impl CommandRegistry {
             }
             CommandKind::Calculator { .. } => {}
             CommandKind::Action(action) => action(),
+            CommandKind::BuiltIn { .. } => {}
         }
     }
+}
+
+/// Register built-in commands that open sub-menus
+pub fn register_builtins(registry: &mut CommandRegistry) {
+    registry.register(Command {
+        name: "Clipboard History".into(),
+        description: "View and paste from clipboard history".into(),
+        icon: None,
+        kind: CommandKind::BuiltIn {
+            id: BuiltInCommand::ClipboardHistory,
+        },
+        has_submenu: true,
+    });
+    registry.register(Command {
+        name: "File Search".into(),
+        description: "Search for files on your system".into(),
+        icon: None,
+        kind: CommandKind::BuiltIn {
+            id: BuiltInCommand::FileSearch,
+        },
+        has_submenu: true,
+    });
+    registry.register(Command {
+        name: "Settings".into(),
+        description: "Open Rover settings".into(),
+        icon: None,
+        kind: CommandKind::BuiltIn {
+            id: BuiltInCommand::Settings,
+        },
+        has_submenu: false,
+    });
 }

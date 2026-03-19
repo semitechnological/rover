@@ -2,6 +2,7 @@ mod text_input;
 
 pub use text_input::{bind_input_keys, TextInput, TextInputEvent};
 
+use gpui::prelude::*;
 use gpui::*;
 use rover_theme::theme;
 use std::sync::Arc;
@@ -20,6 +21,7 @@ pub fn bind_picker_keys(cx: &mut App) {
 
 pub enum PickerEvent {
     Dismiss,
+    OpenSettings,
 }
 
 pub trait PickerDelegate: Sized + 'static {
@@ -45,6 +47,20 @@ pub trait PickerDelegate: Sized + 'static {
         selected: bool,
         cx: &mut Context<Picker<Self>>,
     ) -> Option<Self::ListItem>;
+
+    /// Called before handling up/down. Return Some(query) to set the input text
+    /// and prevent normal selection (used for query history).
+    fn select_history(&mut self, _up: bool, _query: &str) -> Option<String> {
+        None
+    }
+
+    /// Whether we're in a sub-view that escape should exit first
+    fn in_submenu(&self) -> bool {
+        false
+    }
+
+    /// Exit the current sub-view
+    fn exit_submenu(&mut self, _cx: &mut Context<Picker<Self>>) {}
 }
 
 pub struct Picker<D: PickerDelegate> {
@@ -89,7 +105,23 @@ impl<D: PickerDelegate> Picker<D> {
         cx.notify();
     }
 
+    pub fn set_query(&self, query: &str, cx: &mut Context<Self>) {
+        self.text_input
+            .update(cx, |input, cx| input.set_text(query.to_string(), cx));
+    }
+
+    pub fn refresh_placeholder(&mut self, cx: &mut Context<Self>) {
+        let placeholder = self.delegate.placeholder_text();
+        self.text_input
+            .update(cx, |input, cx| input.set_placeholder(placeholder, cx));
+    }
+
     fn handle_select_next(&mut self, _: &SelectNext, _window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.text_input.read(cx).text().to_string();
+        if let Some(new_query) = self.delegate.select_history(false, &query) {
+            self.set_query(&new_query, cx);
+            return;
+        }
         let count = self.delegate.match_count();
         if count == 0 {
             return;
@@ -101,6 +133,11 @@ impl<D: PickerDelegate> Picker<D> {
     }
 
     fn handle_select_prev(&mut self, _: &SelectPrev, _window: &mut Window, cx: &mut Context<Self>) {
+        let query = self.text_input.read(cx).text().to_string();
+        if let Some(new_query) = self.delegate.select_history(true, &query) {
+            self.set_query(&new_query, cx);
+            return;
+        }
         if self.delegate.match_count() == 0 {
             return;
         }
@@ -115,10 +152,23 @@ impl<D: PickerDelegate> Picker<D> {
         if should_dismiss {
             self.clear_and_reset(cx);
             cx.emit(PickerEvent::Dismiss);
+        } else {
+            // After submenu enter, refresh placeholder and clear input
+            self.refresh_placeholder(cx);
+            self.text_input.update(cx, |input, cx| input.clear(cx));
+            cx.notify();
         }
     }
 
     fn handle_cancel(&mut self, _: &Cancel, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.delegate.in_submenu() {
+            self.delegate.exit_submenu(cx);
+            self.refresh_placeholder(cx);
+            self.text_input.update(cx, |input, cx| input.clear(cx));
+            self.delegate.update_matches(String::new(), cx).detach();
+            cx.notify();
+            return;
+        }
         let has_text = !self.text_input.read(cx).text().is_empty();
         if has_text {
             self.clear_and_reset(cx);
@@ -147,6 +197,8 @@ impl<D: PickerDelegate> Render for Picker<D> {
         let border_v = colors.border_variant;
         let text_muted = colors.text_muted;
 
+        let in_submenu = self.delegate.in_submenu();
+
         let mut root = div()
             .id("picker")
             .key_context("Picker")
@@ -168,10 +220,25 @@ impl<D: PickerDelegate> Render for Picker<D> {
                     .py_2()
                     .border_b_1()
                     .border_color(border_v)
-                    .text_color(colors.text)
-                    .text_size(px(16.0))
-                    .line_height(px(24.0))
-                    .child(self.text_input.clone()),
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .when(in_submenu, |el| {
+                        el.child(
+                            div()
+                                .text_color(colors.text_muted)
+                                .text_size(px(14.0))
+                                .child(SharedString::from("‹ ")),
+                        )
+                    })
+                    .child(
+                        div()
+                            .flex_grow()
+                            .text_color(colors.text)
+                            .text_size(px(16.0))
+                            .line_height(px(24.0))
+                            .child(self.text_input.clone()),
+                    ),
             );
 
         if match_count > 0 {
@@ -201,6 +268,32 @@ impl<D: PickerDelegate> Render for Picker<D> {
             );
         } else if !query_is_empty {
             root = root.child(div().px_3().py_4().text_color(text_muted).child(no_matches));
+        }
+
+        // Footer with mode indicator
+        if in_submenu {
+            root = root.child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .border_t_1()
+                    .border_color(border_v)
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_color(colors.text_muted)
+                            .text_size(px(11.0))
+                            .child(SharedString::from("ESC to go back")),
+                    )
+                    .child(
+                        div()
+                            .text_color(colors.text_muted)
+                            .text_size(px(11.0))
+                            .child(SharedString::from(format!("{} items", match_count))),
+                    ),
+            );
         }
 
         root

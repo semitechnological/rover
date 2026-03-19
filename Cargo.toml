@@ -6,6 +6,7 @@ members = [
     "crates/rover_commands",
     "crates/rover_extensions",
     "crates/rover_extension_api",
+    "crates/rover_db",
 ]
 resolver = "2"
 
@@ -28,6 +29,7 @@ rover_picker = { path = "crates/rover_picker" }
 rover_commands = { path = "crates/rover_commands" }
 rover_extensions = { path = "crates/rover_extensions" }
 rover_extension_api = { path = "crates/rover_extension_api" }
+rover_db = { path = "crates/rover_db" }
 
 [package]
 name = "rover"
@@ -46,3 +48,4 @@ rover_theme.workspace = true
 rover_picker.workspace = true
 rover_commands.workspace = true
 rover_extensions.workspace = true
+rover_db.workspace = true

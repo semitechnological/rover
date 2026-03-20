@@ -5290,6 +5290,7 @@ dependencies = [
  "rusty_foundationmodels",
  "serde",
  "serde_json",
+ "urlencoding",
 ]
 
 [[package]]

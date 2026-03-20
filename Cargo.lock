@@ -5286,6 +5286,7 @@ dependencies = [
  "rover_extensions",
  "rover_fuzzy",
  "rover_picker",
+ "rover_semantic",
  "rover_theme",
  "rusty_foundationmodels",
  "serde",
@@ -5312,6 +5313,8 @@ dependencies = [
  "once_cell",
  "raw-window-handle",
  "rover_db",
+ "rover_semantic",
+ "serde_json",
  "urlencoding",
 ]
 

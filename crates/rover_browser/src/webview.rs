@@ -200,6 +200,51 @@ mod macos {
             }
         }
 
+        /// Evaluates JavaScript in the web view and calls the callback with the result string.
+        /// The callback fires on the main thread.
+        pub fn evaluate_javascript<F>(&self, script: &str, callback: F)
+        where
+            F: FnOnce(Option<String>) + Send + 'static,
+        {
+            unsafe {
+                use block::ConcreteBlock;
+                use std::sync::Mutex;
+                let ns_script: id = NSString::alloc(nil).init_str(script);
+
+                // Wrap FnOnce in Mutex<Option<>> so the block is Fn-compatible
+                let cb = Mutex::new(Some(callback));
+                let completion = ConcreteBlock::new(move |result: id, error: id| {
+                    let cb = cb.lock().unwrap().take();
+                    let Some(cb) = cb else { return };
+                    if error != nil || result == nil {
+                        cb(None);
+                        return;
+                    }
+                    let desc: id = msg_send![result, description];
+                    if desc == nil {
+                        cb(None);
+                        return;
+                    }
+                    let utf8: *const std::os::raw::c_char = msg_send![desc, UTF8String];
+                    if utf8.is_null() {
+                        cb(None);
+                        return;
+                    }
+                    let s = std::ffi::CStr::from_ptr(utf8)
+                        .to_str()
+                        .ok()
+                        .map(|s| s.to_string());
+                    cb(s);
+                });
+                let completion = completion.copy();
+
+                let _: () = msg_send![self.raw,
+                    evaluateJavaScript: ns_script
+                    completionHandler: &*completion
+                ];
+            }
+        }
+
         pub fn remove_from_superview(&self) {
             unsafe {
                 let _: () = msg_send![self.raw, removeFromSuperview];

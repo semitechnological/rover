@@ -444,5 +444,140 @@ mod tests {
         assert_eq!(db.get_setting("theme").unwrap(), None);
         db.set_setting("theme", "dark").unwrap();
         assert_eq!(db.get_setting("theme").unwrap(), Some("dark".to_string()));
+        // Overwrite
+        db.set_setting("theme", "light").unwrap();
+        assert_eq!(db.get_setting("theme").unwrap(), Some("light".to_string()));
+    }
+
+    #[test]
+    fn test_clipboard_delete() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_clipboard_entry("keep").unwrap();
+        db.add_clipboard_entry("delete_me").unwrap();
+        let entries = db.list_clipboard_history().unwrap();
+        let delete_id = entries.iter().find(|e| e.content == "delete_me").unwrap().id;
+        db.delete_clipboard_entry(delete_id).unwrap();
+        let entries = db.list_clipboard_history().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "keep");
+    }
+
+    #[test]
+    fn test_clipboard_clear() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_clipboard_entry("a").unwrap();
+        db.add_clipboard_entry("b").unwrap();
+        db.clear_clipboard_history().unwrap();
+        assert!(db.list_clipboard_history().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_empty_entries_ignored() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_query("").unwrap();
+        db.add_query("   ").unwrap();
+        assert!(db.list_query_history().unwrap().is_empty());
+
+        db.add_clipboard_entry("").unwrap();
+        db.add_clipboard_entry("  ").unwrap();
+        assert!(db.list_clipboard_history().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_browser_history() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("https://example.com", "Example").unwrap();
+        db.add_history("https://rust-lang.org", "Rust").unwrap();
+
+        let recent = db.recent_history(10).unwrap();
+        assert_eq!(recent.len(), 2);
+        // Both inserted in same second — just verify both present
+        let urls: Vec<&str> = recent.iter().map(|r| r.url.as_str()).collect();
+        assert!(urls.contains(&"https://example.com"));
+        assert!(urls.contains(&"https://rust-lang.org"));
+
+        // Revisit increments count and updates title
+        db.add_history("https://example.com", "Example Updated").unwrap();
+        let recent = db.recent_history(10).unwrap();
+        let example = recent.iter().find(|r| r.url == "https://example.com").unwrap();
+        assert_eq!(example.visit_count, 2);
+        assert_eq!(example.title, "Example Updated");
+    }
+
+    #[test]
+    fn test_browser_history_search() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("https://github.com/rust-lang", "Rust on GitHub").unwrap();
+        db.add_history("https://docs.rs", "Docs.rs").unwrap();
+
+        let results = db.search_history("rust", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://github.com/rust-lang");
+
+        // Search by URL
+        let results = db.search_history("docs.rs", 10).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_browser_history_ignores_blank() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("about:blank", "").unwrap();
+        db.add_history("", "Empty").unwrap();
+        assert!(db.recent_history(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_clear_history() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("https://example.com", "Ex").unwrap();
+        db.clear_history().unwrap();
+        assert!(db.recent_history(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_bookmarks() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("https://example.com", "Example").unwrap();
+        db.add_bookmark("https://rust-lang.org", "Rust").unwrap();
+
+        let all = db.list_bookmarks().unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Find by URL
+        let id = db.find_bookmark_by_url("https://example.com").unwrap();
+        assert!(id.is_some());
+        let id = db.find_bookmark_by_url("https://nope.com").unwrap();
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_bookmark_search() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("https://github.com", "GitHub").unwrap();
+        db.add_bookmark("https://docs.rs", "Docs").unwrap();
+
+        let results = db.search_bookmarks("git").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "GitHub");
+    }
+
+    #[test]
+    fn test_bookmark_remove() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("https://example.com", "Ex").unwrap();
+        let all = db.list_bookmarks().unwrap();
+        assert_eq!(all.len(), 1);
+
+        db.remove_bookmark(all[0].id).unwrap();
+        assert!(db.list_bookmarks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_bookmark_empty_ignored() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("", "Empty").unwrap();
+        db.add_bookmark("  ", "Spaces").unwrap();
+        assert!(db.list_bookmarks().unwrap().is_empty());
     }
 }

@@ -26,8 +26,6 @@ wasmtime = "29"
 fuzzy-matcher = "0.3"
 unicode-segmentation = "1"
 rusty_foundationmodels = { path = "crates/rusty_foundationmodels" }
-futures-core = "0.3"
-futures-channel = "0.3"
 
 rover_fuzzy = { path = "crates/rover_fuzzy" }
 rover_theme = { path = "crates/rover_theme" }

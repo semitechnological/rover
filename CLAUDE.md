@@ -132,7 +132,7 @@ WindowOptions {
 - macOS only. `LSUIElement = YES` (no dock icon, menu bar only).
 - AI features require macOS 26+, Apple Silicon, Xcode with macOS 26 SDK.
 - Build: `cargo build -p rover` (requires `cmake` for wasmtime if extensions are enabled).
-- `rusty_foundationmodels` is a local crate at `../rusty_foundationmodels` — Swift FFI bridge to Apple FoundationModels framework.
+- `rusty_foundationmodels` lives at `crates/rusty_foundationmodels` — Swift FFI bridge to Apple FoundationModels framework. The `build.rs` compiles `bridge.swift` via `xcrun swiftc` at build time (gracefully degrades if Xcode/macOS 26 SDK is absent).
 
 ## Do Not
 

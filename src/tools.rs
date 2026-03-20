@@ -1,5 +1,33 @@
 use rusty_foundationmodels::{Schema, SchemaProperty, SchemaPropertyType, ToolDefinition};
 
+/// Escapes a string for safe embedding inside an AppleScript double-quoted string literal.
+///
+/// AppleScript has no backslash escape sequences; double-quotes are represented using
+/// the built-in `quote` constant via string concatenation. Control characters (newlines,
+/// carriage returns, etc.) are replaced with spaces to prevent statement injection.
+fn escape_applescript(s: &str) -> String {
+    let sanitized: String = s
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    sanitized.replace('"', "\" & quote & \"")
+}
+
+/// Run an AppleScript via `osascript -e` and return trimmed stdout on success
+/// or trimmed stderr as an `Err` on failure.
+fn run_osascript(script: &str) -> Result<String, String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
 pub fn build_os_tools() -> Vec<ToolDefinition> {
     vec![
         applescript_tool(),
@@ -27,17 +55,8 @@ fn applescript_tool() -> ToolDefinition {
         Schema::new("RunApplescriptArgs")
             .property(SchemaProperty::new("script", SchemaPropertyType::String).description("The AppleScript source to execute")),
         |args| {
-            let script = args["script"].as_str().unwrap_or("").to_string();
-            let output = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .output()
-                .map_err(|e| e.to_string())?;
-            if output.status.success() {
-                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-            } else {
-                Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-            }
+            let script = args["script"].as_str().unwrap_or("");
+            run_osascript(script)
         },
     )
 }
@@ -49,23 +68,25 @@ fn open_url_tool() -> ToolDefinition {
         Schema::new("OpenUrlArgs")
             .property(SchemaProperty::new("url", SchemaPropertyType::String).description("The URL to open")),
         |args| {
-            let url = args["url"].as_str().unwrap_or("").replace('"', "%22");
+            let url = args["url"]
+                .as_str()
+                .unwrap_or("")
+                .replace('\\', "%5C")
+                .replace('"', "%22")
+                .replace('\n', "")
+                .replace('\r', "");
             let script = format!(
                 r#"tell application "Safari"
     activate
     open location "{url}"
 end tell"#
             );
-            let out = std::process::Command::new("osascript")
-                .arg("-e").arg(&script)
-                .output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(format!("Opened {url}"))
-            } else {
-                // Fallback to open command
-                std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
-                Ok(format!("Opened {url}"))
+            match run_osascript(&script) {
+                Ok(_) => Ok(format!("Opened {url}")),
+                Err(_) => {
+                    std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
+                    Ok(format!("Opened {url}"))
+                }
             }
         },
     )
@@ -78,17 +99,10 @@ fn launch_app_tool() -> ToolDefinition {
         Schema::new("LaunchAppArgs")
             .property(SchemaProperty::new("name", SchemaPropertyType::String).description("Application name (e.g. 'Finder', 'Safari', 'Mail')")),
         |args| {
-            let name = args["name"].as_str().unwrap_or("").replace('"', "'");
+            let name = escape_applescript(args["name"].as_str().unwrap_or(""));
             let script = format!(r#"tell application "{name}" to activate"#);
-            let out = std::process::Command::new("osascript")
-                .arg("-e").arg(&script)
-                .output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(format!("Activated {name}"))
-            } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-            }
+            run_osascript(&script)?;
+            Ok(format!("Activated {name}"))
         },
     )
 }
@@ -142,17 +156,7 @@ fn get_frontmost_app_tool() -> ToolDefinition {
         "Get the name of the currently frontmost (focused) application",
         Schema::new("GetFrontmostAppArgs"),
         |_args| {
-            let script = r#"tell application "System Events" to get name of first application process whose frontmost is true"#;
-            let output = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(script)
-                .output()
-                .map_err(|e| e.to_string())?;
-            if output.status.success() {
-                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-            } else {
-                Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-            }
+            run_osascript(r#"tell application "System Events" to get name of first application process whose frontmost is true"#)
         },
     )
 }
@@ -173,7 +177,18 @@ fn get_calendar_events_tool() -> ToolDefinition {
             let date_setup = match date_str {
                 "today" => "set d to current date\nset hours of d to 0\nset minutes of d to 0\nset seconds of d to 0".to_string(),
                 "tomorrow" => "set d to current date\nset hours of d to 0\nset minutes of d to 0\nset seconds of d to 0\nset d to d + (1 * days)".to_string(),
-                other => format!("set d to date \"{other}\"\nset hours of d to 0\nset minutes of d to 0\nset seconds of d to 0"),
+                other => {
+                    // Validate: only accept YYYY-MM-DD to prevent injection
+                    let valid = other.len() == 10
+                        && other.chars().enumerate().all(|(i, c)| match i {
+                            4 | 7 => c == '-',
+                            _ => c.is_ascii_digit(),
+                        });
+                    if !valid {
+                        return Err(format!("Invalid date format '{other}': use YYYY-MM-DD, 'today', or 'tomorrow'"));
+                    }
+                    format!("set d to date \"{other}\"\nset hours of d to 0\nset minutes of d to 0\nset seconds of d to 0")
+                }
             };
             let script = format!(
                 r#"tell application "Calendar"
@@ -192,13 +207,7 @@ fn get_calendar_events_tool() -> ToolDefinition {
     return results
 end tell"#
             );
-            let out = std::process::Command::new("osascript").arg("-e").arg(&script).output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-            } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-            }
+            run_osascript(&script)
         },
     )
 }
@@ -215,8 +224,13 @@ fn get_reminders_tool() -> ToolDefinition {
                 .optional(),
         ),
         |args| {
-            let list_name = args["list_name"].as_str().unwrap_or("all");
-            let filter = if list_name == "all" { "every list".to_string() } else { format!("list \"{list_name}\"") };
+            let list_name_raw = args["list_name"].as_str().unwrap_or("all");
+            let filter = if list_name_raw == "all" {
+                "every list".to_string()
+            } else {
+                let list_name = escape_applescript(list_name_raw);
+                format!("list \"{list_name}\"")
+            };
             let script = format!(
                 r#"tell application "Reminders"
     set results to ""
@@ -229,13 +243,7 @@ fn get_reminders_tool() -> ToolDefinition {
     return results
 end tell"#
             );
-            let out = std::process::Command::new("osascript").arg("-e").arg(&script).output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-            } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-            }
+            run_osascript(&script)
         },
     )
 }
@@ -252,8 +260,8 @@ fn add_reminder_tool() -> ToolDefinition {
                     .optional(),
             ),
         |args| {
-            let name = args["name"].as_str().unwrap_or("").replace('"', "'");
-            let list = args["list_name"].as_str().unwrap_or("Reminders").replace('"', "'");
+            let name = escape_applescript(args["name"].as_str().unwrap_or(""));
+            let list = escape_applescript(args["list_name"].as_str().unwrap_or("Reminders"));
             let script = format!(
                 r#"tell application "Reminders"
     tell list "{list}"
@@ -261,13 +269,8 @@ fn add_reminder_tool() -> ToolDefinition {
     end tell
 end tell"#
             );
-            let out = std::process::Command::new("osascript").arg("-e").arg(&script).output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(format!("Added reminder: {name}"))
-            } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-            }
+            run_osascript(&script)?;
+            Ok(format!("Added reminder: {name}"))
         },
     )
 }
@@ -325,7 +328,7 @@ fn control_music_tool() -> ToolDefinition {
     end if
 end tell"#.to_string(),
                 "play_track" => {
-                    let name = args["track_name"].as_str().unwrap_or("").replace('"', "'");
+                    let name = escape_applescript(args["track_name"].as_str().unwrap_or(""));
                     format!(r#"tell application "Music"
     set results to (every track whose name contains "{name}")
     if results is not {{}} then
@@ -338,14 +341,8 @@ end tell"#)
                 }
                 _ => return Err(format!("Unknown action: {action}")),
             };
-            let out = std::process::Command::new("osascript").arg("-e").arg(&script).output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                let r = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                Ok(if r.is_empty() { "Done".into() } else { r })
-            } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-            }
+            let result = run_osascript(&script)?;
+            Ok(if result.is_empty() { "Done".into() } else { result })
         },
     )
 }
@@ -360,20 +357,15 @@ fn create_note_tool() -> ToolDefinition {
             .property(SchemaProperty::new("title", SchemaPropertyType::String).description("Note title"))
             .property(SchemaProperty::new("body", SchemaPropertyType::String).description("Note content")),
         |args| {
-            let title = args["title"].as_str().unwrap_or("New Note").replace('"', "'");
-            let body  = args["body"].as_str().unwrap_or("").replace('"', "'");
+            let title = escape_applescript(args["title"].as_str().unwrap_or("New Note"));
+            let body  = escape_applescript(args["body"].as_str().unwrap_or(""));
             let script = format!(r#"tell application "Notes"
     tell account "iCloud"
         make new note with properties {{name:"{title}", body:"{body}"}}
     end tell
 end tell"#);
-            let out = std::process::Command::new("osascript").arg("-e").arg(&script).output()
-                .map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(format!("Created note: {title}"))
-            } else {
-                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
-            }
+            run_osascript(&script)?;
+            Ok(format!("Created note: {title}"))
         },
     )
 }

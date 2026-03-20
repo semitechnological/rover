@@ -38,9 +38,6 @@ pub fn search_files(query: &str, max_results: usize) -> Vec<FileResult> {
                         name: name.clone(),
                         path,
                     });
-                    if results.len() >= max_results {
-                        return results;
-                    }
                 }
             }
         }

@@ -11,7 +11,6 @@ use rover_theme::theme;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-
 #[derive(Clone, Debug, PartialEq)]
 pub enum ViewMode {
     Main,
@@ -21,6 +20,7 @@ pub enum ViewMode {
 
 pub struct RoverDelegate {
     all_commands: Vec<Command>,
+    candidates: Vec<StringMatchCandidate>,
     matches: Vec<StringMatch>,
     selected_ix: usize,
     query: String,
@@ -146,6 +146,7 @@ impl RoverDelegate {
         let matches = match_strings(&candidates, "", 50);
         Self {
             all_commands: commands,
+            candidates,
             matches,
             selected_ix: 0,
             query: String::new(),
@@ -189,6 +190,19 @@ impl RoverDelegate {
         self.clipboard_filtered.clear();
         self.file_results.clear();
         cx.notify();
+    }
+
+    /// Returns `(has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset)` for
+    /// the current main-mode row layout. Centralises the offset arithmetic that was
+    /// previously copy-pasted in four separate methods.
+    fn row_offsets(&self) -> (bool, bool, bool, usize, usize, usize) {
+        let has_terminal = self.inline_terminal.is_some();
+        let has_calc = self.calculator_result.is_some();
+        let has_ai = self.ai_loading || self.ai_result.is_some();
+        let calc_ix = if has_terminal { 1 } else { 0 };
+        let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
+        let command_offset = ai_ix + if has_ai { 1 } else { 0 };
+        (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset)
     }
 
     fn render_calculator_row(
@@ -432,10 +446,9 @@ impl PickerDelegate for RoverDelegate {
     fn match_count(&self) -> usize {
         match self.view_mode {
             ViewMode::Main => {
-                let terminal_extra = if self.inline_terminal.is_some() { 1 } else { 0 };
-                let calc_extra = if self.calculator_result.is_some() { 1 } else { 0 };
-                let ai_extra = if self.ai_loading || self.ai_result.is_some() { 1 } else { 0 };
-                terminal_extra + calc_extra + ai_extra + self.matches.len()
+                let (_has_terminal, _has_calc, _has_ai, _calc_ix, _ai_ix, command_offset) =
+                    self.row_offsets();
+                command_offset + self.matches.len()
             }
             ViewMode::ClipboardHistory => self.clipboard_filtered.len(),
             ViewMode::FileSearch => self.file_results.len(),
@@ -493,13 +506,7 @@ impl PickerDelegate for RoverDelegate {
                 });
 
                 // Priority 3: fuzzy match against commands (always run)
-                let candidates: Vec<StringMatchCandidate> = self
-                    .all_commands
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| StringMatchCandidate::new(i, &c.name))
-                    .collect();
-                self.matches = match_strings(&candidates, &normalized, 50);
+                self.matches = match_strings(&self.candidates, &normalized, 50);
                 self.selected_ix = 0;
 
                 // Priority 4: AI — explicit prefix OR fallback when no good matches
@@ -577,12 +584,8 @@ impl PickerDelegate for RoverDelegate {
     fn confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
-                let has_terminal = self.inline_terminal.is_some();
-                let has_calc = self.calculator_result.is_some();
-                let has_ai = self.ai_loading || self.ai_result.is_some();
-                let calc_ix = if has_terminal { 1 } else { 0 };
-                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
-                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
+                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
+                    self.row_offsets();
 
                 if has_terminal && self.selected_ix == 0 {
                     if let Some(cmd) = &self.inline_terminal {
@@ -690,12 +693,8 @@ impl PickerDelegate for RoverDelegate {
     fn actions_for_selected(&self) -> Vec<ItemAction> {
         match self.view_mode {
             ViewMode::Main => {
-                let has_terminal = self.inline_terminal.is_some();
-                let has_calc = self.calculator_result.is_some();
-                let has_ai = self.ai_loading || self.ai_result.is_some();
-                let calc_ix = if has_terminal { 1 } else { 0 };
-                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
-                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
+                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
+                    self.row_offsets();
 
                 if has_terminal && self.selected_ix == 0 {
                     return vec![ItemAction {
@@ -804,12 +803,8 @@ impl PickerDelegate for RoverDelegate {
     fn execute_action(&mut self, action_ix: usize, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
-                let has_terminal = self.inline_terminal.is_some();
-                let has_calc = self.calculator_result.is_some();
-                let has_ai = self.ai_loading || self.ai_result.is_some();
-                let calc_ix = if has_terminal { 1 } else { 0 };
-                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
-                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
+                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
+                    self.row_offsets();
 
                 if has_terminal && self.selected_ix == 0 {
                     if let Some(cmd) = &self.inline_terminal {
@@ -947,12 +942,8 @@ impl PickerDelegate for RoverDelegate {
 
         match self.view_mode {
             ViewMode::Main => {
-                let has_terminal = self.inline_terminal.is_some();
-                let has_calc = self.calculator_result.is_some();
-                let has_ai = self.ai_loading || self.ai_result.is_some();
-                let calc_ix = if has_terminal { 1 } else { 0 };
-                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
-                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
+                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
+                    self.row_offsets();
 
                 if has_terminal && ix == 0 {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");

@@ -541,10 +541,7 @@ impl SettingsView {
                             .child("Clear Search History"),
                     )
                     .on_click(cx.listener(|this, _e, _w, _cx| {
-                        let conn = this.db.conn();
-                        if let Ok(c) = conn.lock() {
-                            let _ = c.execute("DELETE FROM query_history", []);
-                        }
+                        let _ = this.db.clear_query_history();
                     })),
             )
     }

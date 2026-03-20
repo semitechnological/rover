@@ -23,6 +23,7 @@ pub fn discover_apps() -> Vec<Command> {
         PathBuf::from("/Applications/Utilities"),
         PathBuf::from("/System/Applications"),
         PathBuf::from("/System/Applications/Utilities"),
+        PathBuf::from("/opt/homebrew/Applications"),
         dirs::home_dir().unwrap_or_default().join("Applications"),
     ];
 

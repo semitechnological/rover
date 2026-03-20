@@ -38,8 +38,6 @@ Math expressions are always evaluated alongside matches.
 cargo build -p rover
 ```
 
-For AI features, the local `rusty_foundationmodels` crate must be present at `../rusty_foundationmodels`.
-
 ## Settings
 
 Open via the menu bar (Rover → Settings) or press Cmd+, after activation.

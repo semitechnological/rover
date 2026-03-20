@@ -1,0 +1,10 @@
+$: default selected = false
+$: default name = ""
+$: default path = ""
+include row-base.crepus selected={selected}
+  div flex items-center gap-2
+    div flex flex-col
+      div text-[13px] text-[#cdd6f4]
+        "{name}"
+      div text-[11px] text-[#a6adc8]
+        "{path}"

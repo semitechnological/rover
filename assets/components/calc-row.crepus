@@ -1,0 +1,8 @@
+$: default selected = false
+$: default result = ""
+include row-base.crepus selected={selected}
+  div flex items-center gap-3
+    div px-[5px] py-[2px] rounded-[4px] text-[#a6adc8] text-[11px] font-semibold
+      "="
+    div text-[14px] text-[#89b4fa] font-semibold
+      "{result}"

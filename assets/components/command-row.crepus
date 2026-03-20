@@ -1,0 +1,14 @@
+$: default selected = false
+$: default name = ""
+$: default description = ""
+$: default has_submenu = false
+include row-base.crepus selected={selected}
+  div flex items-center justify-between
+    div flex items-center gap-2
+      div text-[14px] text-[#cdd6f4]
+        "{name}"
+      div text-[12px] text-[#a6adc8]
+        "{description}"
+    if {has_submenu}
+      div text-[12px] text-[#a6adc8]
+        ">"

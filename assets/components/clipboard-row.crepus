@@ -1,0 +1,6 @@
+$: default selected = false
+$: default preview = ""
+include row-base.crepus selected={selected}
+  div flex items-center gap-2
+    div text-[13px] text-[#cdd6f4] overflow-hidden
+      "{preview}"

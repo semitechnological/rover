@@ -1,4 +1,5 @@
 mod ai;
+mod assets;
 mod clipboard_monitor;
 mod delegate;
 mod hotkey;

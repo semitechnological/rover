@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use crepuscularity_runtime::{HotReloadState, HotReloadView, TemplateContext};
 
+use crate::assets::assets_dir;
+
 use crate::hotkey;
 
 pub struct SettingsView {
@@ -382,17 +384,6 @@ impl Render for SettingsView {
                     ),
             )
     }
-}
-
-fn assets_dir() -> std::path::PathBuf {
-    let exe = std::env::current_exe().unwrap_or_default();
-    for ancestor in exe.parent().unwrap_or(std::path::Path::new(".")).ancestors() {
-        let candidate = ancestor.join("assets");
-        if candidate.exists() {
-            return candidate;
-        }
-    }
-    std::path::PathBuf::from("assets")
 }
 
 fn open_settings_window_with_section(db: Arc<RoverDb>, section: SettingsSection, cx: &mut App) {

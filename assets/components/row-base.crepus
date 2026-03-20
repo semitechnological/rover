@@ -1,0 +1,7 @@
+$: default selected = false
+if {selected}
+  div mx-1 px-2 py-[6px] w-full rounded-md bg-[#585b70]
+    slot
+else
+  div mx-1 px-2 py-[6px] w-full rounded-md
+    slot

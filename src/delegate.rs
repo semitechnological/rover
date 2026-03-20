@@ -7,9 +7,10 @@ use rover_commands::{
 use rover_db::{ClipboardEntry, RoverDb};
 use rover_fuzzy::{match_strings, normalize_query, StringMatch, StringMatchCandidate};
 use rover_picker::{ItemAction, Picker, PickerDelegate};
-use rover_theme::theme;
 use std::collections::VecDeque;
 use std::sync::Arc;
+
+use crepuscularity_runtime::{parse_template, render_nodes, TemplateContext, TemplateValue};
 
 
 #[derive(Clone, Debug, PartialEq)]
@@ -191,217 +192,85 @@ impl RoverDelegate {
         cx.notify();
     }
 
-    fn render_calculator_row(
-        &self,
-        selected: bool,
-        colors: &rover_theme::ThemeColors,
-    ) -> AnyElement {
-        let result = self.calculator_result.as_ref().unwrap();
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .w(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(colors.text_muted)
-                        .text_size(px(14.0))
-                        .child(SharedString::from("=")),
-                )
-                .child(
-                    div()
-                        .text_color(colors.text_accent)
-                        .text_size(px(14.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(result.clone())),
-                ),
-        )
-        .into_any_element()
+    fn render_command_row(&self, command: &Command, selected: bool) -> AnyElement {
+        let path = crate::assets::assets_dir().join("components/command-row.crepus");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let nodes = parse_template(&content).unwrap_or_default();
+        let mut ctx = TemplateContext::new();
+        ctx.base_dir = path.parent().map(|p| p.to_path_buf());
+        ctx.vars.insert("selected".into(), TemplateValue::Bool(selected));
+        ctx.vars.insert("name".into(), TemplateValue::Str(command.name.clone()));
+        ctx.vars.insert("description".into(), TemplateValue::Str(command.description.clone()));
+        ctx.vars.insert("has_submenu".into(), TemplateValue::Bool(command.has_submenu));
+        render_nodes(&nodes, &ctx)
     }
 
-    fn render_command_row(
-        &self,
-        command: &Command,
-        selected: bool,
-        colors: &rover_theme::ThemeColors,
-    ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_color(colors.text)
-                                .text_size(px(14.0))
-                                .child(SharedString::from(command.name.clone())),
-                        )
-                        .child(
-                            div()
-                                .text_color(colors.text_muted)
-                                .text_size(px(12.0))
-                                .child(SharedString::from(command.description.clone())),
-                        ),
-                )
-                .when(command.has_submenu, |el: Div| {
-                    el.child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(12.0))
-                            .child(SharedString::from(">")),
-                    )
-                }),
-        )
-        .into_any_element()
-    }
-
-    fn render_clipboard_row(
-        &self,
-        entry: &ClipboardEntry,
-        selected: bool,
-        colors: &rover_theme::ThemeColors,
-    ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
+    fn render_clipboard_row(&self, entry: &ClipboardEntry, selected: bool) -> AnyElement {
         let preview: String = entry
             .content
             .chars()
             .take(80)
             .collect::<String>()
             .replace('\n', " \u{21B5} ");
-        row.child(
-            div().flex().items_center().gap_2().child(
-                div()
-                    .text_color(colors.text)
-                    .text_size(px(13.0))
-                    .overflow_hidden()
-                    .child(SharedString::from(preview)),
-            ),
-        )
-        .into_any_element()
+        let path = crate::assets::assets_dir().join("components/clipboard-row.crepus");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let nodes = parse_template(&content).unwrap_or_default();
+        let mut ctx = TemplateContext::new();
+        ctx.base_dir = path.parent().map(|p| p.to_path_buf());
+        ctx.vars.insert("selected".into(), TemplateValue::Bool(selected));
+        ctx.vars.insert("preview".into(), TemplateValue::Str(preview));
+        render_nodes(&nodes, &ctx)
     }
 
-    fn render_file_row(
-        &self,
-        file: &file_search::FileResult,
-        selected: bool,
-        colors: &rover_theme::ThemeColors,
-    ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div().flex().items_center().gap_2().child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_color(colors.text)
-                            .text_size(px(13.0))
-                            .child(SharedString::from(file.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(11.0))
-                            .child(SharedString::from(file.path.to_string_lossy().to_string())),
-                    ),
-            ),
-        )
-        .into_any_element()
+    fn render_file_row(&self, file: &file_search::FileResult, selected: bool) -> AnyElement {
+        let path = crate::assets::assets_dir().join("components/file-row.crepus");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let nodes = parse_template(&content).unwrap_or_default();
+        let mut ctx = TemplateContext::new();
+        ctx.base_dir = path.parent().map(|p| p.to_path_buf());
+        ctx.vars.insert("selected".into(), TemplateValue::Bool(selected));
+        ctx.vars.insert("name".into(), TemplateValue::Str(file.name.clone()));
+        ctx.vars.insert("path".into(), TemplateValue::Str(file.path.to_string_lossy().to_string()));
+        render_nodes(&nodes, &ctx)
     }
 
-    fn render_terminal_row(
-        &self,
-        command: &str,
-        selected: bool,
-        colors: &rover_theme::ThemeColors,
-    ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .px(px(5.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(colors.text_muted.opacity(0.15))
-                        .text_color(colors.text_muted)
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from("$")),
-                )
-                .child(
-                    div()
-                        .text_color(colors.text)
-                        .text_size(px(13.0))
-                        .child(SharedString::from(command.to_string())),
-                ),
-        )
-        .into_any_element()
+    fn render_calculator_row(&self, selected: bool) -> AnyElement {
+        let result = self.calculator_result.as_deref().unwrap_or("").to_string();
+        let path = crate::assets::assets_dir().join("components/calc-row.crepus");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let nodes = parse_template(&content).unwrap_or_default();
+        let mut ctx = TemplateContext::new();
+        ctx.base_dir = path.parent().map(|p| p.to_path_buf());
+        ctx.vars.insert("selected".into(), TemplateValue::Bool(selected));
+        ctx.vars.insert("result".into(), TemplateValue::Str(result));
+        render_nodes(&nodes, &ctx)
     }
 
-    fn render_ai_row(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
+    fn render_terminal_row(&self, command: &str, selected: bool) -> AnyElement {
+        let path = crate::assets::assets_dir().join("components/terminal-row.crepus");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let nodes = parse_template(&content).unwrap_or_default();
+        let mut ctx = TemplateContext::new();
+        ctx.base_dir = path.parent().map(|p| p.to_path_buf());
+        ctx.vars.insert("selected".into(), TemplateValue::Bool(selected));
+        ctx.vars.insert("command".into(), TemplateValue::Str(command.to_string()));
+        render_nodes(&nodes, &ctx)
+    }
+
+    fn render_ai_row(&self, selected: bool) -> AnyElement {
         let text = if self.ai_loading {
             "...".to_string()
         } else {
             self.ai_result.clone().unwrap_or_default()
         };
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .px(px(5.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(colors.text_accent.opacity(0.15))
-                        .text_color(colors.text_accent)
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from("AI")),
-                )
-                .child(
-                    div()
-                        .text_color(colors.text)
-                        .text_size(px(13.0))
-                        .child(SharedString::from(text)),
-                ),
-        )
-        .into_any_element()
+        let path = crate::assets::assets_dir().join("components/ai-row.crepus");
+        let content = std::fs::read_to_string(&path).unwrap_or_default();
+        let nodes = parse_template(&content).unwrap_or_default();
+        let mut ctx = TemplateContext::new();
+        ctx.base_dir = path.parent().map(|p| p.to_path_buf());
+        ctx.vars.insert("selected".into(), TemplateValue::Bool(selected));
+        ctx.vars.insert("text".into(), TemplateValue::Str(text));
+        render_nodes(&nodes, &ctx)
     }
 
     pub fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
@@ -940,11 +809,8 @@ impl PickerDelegate for RoverDelegate {
         &self,
         ix: usize,
         selected: bool,
-        cx: &mut Context<Picker<Self>>,
+        _cx: &mut Context<Picker<Self>>,
     ) -> Option<Self::ListItem> {
-        let theme = theme(cx);
-        let colors = &theme.colors;
-
         match self.view_mode {
             ViewMode::Main => {
                 let has_terminal = self.inline_terminal.is_some();
@@ -956,30 +822,30 @@ impl PickerDelegate for RoverDelegate {
 
                 if has_terminal && ix == 0 {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");
-                    return Some(self.render_terminal_row(cmd, selected, colors));
+                    return Some(self.render_terminal_row(cmd, selected));
                 }
 
                 if has_calc && ix == calc_ix {
-                    return Some(self.render_calculator_row(selected, colors));
+                    return Some(self.render_calculator_row(selected));
                 }
 
                 if has_ai && ix == ai_ix {
-                    return Some(self.render_ai_row(selected, colors));
+                    return Some(self.render_ai_row(selected));
                 }
 
                 let match_ix = ix.saturating_sub(command_offset);
                 let string_match = self.matches.get(match_ix)?;
                 let command = self.all_commands.get(string_match.candidate_id)?;
-                Some(self.render_command_row(command, selected, colors))
+                Some(self.render_command_row(command, selected))
             }
             ViewMode::ClipboardHistory => {
                 let &entry_ix = self.clipboard_filtered.get(ix)?;
                 let entry = self.clipboard_entries.get(entry_ix)?;
-                Some(self.render_clipboard_row(entry, selected, colors))
+                Some(self.render_clipboard_row(entry, selected))
             }
             ViewMode::FileSearch => {
                 let file = self.file_results.get(ix)?;
-                Some(self.render_file_row(file, selected, colors))
+                Some(self.render_file_row(file, selected))
             }
         }
     }

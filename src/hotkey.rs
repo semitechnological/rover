@@ -69,7 +69,7 @@ pub fn register_global_hotkey(_cx: &mut App) {
             };
 
             let mut handler_ref: *mut c_void = std::ptr::null_mut();
-            InstallEventHandler(
+            let err = InstallEventHandler(
                 target,
                 hotkey_handler,
                 1,
@@ -77,6 +77,9 @@ pub fn register_global_hotkey(_cx: &mut App) {
                 std::ptr::null_mut(),
                 &mut handler_ref,
             );
+            if err != 0 {
+                log::warn!("InstallEventHandler failed with error code {err}");
+            }
 
             // Register Cmd+Space
             let hotkey_id = EventHotKeyID {
@@ -84,7 +87,11 @@ pub fn register_global_hotkey(_cx: &mut App) {
                 id: 1,
             };
             let mut hotkey_ref: *mut c_void = std::ptr::null_mut();
-            RegisterEventHotKey(K_VK_SPACE, CMD_KEY, hotkey_id, target, 0, &mut hotkey_ref);
+            let err =
+                RegisterEventHotKey(K_VK_SPACE, CMD_KEY, hotkey_id, target, 0, &mut hotkey_ref);
+            if err != 0 {
+                log::warn!("RegisterEventHotKey (Cmd+Space) failed with error code {err}");
+            }
 
             // Register Hyperkey+Space (Ctrl+Shift+Opt+Cmd+Space)
             let hyper_id = EventHotKeyID {
@@ -92,7 +99,19 @@ pub fn register_global_hotkey(_cx: &mut App) {
                 id: 2,
             };
             let mut hyper_ref: *mut c_void = std::ptr::null_mut();
-            RegisterEventHotKey(K_VK_SPACE, HYPER_MODS, hyper_id, target, 0, &mut hyper_ref);
+            let err = RegisterEventHotKey(
+                K_VK_SPACE,
+                HYPER_MODS,
+                hyper_id,
+                target,
+                0,
+                &mut hyper_ref,
+            );
+            if err != 0 {
+                log::warn!(
+                    "RegisterEventHotKey (Hyperkey+Space) failed with error code {err}"
+                );
+            }
         }
     }
 }

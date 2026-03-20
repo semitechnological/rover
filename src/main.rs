@@ -28,7 +28,143 @@ impl Global for CommandsGlobal {}
 struct WindowOpenGlobal(Arc<AtomicBool>);
 impl Global for WindowOpenGlobal {}
 
+// ─── CLI ──────────────────────────────────────────────────────────────────────
+
+#[derive(Debug)]
+enum CliCommand {
+    /// No CLI args — normal GUI launch.
+    None,
+    /// Open the browser at a specific URL.
+    OpenUrl(String),
+    /// Search the web (opens browser).
+    Search(String),
+    /// Open the browser at the default URL.
+    Browser,
+}
+
+/// Parse argv into either a headless action (run it and return) or a
+/// `CliCommand` describing what the GUI should open on startup.
+fn parse_args() -> CliCommand {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+
+    match args.first().map(|s| s.as_str()) {
+        None | Some("") => CliCommand::None,
+
+        // ── Headless commands (no GUI) ─────────────────────────────────────
+        Some("help") | Some("--help") | Some("-h") => {
+            print!(
+                "Rover — macOS launcher\n\
+                 \n\
+                 USAGE\n\
+                 \n\
+                 rover                        Open the launcher (GUI)\n\
+                 rover open <url>             Open URL in the Rover browser\n\
+                 rover search <query...>      Search the web in Rover browser\n\
+                 rover browser                Open the Rover browser\n\
+                 rover launch <app>           Activate a macOS app\n\
+                 rover run <cmd...>           Run a shell command\n\
+                 rover screenshot [name]      Take a screenshot to ~/Desktop\n\
+                 rover help                   Show this help\n\
+                 rover version                Print version\n\
+                 \n"
+            );
+            std::process::exit(0);
+        }
+
+        Some("version") | Some("--version") | Some("-V") => {
+            println!("rover {}", env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
+
+        Some("launch") => {
+            let app = args[1..].join(" ");
+            if app.is_empty() {
+                eprintln!("Usage: rover launch <App Name>");
+                std::process::exit(1);
+            }
+            // Sanitize: strip control chars & double-quotes to prevent injection.
+            let safe: String = app.chars().filter(|c| !c.is_control() && *c != '"').collect();
+            let script = format!(r#"tell application "{safe}" to activate"#);
+            let status = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg(&script)
+                .status()
+                .unwrap_or_else(|e| { eprintln!("osascript error: {e}"); std::process::exit(1) });
+            std::process::exit(if status.success() { 0 } else { 1 });
+        }
+
+        Some("run") => {
+            let cmd = args[1..].join(" ");
+            if cmd.is_empty() {
+                eprintln!("Usage: rover run <shell command>");
+                std::process::exit(1);
+            }
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&cmd)
+                .output()
+                .unwrap_or_else(|e| { eprintln!("spawn error: {e}"); std::process::exit(1) });
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            eprint!("{}", String::from_utf8_lossy(&output.stderr));
+            std::process::exit(output.status.code().unwrap_or(1));
+        }
+
+        Some("screenshot") => {
+            let name = args.get(1).map(|s| s.as_str()).unwrap_or("screenshot");
+            let safe: String = name.chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            let path = format!("{home}/Desktop/{safe}.png");
+            let status = std::process::Command::new("screencapture")
+                .args(["-x", &path])
+                .status()
+                .unwrap_or_else(|e| { eprintln!("screencapture error: {e}"); std::process::exit(1) });
+            if status.success() {
+                println!("{path}");
+                std::process::exit(0);
+            } else {
+                eprintln!("screencapture failed");
+                std::process::exit(1);
+            }
+        }
+
+        // ── GUI commands (start the app, skip the picker) ──────────────────
+        Some("open") => {
+            let raw = args[1..].join(" ");
+            if raw.is_empty() {
+                eprintln!("Usage: rover open <url>");
+                std::process::exit(1);
+            }
+            let url = if raw.starts_with("http://") || raw.starts_with("https://") {
+                raw
+            } else {
+                format!("https://{raw}")
+            };
+            CliCommand::OpenUrl(url)
+        }
+
+        Some("search") | Some("s") => {
+            let query = args[1..].join(" ");
+            if query.is_empty() {
+                eprintln!("Usage: rover search <query>");
+                std::process::exit(1);
+            }
+            CliCommand::Search(query)
+        }
+
+        Some("browser") | Some("b") => CliCommand::Browser,
+
+        Some(unknown) => {
+            eprintln!("Unknown command: {unknown}\nRun `rover help` for usage.");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn main() {
+    let cli = parse_args();
+
     Application::new().run(|cx| {
         rover_theme::init(cx);
 
@@ -153,7 +289,20 @@ fn main() {
         })
         .detach();
 
-        open_window(commands, db, cx);
+        match cli {
+            CliCommand::None => open_window(commands, db, cx),
+            CliCommand::Browser => {
+                rover_browser::open_browser_window(cx, Some(db));
+            }
+            CliCommand::OpenUrl(url) => {
+                rover_browser::open_browser_window_with_url(cx, &url, Some(db));
+            }
+            CliCommand::Search(query) => {
+                let encoded = urlencoding::encode(&query);
+                let url = format!("https://www.perplexity.ai/search?q={encoded}");
+                rover_browser::open_browser_window_with_url(cx, &url, Some(db));
+            }
+        }
     });
 }
 

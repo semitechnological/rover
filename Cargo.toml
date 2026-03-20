@@ -49,6 +49,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 log.workspace = true
 dirs.workspace = true
+urlencoding = "2"
 rover_fuzzy.workspace = true
 rover_theme.workspace = true
 rover_picker.workspace = true

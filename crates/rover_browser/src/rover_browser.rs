@@ -153,6 +153,8 @@ pub enum BrowserAction {
     ShowHistory,
     SearchHistory(String),
     SearchBookmarks(String),
+    /// Copy current URL to clipboard and show a share overlay hint.
+    Share,
 }
 
 // ─── Command parsing ──────────────────────────────────────────────────────────
@@ -195,6 +197,7 @@ pub fn parse_command(input: &str) -> BrowserAction {
         "close" => return BrowserAction::CloseTab,
         "new tab" | "newtab" => return BrowserAction::NewTab,
         "tabs" | "ls" | "list" => return BrowserAction::ListTabs,
+        "share" => return BrowserAction::Share,
         _ => {}
     }
 
@@ -715,6 +718,23 @@ impl BrowserWindow {
                     }
                 }
             }
+            BrowserAction::Share => {
+                if let Some(tab) = self.tabs.get(self.active_tab) {
+                    let url = tab.url.clone();
+                    // Copy the URL to the system clipboard via pbcopy.
+                    use std::io::Write;
+                    if let Ok(mut child) = std::process::Command::new("pbcopy")
+                        .stdin(std::process::Stdio::piped())
+                        .spawn()
+                    {
+                        if let Some(stdin) = child.stdin.as_mut() {
+                            let _ = stdin.write_all(url.as_bytes());
+                        }
+                        let _ = child.wait();
+                        self.overlay_hint = Some(format!("Copied to clipboard: {url}"));
+                    }
+                }
+            }
         }
         self.command_bar_active = false;
         cx.notify();
@@ -947,6 +967,7 @@ impl Render for BrowserWindow {
                         BrowserAction::ShowHistory => Some("↵  show history".to_string()),
                         BrowserAction::SearchHistory(q) => Some(format!("↵  search history: {q}")),
                         BrowserAction::SearchBookmarks(q) => Some(format!("↵  search bookmarks: {q}")),
+                        BrowserAction::Share => Some("↵  copy URL to clipboard".to_string()),
                         _ => None,
                     }
                 }
@@ -1030,6 +1051,19 @@ impl Render for BrowserWindow {
                             }
                         }))
                         .child(SharedString::from(bm_star)),
+                )
+                // Share button — copies current URL to clipboard
+                .child(
+                    div()
+                        .id("share-btn")
+                        .px_1()
+                        .cursor_pointer()
+                        .text_color(rgb(0x666666u32))
+                        .text_size(px(13.0))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.execute_action(BrowserAction::Share, window, cx);
+                        }))
+                        .child(SharedString::from("⬆")),
                 )
                 .child(tab_pills);
 

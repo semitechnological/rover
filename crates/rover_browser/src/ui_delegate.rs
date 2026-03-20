@@ -144,18 +144,66 @@ mod macos {
                 }
             }
 
-            /// Grant media capture (camera/microphone) permission automatically.
-            /// This is a permissive policy — a production app would prompt the user.
+            /// Prompt the user before granting camera/microphone access.
             #[unsafe(method(webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:))]
             unsafe fn request_media_capture_permission(
                 &self,
                 _web_view: &WKWebView,
-                _origin: &WKSecurityOrigin,
+                origin: &WKSecurityOrigin,
                 _frame: &WKFrameInfo,
-                _capture_type: WKMediaCaptureType,
+                capture_type: WKMediaCaptureType,
                 decision_handler: &block2::DynBlock<dyn Fn(WKPermissionDecision)>,
             ) {
-                decision_handler.call((WKPermissionDecision::Grant,));
+                let mtm = MainThreadMarker::new_unchecked();
+                let alert = NSAlert::new(mtm);
+
+                let type_str = match capture_type {
+                    WKMediaCaptureType::Camera => "camera",
+                    WKMediaCaptureType::Microphone => "microphone",
+                    WKMediaCaptureType::CameraAndMicrophone => "camera and microphone",
+                    _ => "media device",
+                };
+                let host = origin.host().to_string();
+                let msg = objc2_foundation::NSString::from_str(&format!(
+                    "{host} wants access to your {type_str}."
+                ));
+                alert.setMessageText(&msg);
+                alert.addButtonWithTitle(ns_string!("Allow"));
+                alert.addButtonWithTitle(ns_string!("Deny"));
+                let response = alert.runModal();
+                let decision = if response == NSAlertFirstButtonReturn {
+                    WKPermissionDecision::Grant
+                } else {
+                    WKPermissionDecision::Deny
+                };
+                decision_handler.call((decision,));
+            }
+
+            /// Prompt the user before granting geolocation access (macOS 13+).
+            #[unsafe(method(webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:))]
+            unsafe fn request_geolocation_permission(
+                &self,
+                _web_view: &WKWebView,
+                origin: &WKSecurityOrigin,
+                _frame: &WKFrameInfo,
+                decision_handler: &block2::DynBlock<dyn Fn(WKPermissionDecision)>,
+            ) {
+                let mtm = MainThreadMarker::new_unchecked();
+                let alert = NSAlert::new(mtm);
+                let host = origin.host().to_string();
+                let msg = objc2_foundation::NSString::from_str(&format!(
+                    "{host} wants to know your location."
+                ));
+                alert.setMessageText(&msg);
+                alert.addButtonWithTitle(ns_string!("Allow"));
+                alert.addButtonWithTitle(ns_string!("Deny"));
+                let response = alert.runModal();
+                let decision = if response == NSAlertFirstButtonReturn {
+                    WKPermissionDecision::Grant
+                } else {
+                    WKPermissionDecision::Deny
+                };
+                decision_handler.call((decision,));
             }
         }
     );

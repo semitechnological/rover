@@ -671,9 +671,10 @@ impl PickerDelegate for RoverDelegate {
 
                 if o.has_url && self.selected_ix == o.url_ix {
                     if let Some(url) = self.url_result.clone() {
+                        let browser_db = self.db.clone();
                         cx.spawn(async move |_this, cx: &mut AsyncApp| {
                             cx.update(|cx| {
-                                rover_browser::open_browser_window_with_url(cx, &url);
+                                rover_browser::open_browser_window_with_url(cx, &url, Some(browser_db));
                             })
                             .ok();
                         })

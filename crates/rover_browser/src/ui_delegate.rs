@@ -179,32 +179,6 @@ mod macos {
                 decision_handler.call((decision,));
             }
 
-            /// Prompt the user before granting geolocation access (macOS 13+).
-            #[unsafe(method(webView:requestGeolocationPermissionForOrigin:initiatedByFrame:decisionHandler:))]
-            unsafe fn request_geolocation_permission(
-                &self,
-                _web_view: &WKWebView,
-                origin: &WKSecurityOrigin,
-                _frame: &WKFrameInfo,
-                decision_handler: &block2::DynBlock<dyn Fn(WKPermissionDecision)>,
-            ) {
-                let mtm = MainThreadMarker::new_unchecked();
-                let alert = NSAlert::new(mtm);
-                let host = origin.host().to_string();
-                let msg = objc2_foundation::NSString::from_str(&format!(
-                    "{host} wants to know your location."
-                ));
-                alert.setMessageText(&msg);
-                alert.addButtonWithTitle(ns_string!("Allow"));
-                alert.addButtonWithTitle(ns_string!("Deny"));
-                let response = alert.runModal();
-                let decision = if response == NSAlertFirstButtonReturn {
-                    WKPermissionDecision::Grant
-                } else {
-                    WKPermissionDecision::Deny
-                };
-                decision_handler.call((decision,));
-            }
         }
     );
 

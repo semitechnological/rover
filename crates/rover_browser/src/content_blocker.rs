@@ -38,7 +38,7 @@ mod macos {
 
     /// Bump this whenever `content_rules.json` changes materially to force
     /// the OS to recompile the cached bytecode.
-    const RULES_ID: &str = "rover-content-blocker-v2";
+    const RULES_ID: &str = "rover-content-blocker-v3";
 
     // -------------------------------------------------------------------------
     // Thread-safe id wrapper

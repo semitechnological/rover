@@ -37,7 +37,7 @@ const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(30);
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const CHROME_HEIGHT: f32 = 44.0;
 
-actions!(rover_browser, [FocusCommandBar]);
+actions!(rover_browser, [FocusCommandBar, ShareCurrentUrl]);
 
 // ─── Search engines ───────────────────────────────────────────────────────────
 
@@ -889,6 +889,9 @@ impl Render for BrowserWindow {
             .on_action(cx.listener(|this, _: &FocusCommandBar, window, cx| {
                 this.activate_command_bar(window, cx);
             }))
+            .on_action(cx.listener(|this, _: &ShareCurrentUrl, window, cx| {
+                this.execute_action(BrowserAction::Share, window, cx);
+            }))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
@@ -1051,19 +1054,6 @@ impl Render for BrowserWindow {
                             }
                         }))
                         .child(SharedString::from(bm_star)),
-                )
-                // Share button — copies current URL to clipboard
-                .child(
-                    div()
-                        .id("share-btn")
-                        .px_1()
-                        .cursor_pointer()
-                        .text_color(rgb(0x666666u32))
-                        .text_size(px(13.0))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.execute_action(BrowserAction::Share, window, cx);
-                        }))
-                        .child(SharedString::from("⬆")),
                 )
                 .child(tab_pills);
 
@@ -1244,7 +1234,10 @@ pub fn open_browser_window(cx: &mut App, db: Option<Arc<rover_db::RoverDb>>) {
 }
 
 pub fn open_browser_window_with_url(cx: &mut App, url: &str, db: Option<Arc<rover_db::RoverDb>>) {
-    cx.bind_keys([KeyBinding::new("cmd-\\", FocusCommandBar, Some("BrowserWindow"))]);
+    cx.bind_keys([
+        KeyBinding::new("cmd-\\", FocusCommandBar, Some("BrowserWindow")),
+        KeyBinding::new("cmd-shift-c", ShareCurrentUrl, Some("BrowserWindow")),
+    ]);
 
     let url = url.to_string();
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);

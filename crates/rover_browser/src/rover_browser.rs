@@ -1,8 +1,7 @@
-#![recursion_limit = "512"]
+#![recursion_limit = "4096"]
 
 mod webview;
 
-use anyhow::Result;
 use gpui::*;
 use std::time::{Duration, Instant};
 
@@ -12,6 +11,12 @@ use webview::WebViewHandle;
 pub const CACHED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const FROZEN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 pub const CLOSED_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
+
+const DEFAULT_URL: &str = "https://www.perplexity.ai";
+// Fallback search engine when plain text is entered with no prefix.
+const FALLBACK_ENGINE: &str = "perplexity";
+
+actions!(rover_browser, [FocusCommandBar]);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TabState {
@@ -127,8 +132,8 @@ pub fn parse_command(input: &str) -> BrowserAction {
     match trimmed {
         "back" | "<" => return BrowserAction::Back,
         "forward" | ">" => return BrowserAction::Forward,
-        "reload" | "r" | "refresh" => return BrowserAction::Reload,
-        "close" | "x" => return BrowserAction::CloseTab,
+        "reload" | "refresh" => return BrowserAction::Reload,
+        "close" => return BrowserAction::CloseTab,
         "tabs" | "ls" | "list" => return BrowserAction::ListTabs,
         _ => {}
     }
@@ -159,7 +164,7 @@ pub fn parse_command(input: &str) -> BrowserAction {
     }
 
     BrowserAction::NewSearch {
-        engine_name: "google".to_string(),
+        engine_name: FALLBACK_ENGINE.to_string(),
         query: trimmed.to_string(),
     }
 }
@@ -194,7 +199,7 @@ pub fn search_url(engine_name: &str, query: &str) -> String {
         }
     }
     let encoded_fallback = urlencoding::encode(query);
-    format!("https://www.google.com/search?q={}", encoded_fallback)
+    format!("https://www.perplexity.ai/search?q={}", encoded_fallback)
 }
 
 pub fn fuzzy_score(query: &str, text: &str) -> f32 {
@@ -236,7 +241,10 @@ pub fn fuzzy_score(query: &str, text: &str) -> f32 {
 pub struct BrowserWindow {
     tabs: Vec<BrowserTab>,
     active_tab: usize,
+    /// Text currently typed in the command bar (only meaningful when `command_bar_active`).
     command_bar_text: String,
+    /// Whether the command bar is in interactive input mode.
+    command_bar_active: bool,
     command_bar_focus: FocusHandle,
 }
 
@@ -245,8 +253,8 @@ impl BrowserWindow {
         let focus_handle = cx.focus_handle();
 
         let initial_tab = BrowserTab {
-            title: "New Tab".to_string(),
-            url: "about:blank".to_string(),
+            title: "Perplexity".to_string(),
+            url: DEFAULT_URL.to_string(),
             state: TabState::Active,
             last_active: Instant::now(),
             #[cfg(target_os = "macos")]
@@ -257,10 +265,11 @@ impl BrowserWindow {
             tabs: vec![initial_tab],
             active_tab: 0,
             command_bar_text: String::new(),
+            command_bar_active: false,
             command_bar_focus: focus_handle,
         };
 
-        browser.navigate_current("about:blank", window, cx);
+        browser.navigate_current(DEFAULT_URL, window, cx);
         browser
     }
 
@@ -282,7 +291,12 @@ impl BrowserWindow {
         }
     }
 
-    pub fn execute_action(&mut self, action: BrowserAction, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn execute_action(
+        &mut self,
+        action: BrowserAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match action {
             BrowserAction::Navigate(url) => {
                 self.navigate_current(&url, window, cx);
@@ -318,10 +332,8 @@ impl BrowserWindow {
             BrowserAction::CloseTab => {
                 if self.tabs.len() > 1 {
                     #[cfg(target_os = "macos")]
-                    {
-                        if let Some(mut tab) = self.tabs.get_mut(self.active_tab) {
-                            tab.webview_handle = None;
-                        }
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                        tab.webview_handle = None;
                     }
                     self.tabs.remove(self.active_tab);
                     if self.active_tab >= self.tabs.len() {
@@ -332,11 +344,9 @@ impl BrowserWindow {
             BrowserAction::SwitchToTab(index) => {
                 if index < self.tabs.len() {
                     #[cfg(target_os = "macos")]
-                    {
-                        if let Some(tab) = self.tabs.get(self.active_tab) {
-                            if let Some(webview) = &tab.webview_handle {
-                                webview.hide();
-                            }
+                    if let Some(tab) = self.tabs.get(self.active_tab) {
+                        if let Some(webview) = &tab.webview_handle {
+                            webview.hide();
                         }
                     }
                     self.active_tab = index;
@@ -354,88 +364,196 @@ impl BrowserWindow {
         }
         cx.notify();
     }
+
+    fn activate_command_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.command_bar_active = true;
+        self.command_bar_text.clear();
+        window.focus(&self.command_bar_focus);
+        cx.notify();
+    }
+
+    fn handle_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.command_bar_active {
+            return;
+        }
+        match event.keystroke.key.as_str() {
+            "escape" => {
+                self.command_bar_active = false;
+                self.command_bar_text.clear();
+                cx.notify();
+            }
+            "return" | "enter" => {
+                let text = std::mem::take(&mut self.command_bar_text);
+                self.command_bar_active = false;
+                if let Some((index, _)) = self.best_tab_match(&text) {
+                    self.execute_action(BrowserAction::SwitchToTab(index), window, cx);
+                } else {
+                    let action = parse_command(&text);
+                    self.execute_action(action, window, cx);
+                }
+            }
+            "backspace" => {
+                self.command_bar_text.pop();
+                cx.notify();
+            }
+            key if key.chars().count() == 1
+                && key.chars().next().map_or(false, |c| !c.is_control()) =>
+            {
+                self.command_bar_text.push_str(key);
+                cx.notify();
+            }
+            _ => {}
+        }
+    }
+
+    /// Finds the best-matching open tab for `query`. Returns the tab index and
+    /// title if the fuzzy score exceeds the threshold.
+    fn best_tab_match(&self, query: &str) -> Option<(usize, &str)> {
+        if query.is_empty() {
+            return None;
+        }
+        let mut best_score = 0.4_f32; // minimum threshold to surface a suggestion
+        let mut best = None;
+        for (index, tab) in self.tabs.iter().enumerate() {
+            let score = fuzzy_score(query, &tab.title).max(fuzzy_score(query, &tab.url));
+            if score > best_score {
+                best_score = score;
+                best = Some((index, tab.title.as_str()));
+            }
+        }
+        best
+    }
+}
+
+impl Focusable for BrowserWindow {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.command_bar_focus.clone()
+    }
 }
 
 impl Render for BrowserWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let command_bar_focus = self.command_bar_focus.clone();
-        let current_url = self
-            .tabs
-            .get(self.active_tab)
-            .map(|tab| tab.url.clone())
-            .unwrap_or_default();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_active = self.command_bar_active;
+        let bar_text = if is_active {
+            self.command_bar_text.clone()
+        } else {
+            self.tabs
+                .get(self.active_tab)
+                .map(|tab| tab.url.clone())
+                .unwrap_or_default()
+        };
+
+        // Compute the action hint shown beneath the bar while editing.
+        let hint: Option<String> = if is_active && !self.command_bar_text.is_empty() {
+            let query = self.command_bar_text.as_str();
+            if let Some((_, title)) = self.best_tab_match(query) {
+                Some(format!("↵  switch to: {}", title))
+            } else {
+                match parse_command(query) {
+                    BrowserAction::Navigate(url) => Some(format!("↵  navigate to {}", url)),
+                    BrowserAction::NewSearch { engine_name, query } => {
+                        Some(format!("↵  search {} — {}", engine_name, query))
+                    }
+                    BrowserAction::Back => Some("↵  go back".to_string()),
+                    BrowserAction::Forward => Some("↵  go forward".to_string()),
+                    BrowserAction::Reload => Some("↵  reload".to_string()),
+                    BrowserAction::CloseTab => Some("↵  close tab".to_string()),
+                    _ => None,
+                }
+            }
+        } else {
+            None
+        };
+
+        let is_bar_focused = self.command_bar_focus.is_focused(window);
+
+        // Build the chrome bar. We conditionally append children using a mutable
+        // builder so the type stays `Div` in both branches.
+        let traffic_lights = div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(div().w(px(12.0)).h(px(12.0)).rounded_full().bg(rgb(0xff5f57)))
+            .child(div().w(px(12.0)).h(px(12.0)).rounded_full().bg(rgb(0xffbd2e)))
+            .child(div().w(px(12.0)).h(px(12.0)).rounded_full().bg(rgb(0x28c840)));
+
+        let input_display = div()
+            .flex_1()
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .bg(rgb(0x1e1e1e))
+            .border_1()
+            .border_color(if is_bar_focused && is_active {
+                rgb(0x5588cc)
+            } else {
+                rgb(0x444444)
+            })
+            .child(
+                div()
+                    .text_color(if is_active { rgb(0xffffff) } else { rgb(0x888888) })
+                    .text_size(px(13.0))
+                    .child(SharedString::from(if is_active {
+                        format!("{}▌", bar_text)
+                    } else {
+                        bar_text
+                    })),
+            );
+
+        let mut address_bar_row = div()
+            .flex()
+            .items_center()
+            .px_3()
+            .py_2()
+            .gap_2()
+            .child(traffic_lights)
+            .child(input_display);
+
+        if !is_active {
+            address_bar_row = address_bar_row.child(
+                div()
+                    .text_color(rgb(0x555555))
+                    .text_size(px(11.0))
+                    .child(SharedString::from("⌘\\")),
+            );
+        }
+
+        let mut chrome = div()
+            .flex()
+            .flex_col()
+            .bg(rgb(0x2d2d2d))
+            .border_b_1()
+            .border_color(rgb(0x3d3d3d))
+            .child(address_bar_row);
+
+        if let Some(hint_text) = hint {
+            chrome = chrome.child(
+                div()
+                    .px_3()
+                    .py_1()
+                    .text_color(rgb(0x5588cc))
+                    .text_size(px(11.0))
+                    .child(SharedString::from(hint_text)),
+            );
+        }
 
         div()
+            .key_context("BrowserWindow")
+            .track_focus(&self.command_bar_focus)
+            .on_action(cx.listener(|this, _: &FocusCommandBar, window, cx| {
+                this.activate_command_bar(window, cx);
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                this.handle_key_down(event, window, cx);
+            }))
             .size_full()
             .flex()
             .flex_col()
             .bg(rgb(0x1e1e1e))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .px_3()
-                    .py_2()
-                    .gap_2()
-                    .bg(rgb(0x2d2d2d))
-                    .border_b_1()
-                    .border_color(rgb(0x3d3d3d))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .w(px(12.0))
-                                    .h(px(12.0))
-                                    .rounded_full()
-                                    .bg(rgb(0xff5f57)),
-                            )
-                            .child(
-                                div()
-                                    .w(px(12.0))
-                                    .h(px(12.0))
-                                    .rounded_full()
-                                    .bg(rgb(0xffbd2e)),
-                            )
-                            .child(
-                                div()
-                                    .w(px(12.0))
-                                    .h(px(12.0))
-                                    .rounded_full()
-                                    .bg(rgb(0x28c840)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .px_3()
-                            .py_1()
-                            .rounded_md()
-                            .bg(rgb(0x1e1e1e))
-                            .border_1()
-                            .border_color(if command_bar_focus.is_focused(_window) {
-                                        rgb(0x5588cc)
-                                    } else {
-                                        rgb(0x444444)
-                                    })
-                            .child(
-                                div()
-                                    .text_color(rgb(0xcccccc))
-                                    .text_size(px(13.0))
-                                    .child(SharedString::from(current_url)),
-                            ),
-                    ),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .relative()
-                    .child(WebViewElement {
-                        browser: cx.entity().downgrade(),
-                    }),
-            )
+            .child(chrome)
+            .child(div().flex_1().child(WebViewElement {
+                browser: cx.entity().downgrade(),
+            }))
     }
 }
 
@@ -546,6 +664,13 @@ impl Element for WebViewElement {
 }
 
 pub fn open_browser_window(cx: &mut App) {
+    // Bind cmd+\ to focus the command bar within any browser window.
+    cx.bind_keys([KeyBinding::new(
+        "cmd-\\",
+        FocusCommandBar,
+        Some("BrowserWindow"),
+    )]);
+
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
 
     cx.open_window(
@@ -567,8 +692,8 @@ pub fn open_browser_window(cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::{
-        BrowserAction, CACHED_TIMEOUT, CLOSED_TIMEOUT, FROZEN_TIMEOUT,
-        fuzzy_score, looks_like_url, parse_command, search_url,
+        fuzzy_score, looks_like_url, parse_command, search_url, BrowserAction, CACHED_TIMEOUT,
+        CLOSED_TIMEOUT, FROZEN_TIMEOUT,
     };
     use std::time::Duration;
 
@@ -579,10 +704,8 @@ mod tests {
         assert!(matches!(parse_command("forward"), BrowserAction::Forward));
         assert!(matches!(parse_command(">"), BrowserAction::Forward));
         assert!(matches!(parse_command("reload"), BrowserAction::Reload));
-        assert!(matches!(parse_command("r"), BrowserAction::Reload));
         assert!(matches!(parse_command("refresh"), BrowserAction::Reload));
         assert!(matches!(parse_command("close"), BrowserAction::CloseTab));
-        assert!(matches!(parse_command("x"), BrowserAction::CloseTab));
         assert!(matches!(parse_command("tabs"), BrowserAction::ListTabs));
         assert!(matches!(parse_command("ls"), BrowserAction::ListTabs));
         assert!(matches!(parse_command("list"), BrowserAction::ListTabs));
@@ -631,12 +754,10 @@ mod tests {
             BrowserAction::Navigate(url) => assert_eq!(url, "https://example.com"),
             other => panic!("Expected Navigate, got {:?}", other),
         }
-
         match parse_command("http://example.com") {
             BrowserAction::Navigate(url) => assert_eq!(url, "http://example.com"),
             other => panic!("Expected Navigate, got {:?}", other),
         }
-
         match parse_command("example.com") {
             BrowserAction::Navigate(url) => assert_eq!(url, "https://example.com"),
             other => panic!("Expected Navigate, got {:?}", other),
@@ -644,21 +765,19 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_command_fallback_to_google() {
+    fn test_parse_command_fallback_to_perplexity() {
         match parse_command("rust programming language") {
             BrowserAction::NewSearch { engine_name, query } => {
-                assert_eq!(engine_name, "google");
+                assert_eq!(engine_name, "perplexity");
                 assert_eq!(query, "rust programming language");
             }
-            other => panic!("Expected NewSearch (google fallback), got {:?}", other),
+            other => panic!("Expected perplexity fallback, got {:?}", other),
         }
-
         match parse_command("hello world") {
-            BrowserAction::NewSearch { engine_name, query } => {
-                assert_eq!(engine_name, "google");
-                assert_eq!(query, "hello world");
+            BrowserAction::NewSearch { engine_name, .. } => {
+                assert_eq!(engine_name, "perplexity");
             }
-            other => panic!("Expected NewSearch (google fallback), got {:?}", other),
+            other => panic!("Expected perplexity fallback, got {:?}", other),
         }
     }
 
@@ -668,7 +787,6 @@ mod tests {
             BrowserAction::Navigate(url) => assert_eq!(url, "about:blank"),
             other => panic!("Expected Navigate(about:blank), got {:?}", other),
         }
-
         match parse_command("   ") {
             BrowserAction::Navigate(url) => assert_eq!(url, "about:blank"),
             other => panic!("Expected Navigate(about:blank), got {:?}", other),
@@ -708,14 +826,17 @@ mod tests {
         assert!(maps_url.contains("maps.apple.com"));
         assert!(maps_url.contains("coffee"));
 
+        // Unknown engine falls back to perplexity (not google).
         let fallback_url = search_url("nonexistent_engine", "test");
-        assert!(fallback_url.contains("google.com/search"));
+        assert!(fallback_url.contains("perplexity.ai"));
     }
 
     #[test]
     fn test_fuzzy_score() {
         assert!(fuzzy_score("rust", "rust programming") > 0.0);
-        assert!(fuzzy_score("rust", "rust programming") > fuzzy_score("rust", "programming in rust"));
+        assert!(
+            fuzzy_score("rust", "rust programming") > fuzzy_score("rust", "programming in rust")
+        );
         assert_eq!(fuzzy_score("", "anything"), 1.0);
         assert_eq!(fuzzy_score("xyz", "hello world"), 0.0);
         assert!(fuzzy_score("rp", "rust programming") > 0.0);
@@ -725,7 +846,6 @@ mod tests {
     fn test_tab_lifecycle_constants() {
         assert!(CACHED_TIMEOUT < FROZEN_TIMEOUT);
         assert!(FROZEN_TIMEOUT < CLOSED_TIMEOUT);
-
         assert_eq!(CACHED_TIMEOUT, Duration::from_secs(5 * 60));
         assert_eq!(FROZEN_TIMEOUT, Duration::from_secs(30 * 60));
         assert_eq!(CLOSED_TIMEOUT, Duration::from_secs(2 * 60 * 60));

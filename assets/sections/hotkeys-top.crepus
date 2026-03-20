@@ -1,0 +1,4 @@
+div flex flex-col
+  include ../components/section-header.crepus title="Hotkeys"
+  include ../components/setting-row.crepus label="Toggle Rover" description="Show or hide the main window"
+    include ../components/kbd-badge.crepus key="⌘ Space"

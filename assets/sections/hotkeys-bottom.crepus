@@ -1,0 +1,5 @@
+div flex flex-col
+  include ../components/setting-row.crepus label="Hyperkey + Space" description="Alternative trigger when Hyperkey is enabled"
+    include ../components/kbd-badge.crepus key="⇪ Space"
+  include ../components/setting-row.crepus label="Item Actions" description="Show contextual actions for the selected item"
+    include ../components/kbd-badge.crepus key="⌘K"

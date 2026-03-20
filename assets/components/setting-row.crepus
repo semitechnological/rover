@@ -1,0 +1,7 @@
+div flex items-center justify-between py-[10px] border-b border-[#313244]
+  div flex flex-col gap-[2px]
+    div text-[13px] text-[#cdd6f4]
+      "{label}"
+    div text-[11px] text-[#a6adc8]
+      "{description}"
+  slot

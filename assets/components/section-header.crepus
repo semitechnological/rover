@@ -1,0 +1,3 @@
+div pb-3 mb-1 border-b border-[#313244]
+  div text-base font-semibold text-[#cdd6f4]
+    "{title}"

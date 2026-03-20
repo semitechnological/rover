@@ -1,0 +1,7 @@
+$: default enabled = false
+if {enabled}
+  div w-[32px] h-[18px] rounded-[9px] bg-[#89b4fa] flex items-center
+    div w-[14px] h-[14px] rounded-[7px] bg-white ml-[16px]
+else
+  div w-[32px] h-[18px] rounded-[9px] bg-[#313244] flex items-center
+    div w-[14px] h-[14px] rounded-[7px] bg-white ml-[2px]

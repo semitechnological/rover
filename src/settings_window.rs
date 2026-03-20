@@ -4,7 +4,6 @@ use rover_db::RoverDb;
 use rover_theme::{self, theme, ThemeRegistry};
 use std::sync::Arc;
 
-use crepuscularity_macros::view;
 use crepuscularity_runtime::{HotReloadState, HotReloadView, TemplateContext};
 
 use crate::hotkey;
@@ -20,8 +19,12 @@ pub struct SettingsView {
     ai_enabled: bool,
     ai_terminal_enabled: bool,
     picker_position: String,
-    /// About section — rendered live from assets/about.crepus via the hot-reload runtime.
+    /// About — fully driven by assets/sections/about.crepus (hot-reloadable).
     about_view: Entity<HotReloadView>,
+    /// Hotkeys top chunk: section-header + Toggle Rover row (static, composable).
+    hotkeys_top: Entity<HotReloadView>,
+    /// Hotkeys bottom chunk: Hyperkey+Space and Item Actions rows (static).
+    hotkeys_bottom: Entity<HotReloadView>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -73,21 +76,35 @@ impl SettingsView {
         let picker_position = db.get_setting("picker_position").ok().flatten()
             .unwrap_or_else(|| "center".to_string());
 
-        // Hot-reload about section: the .crepus file is live-editable.
-        let about_path = assets_dir().join("about.crepus");
+        let sections = assets_dir().join("sections");
+        let _components = assets_dir().join("components");
+
+        // About: fully template-driven. Context vars are Rust-sourced constants.
         let mut about_ctx = TemplateContext::new();
         about_ctx.set("version", "0.1.0");
         about_ctx.set("tagline", "A fast, extensible launcher for macOS.");
         about_ctx.set("built_with", "GPUI + Crepuscularity");
-        let about_state = cx.new(|cx| HotReloadState::new(about_path, about_ctx, cx));
+        let about_state = cx.new(|cx| HotReloadState::new(sections.join("about.crepus"), about_ctx, cx));
         let about_view = cx.new(|_cx| HotReloadView::new(about_state));
+
+        // Hotkeys top: section-header + Toggle Rover row — no state needed.
+        let hotkeys_top_state = cx.new(|cx| {
+            HotReloadState::new(sections.join("hotkeys-top.crepus"), TemplateContext::new(), cx)
+        });
+        let hotkeys_top = cx.new(|_cx| HotReloadView::new(hotkeys_top_state));
+
+        // Hotkeys bottom: static rows — no state needed.
+        let hotkeys_bottom_state = cx.new(|cx| {
+            HotReloadState::new(sections.join("hotkeys-bottom.crepus"), TemplateContext::new(), cx)
+        });
+        let hotkeys_bottom = cx.new(|_cx| HotReloadView::new(hotkeys_bottom_state));
 
         Self {
             db, selected_theme_ix, theme_names,
             active_section: initial_section,
             hyperkey_enabled, show_recent_apps, launch_at_login,
             ai_enabled, ai_terminal_enabled, picker_position,
-            about_view,
+            about_view, hotkeys_top, hotkeys_bottom,
         }
     }
 
@@ -185,55 +202,34 @@ impl SettingsView {
             )
     }
 
-    /// Hotkeys section — mostly static info, written with the `view!` DSL.
-    /// The Hyperkey toggle row is interactive so it stays in Rust and is spliced in.
-    fn render_hotkeys(&self, _colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
-        view! {r#"
-            div flex flex-col
-                div pb-3 mb-1 border-b border-[#313244]
-                    div text-base font-semibold text-[#cdd6f4]
-                        "Hotkeys"
-                div flex items-center justify-between py-[10px] border-b border-[#313244]
-                    div flex flex-col gap-[2px]
-                        div text-[13px] text-[#cdd6f4]   "Toggle Rover"
-                        div text-[11px] text-[#a6adc8]   "Show or hide the main window"
-                    div px-[6px] py-[3px] rounded-[4px] bg-[#313244] border border-[#313244] text-[11px] text-[#a6adc8]
-                        "⌘ Space"
-        "#}
-        // Hyperkey toggle: interactive, uses cx.listener — stays in Rust
-        .child(
-            div().flex().items_center().justify_between()
-                .py(px(10.0)).border_b_1().border_color(rgb(0x313244))
-                .id("hyperkey-toggle").cursor_pointer()
-                .child(view! {r#"
-                    div flex flex-col gap-[2px]
-                        div text-[13px] text-[#cdd6f4]   "Hyperkey"
-                        div text-[11px] text-[#a6adc8]   "Remap Caps Lock to Ctrl+Shift+Opt+Cmd"
-                "#})
-                .child(Self::toggle_pill_raw(self.hyperkey_enabled))
-                .on_click(cx.listener(|this, _e, _w, cx| {
-                    this.hyperkey_enabled = !this.hyperkey_enabled;
-                    let _ = this.db.set_setting("hyperkey_enabled", &this.hyperkey_enabled.to_string());
-                    if this.hyperkey_enabled { let _ = hotkey::enable_hyperkey_remap(); }
-                    else { let _ = hotkey::disable_hyperkey_remap(); }
-                    cx.notify();
-                })),
-        )
-        .child(view! {r#"
-            div flex flex-col
-                div flex items-center justify-between py-[10px] border-b border-[#313244]
-                    div flex flex-col gap-[2px]
-                        div text-[13px] text-[#cdd6f4]   "Hyperkey + Space"
-                        div text-[11px] text-[#a6adc8]   "Alternative trigger when Hyperkey is enabled"
-                    div px-[6px] py-[3px] rounded-[4px] bg-[#313244] border border-[#313244] text-[11px] text-[#a6adc8]
-                        "⇪ Space"
-                div flex items-center justify-between py-[10px] border-b border-[#313244]
-                    div flex flex-col gap-[2px]
-                        div text-[13px] text-[#cdd6f4]   "Item Actions"
-                        div text-[11px] text-[#a6adc8]   "Show contextual actions for the selected item"
-                    div px-[6px] py-[3px] rounded-[4px] bg-[#313244] border border-[#313244] text-[11px] text-[#a6adc8]
-                        "⌘K"
-        "#})
+    /// Hotkeys — composed from three layers:
+    ///   1. `hotkeys-top.crepus`  → section-header + Toggle Rover row  (crepus component)
+    ///   2. Hyperkey toggle row   → interactive, stays in Rust
+    ///   3. `hotkeys-bottom.crepus` → remaining static rows             (crepus component)
+    fn render_hotkeys(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
+        div().flex().flex_col()
+            // Static top rows via crepuscularity components
+            .child(self.hotkeys_top.clone())
+            // Hyperkey toggle: interactive state — must stay in Rust
+            .child(
+                div().flex().items_center().justify_between()
+                    .py(px(10.0)).border_b_1().border_color(colors.border_variant.opacity(0.5))
+                    .id("hyperkey-toggle").cursor_pointer()
+                    .child(div().flex().flex_col().gap(px(2.0))
+                        .child(div().text_color(colors.text).text_size(px(13.0)).child("Hyperkey"))
+                        .child(div().text_color(colors.text_muted).text_size(px(11.0))
+                            .child("Remap Caps Lock to Ctrl+Shift+Opt+Cmd")))
+                    .child(Self::toggle_pill(self.hyperkey_enabled, colors))
+                    .on_click(cx.listener(|this, _e, _w, cx| {
+                        this.hyperkey_enabled = !this.hyperkey_enabled;
+                        let _ = this.db.set_setting("hyperkey_enabled", &this.hyperkey_enabled.to_string());
+                        if this.hyperkey_enabled { let _ = hotkey::enable_hyperkey_remap(); }
+                        else { let _ = hotkey::disable_hyperkey_remap(); }
+                        cx.notify();
+                    })),
+            )
+            // Static bottom rows via crepuscularity components
+            .child(self.hotkeys_bottom.clone())
     }
 
     fn render_ai(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
@@ -301,7 +297,7 @@ impl SettingsView {
             )
     }
 
-    // ── Shared primitives ──────────────────────────────────────────────────────
+    // ── Shared primitives (Rust — need runtime ThemeColors) ───────────────────
 
     fn section_header(text: &str, colors: &rover_theme::ThemeColors) -> Div {
         div().pb(px(12.0)).mb(px(4.0)).border_b_1().border_color(colors.border_variant)
@@ -328,15 +324,6 @@ impl SettingsView {
             .child(div().w(px(14.0)).h(px(14.0)).rounded(px(7.0)).bg(gpui::white())
                 .ml(if enabled { px(16.0) } else { px(2.0) }))
     }
-
-    /// Theme-agnostic toggle pill (Rover Dark hardcoded) — for use alongside view! sections.
-    fn toggle_pill_raw(enabled: bool) -> Div {
-        div().w(px(32.0)).h(px(18.0)).rounded(px(9.0))
-            .bg(if enabled { rgb(0x89b4fa) } else { rgb(0x313244) })
-            .flex().items_center()
-            .child(div().w(px(14.0)).h(px(14.0)).rounded(px(7.0)).bg(gpui::white())
-                .ml(if enabled { px(16.0) } else { px(2.0) }))
-    }
 }
 
 impl Render for SettingsView {
@@ -351,18 +338,15 @@ impl Render for SettingsView {
             SettingsSection::Hotkeys    => self.render_hotkeys(&colors, cx).into_any_element(),
             SettingsSection::AI         => self.render_ai(&colors, cx).into_any_element(),
             SettingsSection::Data       => self.render_data(&colors, cx).into_any_element(),
-            // About: live .crepus template — hot-reloads on file save, no recompile needed.
             SettingsSection::About      => self.about_view.clone().into_any_element(),
         };
 
-        // Outer chrome: titlebar bar via view!, sidebar + content via Rust (theme-colored).
         div().size_full().flex().flex_col()
             .child(
-                view! {r#"
-                    div h-[38px] w-full flex items-center justify-center border-b border-[#313244] bg-[#181825]
-                        div text-[13px] font-medium text-[#a6adc8]
-                            "Settings"
-                "#}
+                div().h(px(38.0)).w_full().flex().items_center().justify_center()
+                    .bg(colors.surface_background).border_b_1().border_color(colors.border_variant)
+                    .child(div().text_color(colors.text_muted).text_size(px(13.0))
+                        .font_weight(FontWeight::MEDIUM).child("Settings")),
             )
             .child(
                 div().flex_grow().flex().overflow_hidden()

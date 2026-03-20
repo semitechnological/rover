@@ -1,0 +1,16 @@
+div flex flex-col gap-2 py-2
+  div pb-3 mb-1 border-b border-[#313244]
+    div text-base font-semibold text-[#cdd6f4]
+      "About"
+  div flex flex-col gap-3 py-2
+    div flex flex-col gap-1
+      div text-sm font-semibold text-[#cdd6f4]
+        "Rover"
+      div text-xs text-[#a6adc8]
+        "Version {version}"
+    div text-xs text-[#a6adc8]
+      "{tagline}"
+    div text-xs text-[#a6adc8]
+      "Built with {built_with}."
+    div text-xs text-[#585b70]
+      "Edit assets/about.crepus to customise this section — changes apply instantly."

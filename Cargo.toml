@@ -24,6 +24,8 @@ wasmtime = "29"
 fuzzy-matcher = "0.3"
 unicode-segmentation = "1"
 rusty_foundationmodels = { path = "../rusty_foundationmodels" }
+crepuscularity_macros = { path = "../crepuscularity/crates/crepuscularity_macros" }
+crepuscularity-runtime = { path = "../crepuscularity/crates/crepuscularity-runtime" }
 
 rover_fuzzy = { path = "crates/rover_fuzzy" }
 rover_theme = { path = "crates/rover_theme" }
@@ -53,4 +55,6 @@ rover_commands.workspace = true
 rover_extensions.workspace = true
 rover_db.workspace = true
 rusty_foundationmodels.workspace = true
+crepuscularity_macros.workspace = true
+crepuscularity-runtime.workspace = true
 rover_browser.workspace = true

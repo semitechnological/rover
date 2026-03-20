@@ -1,5 +1,6 @@
 use gpui::prelude::*;
 use gpui::*;
+use rover_browser;
 use rover_commands::{
     calculator, file_search, BuiltInCommand, Command, CommandKind, CommandRegistry,
 };
@@ -627,6 +628,16 @@ impl PickerDelegate for RoverDelegate {
                                     return true;
                                 }
                                 BuiltInCommand::Snippets => return false,
+                                BuiltInCommand::Browser => {
+                                    cx.spawn(async move |_this, cx: &mut AsyncApp| {
+                                        cx.update(|cx| {
+                                            rover_browser::open_browser_window(cx);
+                                        })
+                                        .ok();
+                                    })
+                                    .detach();
+                                    return true;
+                                }
                             }
                         }
 

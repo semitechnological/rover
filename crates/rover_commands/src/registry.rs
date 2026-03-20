@@ -35,6 +35,7 @@ pub enum BuiltInCommand {
     Settings,
     Snippets,
     OpenTerminal,
+    Browser,
 }
 
 pub struct CommandRegistry {
@@ -72,6 +73,19 @@ impl CommandRegistry {
             CommandKind::BuiltIn { .. } => {}
         }
     }
+}
+
+/// Register the browser command
+pub fn register_browser(registry: &mut CommandRegistry) {
+    registry.register(Command {
+        name: "Open Browser".into(),
+        description: "Open the keyboard-driven browser".into(),
+        icon: None,
+        kind: CommandKind::BuiltIn {
+            id: BuiltInCommand::Browser,
+        },
+        has_submenu: false,
+    });
 }
 
 /// Register built-in commands that open sub-menus

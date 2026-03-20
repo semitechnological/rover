@@ -62,7 +62,3 @@ rover (binary)
 ├── crates/rover_browser     — WebKit browser window
 └── crates/rover_extensions  — extension manifest loader
 ```
-
-## License
-
-MIT

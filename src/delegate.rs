@@ -35,7 +35,9 @@ pub struct RoverDelegate {
     ai_enabled: bool,
     ai_result: Option<String>,
     ai_loading: bool,
+    ai_debounce: Option<Task<()>>,
     inline_terminal: Option<String>,
+    url_result: Option<String>,
 }
 
 struct QueryHistory {
@@ -131,6 +133,18 @@ impl QueryHistory {
     }
 }
 
+struct RowOffsets {
+    has_terminal: bool,
+    has_url: bool,
+    has_calc: bool,
+    has_ai: bool,
+    terminal_ix: usize,
+    url_ix: usize,
+    calc_ix: usize,
+    ai_ix: usize,
+    command_offset: usize,
+}
+
 impl RoverDelegate {
     pub fn new(
         commands: Vec<Command>,
@@ -161,7 +175,9 @@ impl RoverDelegate {
             ai_enabled,
             ai_result: None,
             ai_loading: false,
+            ai_debounce: None,
             inline_terminal: None,
+            url_result: None,
         }
     }
 
@@ -192,17 +208,23 @@ impl RoverDelegate {
         cx.notify();
     }
 
-    /// Returns `(has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset)` for
-    /// the current main-mode row layout. Centralises the offset arithmetic that was
-    /// previously copy-pasted in four separate methods.
-    fn row_offsets(&self) -> (bool, bool, bool, usize, usize, usize) {
+    /// Returns `(has_terminal, has_url, has_calc, has_ai, terminal_ix, url_ix, calc_ix, ai_ix, command_offset)`.
+    fn row_offsets(&self) -> RowOffsets {
         let has_terminal = self.inline_terminal.is_some();
+        let has_url = self.url_result.is_some();
         let has_calc = self.calculator_result.is_some();
         let has_ai = self.ai_loading || self.ai_result.is_some();
-        let calc_ix = if has_terminal { 1 } else { 0 };
-        let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
-        let command_offset = ai_ix + if has_ai { 1 } else { 0 };
-        (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset)
+        let mut next = 0usize;
+        let terminal_ix = next;
+        if has_terminal { next += 1; }
+        let url_ix = next;
+        if has_url { next += 1; }
+        let calc_ix = next;
+        if has_calc { next += 1; }
+        let ai_ix = next;
+        if has_ai { next += 1; }
+        let command_offset = next;
+        RowOffsets { has_terminal, has_url, has_calc, has_ai, terminal_ix, url_ix, calc_ix, ai_ix, command_offset }
     }
 
     fn render_calculator_row(
@@ -382,6 +404,42 @@ impl RoverDelegate {
         .into_any_element()
     }
 
+    fn render_url_row(
+        &self,
+        url: &str,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
+        if selected {
+            row = row.bg(colors.element_selected);
+        }
+        row.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .px(px(5.0))
+                        .py(px(2.0))
+                        .rounded(px(4.0))
+                        .bg(colors.text_accent.opacity(0.12))
+                        .text_color(colors.text_accent)
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(SharedString::from("\u{1F310}")),
+                )
+                .child(
+                    div()
+                        .text_color(colors.text)
+                        .text_size(px(13.0))
+                        .child(SharedString::from(format!("Open {url} in Rover"))),
+                ),
+        )
+        .into_any_element()
+    }
+
     fn render_ai_row(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
         let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
         if selected {
@@ -446,9 +504,8 @@ impl PickerDelegate for RoverDelegate {
     fn match_count(&self) -> usize {
         match self.view_mode {
             ViewMode::Main => {
-                let (_has_terminal, _has_calc, _has_ai, _calc_ix, _ai_ix, command_offset) =
-                    self.row_offsets();
-                command_offset + self.matches.len()
+                let o = self.row_offsets();
+                o.command_offset + self.matches.len()
             }
             ViewMode::ClipboardHistory => self.clipboard_filtered.len(),
             ViewMode::FileSearch => self.file_results.len(),
@@ -485,13 +542,27 @@ impl PickerDelegate for RoverDelegate {
                     let cmd = query[2..].trim().to_string();
                     self.inline_terminal = if cmd.is_empty() { None } else { Some(cmd) };
                     self.calculator_result = None;
+                    self.url_result = None;
                     self.ai_result = None;
                     self.ai_loading = false;
+                    self.ai_debounce = None;
                     self.matches = vec![];
                     self.selected_ix = 0;
                     return Task::ready(());
                 }
                 self.inline_terminal = None;
+
+                // Priority 1b: URL detection → open in Rover browser
+                if rover_browser::looks_like_url(&query) && !query.is_empty() {
+                    let url = if query.starts_with("http://") || query.starts_with("https://") {
+                        query.clone()
+                    } else {
+                        format!("https://{query}")
+                    };
+                    self.url_result = Some(url);
+                } else {
+                    self.url_result = None;
+                }
 
                 // Priority 2: calculator (always evaluate)
                 self.calculator_result = calculator::evaluate(&self.query).map(|v| {
@@ -539,11 +610,16 @@ impl PickerDelegate for RoverDelegate {
                     self.ai_result = None;
                     self.ai_loading = true;
                     let session = self.ai_session.clone().unwrap();
-                    cx.spawn(async move |this, cx: &mut AsyncApp| {
+                    // Debounce: cancel any pending AI request before scheduling a new one
+                    self.ai_debounce = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(500))
+                            .await;
                         let result = session.respond(&prompt).await;
                         let _ = cx.update(|cx| {
                             let _ = this.update(cx, |picker, cx| {
                                 picker.delegate.ai_loading = false;
+                                picker.delegate.ai_debounce = None;
                                 picker.delegate.ai_result = Some(match result {
                                     Ok(text) => text,
                                     Err(e) => format!("Error: {e}"),
@@ -551,9 +627,9 @@ impl PickerDelegate for RoverDelegate {
                                 cx.notify();
                             });
                         });
-                    })
-                    .detach();
+                    }));
                 } else {
+                    self.ai_debounce = None;
                     self.ai_result = None;
                     self.ai_loading = false;
                 }
@@ -584,31 +660,43 @@ impl PickerDelegate for RoverDelegate {
     fn confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
-                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
-                    self.row_offsets();
+                let o = self.row_offsets();
 
-                if has_terminal && self.selected_ix == 0 {
+                if o.has_terminal && self.selected_ix == o.terminal_ix {
                     if let Some(cmd) = &self.inline_terminal {
                         let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
                     }
                     return true;
                 }
 
-                if has_calc && self.selected_ix == calc_ix {
+                if o.has_url && self.selected_ix == o.url_ix {
+                    if let Some(url) = self.url_result.clone() {
+                        cx.spawn(async move |_this, cx: &mut AsyncApp| {
+                            cx.update(|cx| {
+                                rover_browser::open_browser_window_with_url(cx, &url);
+                            })
+                            .ok();
+                        })
+                        .detach();
+                    }
+                    return true;
+                }
+
+                if o.has_calc && self.selected_ix == o.calc_ix {
                     if let Some(result) = &self.calculator_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
                 }
 
-                if has_ai && self.selected_ix == ai_ix {
+                if o.has_ai && self.selected_ix == o.ai_ix {
                     if let Some(result) = &self.ai_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
                 }
 
-                let match_ix = self.selected_ix.saturating_sub(command_offset);
+                let match_ix = self.selected_ix.saturating_sub(o.command_offset);
 
                 if let Some(string_match) = self.matches.get(match_ix) {
                     if let Some(command) = self.all_commands.get(string_match.candidate_id) {
@@ -697,31 +785,37 @@ impl PickerDelegate for RoverDelegate {
     fn actions_for_selected(&self) -> Vec<ItemAction> {
         match self.view_mode {
             ViewMode::Main => {
-                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
-                    self.row_offsets();
+                let o = self.row_offsets();
 
-                if has_terminal && self.selected_ix == 0 {
+                if o.has_terminal && self.selected_ix == o.terminal_ix {
                     return vec![ItemAction {
                         name: "Run".into(),
                         shortcut: Some("\u{21A9}".into()),
                     }];
                 }
 
-                if has_calc && self.selected_ix == calc_ix {
+                if o.has_url && self.selected_ix == o.url_ix {
+                    return vec![ItemAction {
+                        name: "Open in Rover Browser".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
+                if o.has_calc && self.selected_ix == o.calc_ix {
                     return vec![ItemAction {
                         name: "Copy Result".into(),
                         shortcut: Some("\u{21A9}".into()),
                     }];
                 }
 
-                if has_ai && self.selected_ix == ai_ix {
+                if o.has_ai && self.selected_ix == o.ai_ix {
                     return vec![ItemAction {
                         name: "Copy Answer".into(),
                         shortcut: Some("\u{21A9}".into()),
                     }];
                 }
 
-                let match_ix = self.selected_ix.saturating_sub(command_offset);
+                let match_ix = self.selected_ix.saturating_sub(o.command_offset);
 
                 if let Some(string_match) = self.matches.get(match_ix) {
                     if let Some(command) = self.all_commands.get(string_match.candidate_id) {
@@ -807,31 +901,34 @@ impl PickerDelegate for RoverDelegate {
     fn execute_action(&mut self, action_ix: usize, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
-                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
-                    self.row_offsets();
+                let o = self.row_offsets();
 
-                if has_terminal && self.selected_ix == 0 {
+                if o.has_terminal && self.selected_ix == o.terminal_ix {
                     if let Some(cmd) = &self.inline_terminal {
                         let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
                     }
                     return true;
                 }
 
-                if has_calc && self.selected_ix == calc_ix {
+                if o.has_url && self.selected_ix == o.url_ix {
+                    return self.confirm(cx);
+                }
+
+                if o.has_calc && self.selected_ix == o.calc_ix {
                     if let Some(result) = &self.calculator_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
                 }
 
-                if has_ai && self.selected_ix == ai_ix {
+                if o.has_ai && self.selected_ix == o.ai_ix {
                     if let Some(result) = &self.ai_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
                 }
 
-                let match_ix = self.selected_ix.saturating_sub(command_offset);
+                let match_ix = self.selected_ix.saturating_sub(o.command_offset);
 
                 if let Some(string_match) = self.matches.get(match_ix) {
                     if let Some(command) = self.all_commands.get(string_match.candidate_id) {
@@ -946,23 +1043,27 @@ impl PickerDelegate for RoverDelegate {
 
         match self.view_mode {
             ViewMode::Main => {
-                let (has_terminal, has_calc, has_ai, calc_ix, ai_ix, command_offset) =
-                    self.row_offsets();
+                let o = self.row_offsets();
 
-                if has_terminal && ix == 0 {
+                if o.has_terminal && ix == o.terminal_ix {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");
                     return Some(self.render_terminal_row(cmd, selected, colors));
                 }
 
-                if has_calc && ix == calc_ix {
+                if o.has_url && ix == o.url_ix {
+                    let url = self.url_result.as_deref().unwrap_or("");
+                    return Some(self.render_url_row(url, selected, colors));
+                }
+
+                if o.has_calc && ix == o.calc_ix {
                     return Some(self.render_calculator_row(selected, colors));
                 }
 
-                if has_ai && ix == ai_ix {
+                if o.has_ai && ix == o.ai_ix {
                     return Some(self.render_ai_row(selected, colors));
                 }
 
-                let match_ix = ix.saturating_sub(command_offset);
+                let match_ix = ix.saturating_sub(o.command_offset);
                 let string_match = self.matches.get(match_ix)?;
                 let command = self.all_commands.get(string_match.candidate_id)?;
                 Some(self.render_command_row(command, selected, colors))

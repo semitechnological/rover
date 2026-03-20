@@ -15,10 +15,6 @@ pub struct ClipboardEntry {
 }
 
 impl RoverDb {
-    pub fn conn(&self) -> &Arc<Mutex<Connection>> {
-        &self.conn
-    }
-
     pub fn open() -> Result<Self> {
         let path = Self::db_path()?;
         if let Some(parent) = path.parent() {
@@ -73,6 +69,15 @@ impl RoverDb {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_query_history_timestamp
+                ON query_history (timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_clipboard_history_timestamp
+                ON clipboard_history (timestamp);
+
+            CREATE INDEX IF NOT EXISTS idx_command_usage_timestamp
+                ON command_usage (timestamp);
             ",
         )?;
         Ok(())
@@ -94,11 +99,17 @@ impl RoverDb {
             rusqlite::params![query],
         )?;
         conn.execute(
-            "DELETE FROM query_history WHERE id IN (
-                SELECT id FROM query_history ORDER BY timestamp DESC LIMIT -1 OFFSET 200
+            "DELETE FROM query_history WHERE id NOT IN (
+                SELECT id FROM query_history ORDER BY timestamp DESC LIMIT 200
             )",
             [],
         )?;
+        Ok(())
+    }
+
+    pub fn clear_query_history(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM query_history", [])?;
         Ok(())
     }
 
@@ -129,8 +140,8 @@ impl RoverDb {
         )?;
         // Keep max 500 entries
         conn.execute(
-            "DELETE FROM clipboard_history WHERE id IN (
-                SELECT id FROM clipboard_history ORDER BY timestamp DESC LIMIT -1 OFFSET 500
+            "DELETE FROM clipboard_history WHERE id NOT IN (
+                SELECT id FROM clipboard_history ORDER BY timestamp DESC LIMIT 500
             )",
             [],
         )?;
@@ -218,6 +229,17 @@ mod tests {
         db.add_query("hello").unwrap();
         let history = db.list_query_history().unwrap();
         assert_eq!(history, vec!["world", "hello"]);
+    }
+
+    #[test]
+    fn test_clear_query_history() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_query("hello").unwrap();
+        db.add_query("world").unwrap();
+        assert_eq!(db.list_query_history().unwrap().len(), 2);
+
+        db.clear_query_history().unwrap();
+        assert!(db.list_query_history().unwrap().is_empty());
     }
 
     #[test]

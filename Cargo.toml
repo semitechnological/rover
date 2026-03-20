@@ -8,6 +8,8 @@ members = [
     "crates/rover_extension_api",
     "crates/rover_db",
     "crates/rover_browser",
+    "crates/rover_semantic",
+    "crates/rusty_foundationmodels",
 ]
 resolver = "2"
 
@@ -23,7 +25,7 @@ toml = "0.8"
 wasmtime = "29"
 fuzzy-matcher = "0.3"
 unicode-segmentation = "1"
-rusty_foundationmodels = { path = "../rusty_foundationmodels" }
+rusty_foundationmodels = { path = "crates/rusty_foundationmodels" }
 crepuscularity_macros = { path = "../crepuscularity/crates/crepuscularity_macros" }
 crepuscularity-runtime = { path = "../crepuscularity/crates/crepuscularity-runtime" }
 
@@ -35,6 +37,7 @@ rover_extensions = { path = "crates/rover_extensions" }
 rover_extension_api = { path = "crates/rover_extension_api" }
 rover_db = { path = "crates/rover_db" }
 rover_browser = { path = "crates/rover_browser" }
+rover_semantic = { path = "crates/rover_semantic" }
 
 [package]
 name = "rover"
@@ -48,6 +51,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 log.workspace = true
 dirs.workspace = true
+urlencoding = "2"
 rover_fuzzy.workspace = true
 rover_theme.workspace = true
 rover_picker.workspace = true
@@ -58,3 +62,4 @@ rusty_foundationmodels.workspace = true
 crepuscularity_macros.workspace = true
 crepuscularity-runtime.workspace = true
 rover_browser.workspace = true
+rover_semantic.workspace = true

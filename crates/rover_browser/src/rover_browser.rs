@@ -608,169 +608,9 @@ impl Focusable for BrowserWindow {
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_active = self.command_bar_active;
-        let bar_text = self.command_bar_text.clone();
 
-        // Title / URL display
-        let active_tab = self.tabs.get(self.active_tab);
-        let page_title = active_tab
-            .map(|t| t.title.clone())
-            .unwrap_or_else(|| "New Tab".to_string());
-        let page_url = active_tab
-            .map(|t| t.url.clone())
-            .unwrap_or_default();
-        let page_domain = domain_from_url(&page_url).to_string();
-
-        // Hint line beneath bar when typing
-        let hint: Option<String> = if is_active && !bar_text.is_empty() {
-            if let Some((_, title)) = self.best_tab_match(&bar_text) {
-                Some(format!("↵  switch to: {title}"))
-            } else {
-                match parse_command(&bar_text) {
-                    BrowserAction::Navigate(url) => Some(format!("↵  navigate to {url}")),
-                    BrowserAction::NewSearch { engine_name, query } => {
-                        Some(format!("↵  {engine_name} — {query}"))
-                    }
-                    BrowserAction::Back => Some("↵  go back".to_string()),
-                    BrowserAction::Forward => Some("↵  go forward".to_string()),
-                    BrowserAction::Reload => Some("↵  reload".to_string()),
-                    BrowserAction::CloseTab => Some("↵  close tab".to_string()),
-                    BrowserAction::NewTab => Some("↵  new tab".to_string()),
-                    _ => None,
-                }
-            }
-        } else {
-            None
-        };
-
-        let is_bar_focused = self.command_bar_focus.is_focused(window);
-
-        // ── Left section: title (or input when active) ──
-        let left = if is_active {
-            div()
-                .id("cmd-input")
-                .flex()
-                .flex_1()
-                .items_center()
-                .px_3()
-                .py_1()
-                .rounded_md()
-                .bg(rgb(0x1a1a1a))
-                .border_1()
-                .border_color(if is_bar_focused { rgb(0x5588cc) } else { rgb(0x404040) })
-                .child(
-                    div()
-                        .text_color(rgb(0xffffff))
-                        .text_size(px(13.0))
-                        .child(SharedString::from(format!("{bar_text}▌"))),
-                )
-        } else {
-            div()
-                .id("page-title")
-                .flex()
-                .flex_1()
-                .items_center()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .cursor_pointer()
-                .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                    this.title_hovered = *hovered;
-                    cx.notify();
-                }))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.activate_command_bar(window, cx);
-                }))
-                .child(
-                    div()
-                        .text_color(if self.title_hovered { rgb(0xaabbcc) } else { rgb(0xdddddd) })
-                        .text_size(px(13.0))
-                        .child(SharedString::from(if self.title_hovered {
-                            page_domain
-                        } else {
-                            page_title
-                        })),
-                )
-        };
-
-        // ── Tab pills ──
-        let mut tab_pills = div().flex().flex_row().items_center().gap_1();
-        for (i, tab) in self.tabs.iter().enumerate() {
-            let is_current = i == self.active_tab;
-            let dot_color = match tab.state {
-                TabState::Active => rgb(0x28c840u32),
-                TabState::Cached => rgb(0xffbd2eu32),
-                TabState::Frozen => rgb(0x666666u32),
-            };
-            let short_title = if tab.title.len() > 18 {
-                format!("{}…", &tab.title[..15])
-            } else {
-                tab.title.clone()
-            };
-            tab_pills = tab_pills.child(
-                div()
-                    .id(ElementId::NamedInteger("tab-pill".into(), i as u64))
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .bg(if is_current { rgb(0x383838u32) } else { rgb(0x252525u32) })
-                    .border_1()
-                    .border_color(if is_current { rgb(0x5588ccu32) } else { rgb(0x353535u32) })
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.switch_tab(i, window, cx);
-                    }))
-                    .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(dot_color))
-                    .child(
-                        div()
-                            .text_color(if is_current { rgb(0xffffffu32) } else { rgb(0x888888u32) })
-                            .text_size(px(11.0))
-                            .child(SharedString::from(short_title)),
-                    ),
-            );
-        }
-
-        // ── Chrome bar ──
-        let mut chrome = div()
-            .flex()
-            .flex_col()
-            .w_full()
-            .bg(rgb(0x2d2d2d))
-            .border_b_1()
-            .border_color(rgb(0x3d3d3d))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .h(px(CHROME_HEIGHT))
-                    .child(left)
-                    .child(tab_pills)
-                    .child(
-                        div()
-                            .text_color(rgb(0x444444))
-                            .text_size(px(11.0))
-                            .child(SharedString::from("⌘\\")),
-                    ),
-            );
-
-        if let Some(hint_text) = hint {
-            chrome = chrome.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .text_color(rgb(0x5588cc))
-                    .text_size(px(11.0))
-                    .child(SharedString::from(hint_text)),
-            );
-        }
-
-        // ── Root ──
-        div()
+        // Root: key bindings + focus tracking always active so cmd+\ fires globally
+        let mut root = div()
             .key_context("BrowserWindow")
             .track_focus(&self.command_bar_focus)
             .on_action(cx.listener(|this, _: &FocusCommandBar, window, cx| {
@@ -782,14 +622,143 @@ impl Render for BrowserWindow {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x1e1e1e))
-            .child(chrome)
-            .child(
-                div()
-                    .flex_1()
-                    .w_full()
-                    .child(WebViewElement { browser: cx.entity().downgrade() }),
-            )
+            .bg(rgb(0x1e1e1e));
+
+        // Chrome bar only visible when cmd+\ is open
+        if is_active {
+            let bar_text = self.command_bar_text.clone();
+            let is_bar_focused = self.command_bar_focus.is_focused(window);
+
+            // Current page info for the title row
+            let active_tab = self.tabs.get(self.active_tab);
+            let page_title = active_tab.map(|t| t.title.clone()).unwrap_or_else(|| "New Tab".to_string());
+            let page_url = active_tab.map(|t| t.url.clone()).unwrap_or_default();
+            let page_domain = domain_from_url(&page_url).to_string();
+
+            // Hint: what pressing ↵ will do
+            let hint: Option<String> = if !bar_text.is_empty() {
+                if let Some((_, title)) = self.best_tab_match(&bar_text) {
+                    Some(format!("↵  switch to: {title}"))
+                } else {
+                    match parse_command(&bar_text) {
+                        BrowserAction::Navigate(url) => Some(format!("↵  navigate to {url}")),
+                        BrowserAction::NewSearch { engine_name, query } => Some(format!("↵  {engine_name} — {query}")),
+                        BrowserAction::Back => Some("↵  go back".to_string()),
+                        BrowserAction::Forward => Some("↵  go forward".to_string()),
+                        BrowserAction::Reload => Some("↵  reload".to_string()),
+                        BrowserAction::CloseTab => Some("↵  close tab".to_string()),
+                        BrowserAction::NewTab => Some("↵  new tab".to_string()),
+                        _ => None,
+                    }
+                }
+            } else {
+                None
+            };
+
+            // Tab pills
+            let mut tab_pills = div().flex().flex_row().items_center().gap_1();
+            for (i, tab) in self.tabs.iter().enumerate() {
+                let is_current = i == self.active_tab;
+                let dot_color = match tab.state {
+                    TabState::Active => rgb(0x28c840u32),
+                    TabState::Cached => rgb(0xffbd2eu32),
+                    TabState::Frozen => rgb(0x666666u32),
+                };
+                let short_title = if tab.title.len() > 18 {
+                    format!("{}…", &tab.title[..15])
+                } else {
+                    tab.title.clone()
+                };
+                tab_pills = tab_pills.child(
+                    div()
+                        .id(ElementId::NamedInteger("tab-pill".into(), i as u64))
+                        .flex().items_center().gap_1()
+                        .px_2().py_1().rounded_md()
+                        .bg(if is_current { rgb(0x383838u32) } else { rgb(0x252525u32) })
+                        .border_1()
+                        .border_color(if is_current { rgb(0x5588ccu32) } else { rgb(0x353535u32) })
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.switch_tab(i, window, cx);
+                        }))
+                        .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(dot_color))
+                        .child(
+                            div()
+                                .text_color(if is_current { rgb(0xffffffu32) } else { rgb(0x888888u32) })
+                                .text_size(px(11.0))
+                                .child(SharedString::from(short_title)),
+                        ),
+                );
+            }
+
+            // Title row: page title (hover → domain) + tab pills
+            let title_row = div()
+                .flex().flex_row().items_center().gap_2()
+                .px_3().h(px(CHROME_HEIGHT))
+                .child(
+                    div()
+                        .id("page-title")
+                        .flex().flex_1().items_center()
+                        .px_2().py_1().rounded_md()
+                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                            this.title_hovered = *hovered;
+                            cx.notify();
+                        }))
+                        .child(
+                            div()
+                                .text_color(if self.title_hovered { rgb(0x7aabccu32) } else { rgb(0x999999u32) })
+                                .text_size(px(12.0))
+                                .child(SharedString::from(if self.title_hovered { page_domain } else { page_title })),
+                        ),
+                )
+                .child(tab_pills);
+
+            // Input row: text field with cursor
+            let input_row = div()
+                .flex().flex_row().items_center()
+                .px_3().h(px(CHROME_HEIGHT))
+                .child(
+                    div()
+                        .flex_1().px_3().py_1().rounded_md()
+                        .bg(rgb(0x1a1a1a))
+                        .border_1()
+                        .border_color(if is_bar_focused { rgb(0x5588cc) } else { rgb(0x404040) })
+                        .child(
+                            div()
+                                .text_color(rgb(0xffffff))
+                                .text_size(px(13.0))
+                                .child(SharedString::from(format!("{bar_text}▌"))),
+                        ),
+                );
+
+            // Build chrome: title row + input row + optional hint
+            let mut chrome = div()
+                .flex().flex_col().w_full()
+                .bg(rgb(0x2a2a2a))
+                .border_b_1()
+                .border_color(rgb(0x383838))
+                .child(title_row)
+                .child(input_row);
+
+            if let Some(hint_text) = hint {
+                chrome = chrome.child(
+                    div()
+                        .px_3().pb_2()
+                        .text_color(rgb(0x5588cc))
+                        .text_size(px(11.0))
+                        .child(SharedString::from(hint_text)),
+                );
+            }
+
+            root = root.child(chrome);
+        }
+
+        root.child(
+            div()
+                .flex_1()
+                .w_full()
+                .child(WebViewElement { browser: cx.entity().downgrade() }),
+        )
     }
 }
 
@@ -914,8 +883,13 @@ impl Element for WebViewElement {
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 pub fn open_browser_window(cx: &mut App) {
+    open_browser_window_with_url(cx, DEFAULT_URL);
+}
+
+pub fn open_browser_window_with_url(cx: &mut App, url: &str) {
     cx.bind_keys([KeyBinding::new("cmd-\\", FocusCommandBar, Some("BrowserWindow"))]);
 
+    let url = url.to_string();
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
     cx.open_window(
         WindowOptions {
@@ -928,7 +902,27 @@ pub fn open_browser_window(cx: &mut App) {
             window_background: WindowBackgroundAppearance::Opaque,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| BrowserWindow::new(window, cx)),
+        move |window, cx| {
+            cx.new(|cx| {
+                let mut bw = BrowserWindow::new(window, cx);
+                if let Some(tab) = bw.tabs.get_mut(0) {
+                    tab.url = url.clone();
+                    tab.title = looks_like_url(&url)
+                        .then(|| {
+                            url.strip_prefix("https://")
+                                .or_else(|| url.strip_prefix("http://"))
+                                .unwrap_or(&url)
+                                .split('/')
+                                .next()
+                                .unwrap_or(&url)
+                                .trim_start_matches("www.")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| url.clone());
+                }
+                bw
+            })
+        },
     )
     .ok();
 }

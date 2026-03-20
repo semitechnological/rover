@@ -1,12 +1,24 @@
 #[cfg(target_os = "macos")]
 mod macos {
+    use crate::nav_events::NavEventQueue;
     use cocoa::base::{id, nil, YES};
     use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
     use objc::runtime::Object;
     use objc::*;
 
+    /// A wrapper that forces a `Retained<T>` to be `Send+Sync` by lying about it.
+    /// Safety: All ObjC delegate calls happen on the main thread. We hold these
+    /// alive purely for their retain count; we never send them to another thread.
+    struct SendableRetained<T: objc2::Message>(objc2::rc::Retained<T>);
+    unsafe impl<T: objc2::Message> Send for SendableRetained<T> {}
+    unsafe impl<T: objc2::Message> Sync for SendableRetained<T> {}
+
     pub struct WebViewHandle {
-        raw: id,
+        pub(crate) raw: id,
+        #[allow(dead_code)]
+        _nav_delegate: Box<dyn std::any::Any + Send + Sync>,
+        #[allow(dead_code)]
+        _ui_delegate: Box<dyn std::any::Any + Send + Sync>,
     }
 
     unsafe impl Send for WebViewHandle {}
@@ -18,9 +30,23 @@ mod macos {
             y: f64,
             width: f64,
             height: f64,
+            events: NavEventQueue,
         ) -> Option<Self> {
             unsafe {
                 let config: id = msg_send![class!(WKWebViewConfiguration), new];
+
+                // Shared process pool (cross-tab session sharing).
+                let pool = crate::shared_config::shared_process_pool();
+                let _: () = msg_send![config, setProcessPool: pool];
+
+                // Persistent data store (cookies, localStorage, cache).
+                let ds = crate::shared_config::default_data_store();
+                let _: () = msg_send![config, setWebsiteDataStore: ds];
+
+                // Load any installed WKWebExtensions.
+                if let Some(controller) = crate::extensions::load_extensions() {
+                    let _: () = msg_send![config, setWebExtensionController: controller];
+                }
 
                 // Apply uBOL-derived content blocking rules to this configuration.
                 crate::content_blocker::apply_to_config(config);
@@ -33,7 +59,28 @@ mod macos {
                     return None;
                 }
                 let _: () = msg_send![parent, addSubview: webview];
-                Some(Self { raw: webview })
+
+                // Create and attach the navigation delegate (objc2 world).
+                use objc2::MainThreadMarker;
+                let mtm = MainThreadMarker::new_unchecked();
+
+                let nav_delegate =
+                    crate::navigation_delegate::RoverNavDelegate::new(events.clone(), mtm);
+                // Bridge Retained<> pointer into the objc 0.2 world for setNavigationDelegate:.
+                let nav_ptr: *const _ = objc2::rc::Retained::as_ptr(&nav_delegate);
+                let _: () = msg_send![webview, setNavigationDelegate: nav_ptr];
+
+                // Create and attach the UI delegate.
+                let ui_delegate =
+                    crate::ui_delegate::RoverUIDelegate::new(events.clone(), mtm);
+                let ui_ptr: *const _ = objc2::rc::Retained::as_ptr(&ui_delegate);
+                let _: () = msg_send![webview, setUIDelegate: ui_ptr];
+
+                Some(Self {
+                    raw: webview,
+                    _nav_delegate: Box::new(SendableRetained(nav_delegate)),
+                    _ui_delegate: Box::new(SendableRetained(ui_delegate)),
+                })
             }
         }
 
@@ -130,6 +177,26 @@ mod macos {
                     .to_str()
                     .ok()
                     .map(|s| s.to_string())
+            }
+        }
+
+        /// Invoke WKWebView's find-in-page with the given query.
+        /// Calls `_findString:options:maxCount:` (private API fallback) or
+        /// the public `findString:withConfiguration:completionHandler:` on macOS 16+.
+        /// We use the older raw msg_send! approach for maximum compatibility.
+        pub fn find_text(&self, query: &str) {
+            unsafe {
+                let ns_string: id = NSString::alloc(nil).init_str(query);
+                // WKFindConfiguration (public API, macOS 13+)
+                let cfg: id = msg_send![class!(WKFindConfiguration), new];
+                // findString:withConfiguration:completionHandler: — no-op block
+                use block::ConcreteBlock;
+                let done_block = ConcreteBlock::new(|_result: id| {}).copy();
+                let _: () = msg_send![self.raw,
+                    findString: ns_string
+                    withConfiguration: cfg
+                    completionHandler: &*done_block
+                ];
             }
         }
 

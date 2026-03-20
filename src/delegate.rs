@@ -632,9 +632,13 @@ impl PickerDelegate for RoverDelegate {
                                 }
                                 BuiltInCommand::Snippets => return false,
                                 BuiltInCommand::Browser => {
+                                    let browser_db = self.db.clone();
                                     cx.spawn(async move |_this, cx: &mut AsyncApp| {
                                         cx.update(|cx| {
-                                            rover_browser::open_browser_window(cx);
+                                            rover_browser::open_browser_window(
+                                                cx,
+                                                Some(browser_db),
+                                            );
                                         })
                                         .ok();
                                     })

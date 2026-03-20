@@ -14,6 +14,23 @@ pub struct ClipboardEntry {
     pub timestamp: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HistoryRow {
+    pub id: i64,
+    pub url: String,
+    pub title: String,
+    pub visited_at: i64,
+    pub visit_count: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BookmarkRow {
+    pub id: i64,
+    pub url: String,
+    pub title: String,
+    pub created_at: i64,
+}
+
 impl RoverDb {
     pub fn open() -> Result<Self> {
         let path = Self::db_path()?;
@@ -78,6 +95,23 @@ impl RoverDb {
 
             CREATE INDEX IF NOT EXISTS idx_command_usage_timestamp
                 ON command_usage (timestamp);
+
+            CREATE TABLE IF NOT EXISTS browser_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                visited_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                visit_count INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_browser_history_visited_at ON browser_history(visited_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_browser_history_url ON browser_history(url);
+
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
             ",
         )?;
         Ok(())
@@ -210,6 +244,150 @@ impl RoverDb {
             rusqlite::params![key, value],
         )?;
         Ok(())
+    }
+
+    // --- Browser History ---
+
+    /// Upsert a URL into browser_history, incrementing visit_count on conflict.
+    pub fn add_history(&self, url: &str, title: &str) -> Result<()> {
+        if url.trim().is_empty() || url == "about:blank" {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO browser_history (url, title, visited_at, visit_count)
+             VALUES (?1, ?2, unixepoch(), 1)
+             ON CONFLICT(url) DO UPDATE SET
+               title = excluded.title,
+               visited_at = excluded.visited_at,
+               visit_count = visit_count + 1",
+            rusqlite::params![url, title],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_history(&self, query: &str, limit: usize) -> Result<Vec<HistoryRow>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, visited_at, visit_count FROM browser_history
+             WHERE url LIKE ?1 OR title LIKE ?1
+             ORDER BY visited_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![pattern, limit as i64], |row| {
+                Ok(HistoryRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    visited_at: row.get(3)?,
+                    visit_count: row.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn recent_history(&self, limit: usize) -> Result<Vec<HistoryRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, visited_at, visit_count FROM browser_history
+             ORDER BY visited_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| {
+                Ok(HistoryRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    visited_at: row.get(3)?,
+                    visit_count: row.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn clear_history(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM browser_history", [])?;
+        Ok(())
+    }
+
+    // --- Bookmarks ---
+
+    pub fn add_bookmark(&self, url: &str, title: &str) -> Result<()> {
+        if url.trim().is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO bookmarks (url, title, created_at) VALUES (?1, ?2, unixepoch())",
+            rusqlite::params![url, title],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_bookmark(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM bookmarks WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_bookmarks(&self, query: &str) -> Result<Vec<BookmarkRow>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, created_at FROM bookmarks
+             WHERE url LIKE ?1 OR title LIKE ?1
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![pattern], |row| {
+                Ok(BookmarkRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_bookmarks(&self) -> Result<Vec<BookmarkRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, created_at FROM bookmarks ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(BookmarkRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Returns the bookmark id for the given URL if it exists, or None.
+    pub fn find_bookmark_by_url(&self, url: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id FROM bookmarks WHERE url = ?1")?;
+        let mut rows = stmt.query_map(rusqlite::params![url], |row| row.get(0))?;
+        match rows.next() {
+            Some(Ok(id)) => Ok(Some(id)),
+            _ => Ok(None),
+        }
     }
 }
 

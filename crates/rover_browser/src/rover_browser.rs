@@ -3,9 +3,25 @@
 mod webview;
 #[cfg(target_os = "macos")]
 mod content_blocker;
+mod nav_events;
+mod shared_config;
+#[cfg(target_os = "macos")]
+mod navigation_delegate;
+#[cfg(target_os = "macos")]
+mod ui_delegate;
+#[cfg(target_os = "macos")]
+mod download_manager;
+mod extensions;
+mod history;
+mod bookmarks;
 
 use gpui::*;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use nav_events::{NavEvent, NavEventQueue};
+use history::HistoryManager;
+use bookmarks::BookmarkManager;
 
 #[cfg(target_os = "macos")]
 use webview::WebViewHandle;
@@ -18,6 +34,7 @@ pub const CACHED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const FROZEN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 pub const CLOSED_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(30);
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const CHROME_HEIGHT: f32 = 44.0;
 
 actions!(rover_browser, [FocusCommandBar]);
@@ -114,6 +131,7 @@ pub struct BrowserTab {
     pub url: String,
     pub state: TabState,
     pub last_active: Instant,
+    pub events: NavEventQueue,
     #[cfg(target_os = "macos")]
     pub webview_handle: Option<WebViewHandle>,
 }
@@ -129,6 +147,12 @@ pub enum BrowserAction {
     Reload,
     ListTabs,
     NewSearch { engine_name: String, query: String },
+    Find(String),
+    AddBookmark,
+    RemoveBookmark(i64),
+    ShowHistory,
+    SearchHistory(String),
+    SearchBookmarks(String),
 }
 
 // ─── Command parsing ──────────────────────────────────────────────────────────
@@ -137,6 +161,31 @@ pub fn parse_command(input: &str) -> BrowserAction {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return BrowserAction::Navigate("about:blank".to_string());
+    }
+
+    // Find prefix
+    if trimmed.starts_with('/') {
+        // Find-in-page
+        let query = &trimmed[1..];
+        return BrowserAction::Find(query.to_string());
+    }
+
+    if trimmed.starts_with("h ") {
+        let query = trimmed[2..].trim();
+        return BrowserAction::SearchHistory(query.to_string());
+    }
+
+    if trimmed == "bk!" || trimmed.starts_with("bk!") {
+        return BrowserAction::AddBookmark;
+    }
+
+    if trimmed.starts_with("bk ") {
+        let query = trimmed[3..].trim();
+        return BrowserAction::SearchBookmarks(query.to_string());
+    }
+
+    if trimmed == "history" {
+        return BrowserAction::ShowHistory;
     }
 
     match trimmed {
@@ -264,16 +313,41 @@ pub struct BrowserWindow {
     command_bar_focus: FocusHandle,
     /// Hover state for the title area (hover shows full URL, default shows page title).
     title_hovered: bool,
+    /// Find-in-page query.
+    find_query: String,
+    /// Whether the find bar is active.
+    find_active: bool,
+    /// Ephemeral hint text (e.g. download notifications, history results).
+    overlay_hint: Option<String>,
+    /// Database-backed managers (optional — only available when db is provided).
+    history_manager: Option<HistoryManager>,
+    bookmark_manager: Option<BookmarkManager>,
     _lifecycle_task: Task<()>,
+    _event_task: Task<()>,
 }
 
 impl BrowserWindow {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+        db: Option<Arc<rover_db::RoverDb>>,
+    ) -> Self {
         let focus = cx.focus_handle();
+
+        let history_manager = db.as_ref().map(|d| HistoryManager::new(d.clone()));
+        let bookmark_manager = db.as_ref().map(|d| BookmarkManager::new(d.clone()));
 
         let lifecycle_task = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(LIFECYCLE_INTERVAL).await;
             if this.update(cx, |b, cx| b.run_lifecycle(cx)).is_err() {
+                break;
+            }
+        });
+
+        // Event poll task: drain NavEventQueue for each tab every 500ms.
+        let event_task = cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(EVENT_POLL_INTERVAL).await;
+            if this.update(cx, |b, cx| b.drain_events(cx)).is_err() {
                 break;
             }
         });
@@ -284,6 +358,7 @@ impl BrowserWindow {
                 url: DEFAULT_URL.to_string(),
                 state: TabState::Active,
                 last_active: Instant::now(),
+                events: nav_events::new_queue(),
                 #[cfg(target_os = "macos")]
                 webview_handle: None,
             }],
@@ -292,7 +367,100 @@ impl BrowserWindow {
             command_bar_active: false,
             command_bar_focus: focus,
             title_hovered: false,
+            find_query: String::new(),
+            find_active: false,
+            overlay_hint: None,
+            history_manager,
+            bookmark_manager,
             _lifecycle_task: lifecycle_task,
+            _event_task: event_task,
+        }
+    }
+
+    // ── Event draining ─────────────────────────────────────────────────────────
+
+    fn drain_events(&mut self, cx: &mut Context<Self>) {
+        let mut changed = false;
+
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            let events: Vec<NavEvent> = {
+                let mut queue = tab.events.lock().unwrap();
+                std::mem::take(&mut *queue)
+            };
+            if events.is_empty() {
+                continue;
+            }
+            changed = true;
+            for event in events {
+                match event {
+                    NavEvent::LoadStarted { url } => {
+                        if !url.is_empty() {
+                            tab.url = url;
+                        }
+                    }
+                    NavEvent::LoadCommitted { url } => {
+                        if !url.is_empty() {
+                            tab.url = url;
+                        }
+                    }
+                    NavEvent::LoadFinished { url, title } => {
+                        if !url.is_empty() {
+                            tab.url = url.clone();
+                        }
+                        if !title.is_empty() {
+                            tab.title = title.clone();
+                        }
+                        // Record in history (only for active tab to avoid noise).
+                        if i == self.active_tab {
+                            if let Some(hm) = &self.history_manager {
+                                hm.record(&url, &title);
+                            }
+                        }
+                    }
+                    NavEvent::LoadFailed { error } => {
+                        log::warn!("browser: tab {i} load failed: {error}");
+                    }
+                    NavEvent::TitleChanged { title } => {
+                        if !title.is_empty() {
+                            tab.title = title;
+                        }
+                    }
+                    NavEvent::NewTabRequested { url } => {
+                        // We can't mutate self while iterating tabs, so we queue
+                        // it via a deferred action instead.
+                        cx.spawn({
+                            let url = url.clone();
+                            async move |this, cx: &mut AsyncApp| {
+                                let _ = this.update(cx, |bw: &mut BrowserWindow, cx| {
+                                    bw.open_tab(&url, cx);
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .detach();
+                    }
+                    NavEvent::DownloadStarted {
+                        suggested_filename,
+                        destination,
+                    } => {
+                        self.overlay_hint = Some(format!(
+                            "Downloaded {suggested_filename} to {destination}"
+                        ));
+                    }
+                    NavEvent::FindResult { found, match_count } => {
+                        if found {
+                            self.overlay_hint =
+                                Some(format!("{match_count} matches"));
+                        } else {
+                            self.overlay_hint = Some("No matches".to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        if changed {
+            cx.notify();
         }
     }
 
@@ -391,6 +559,7 @@ impl BrowserWindow {
             url: url.to_string(),
             state: TabState::Active,
             last_active: Instant::now(),
+            events: nav_events::new_queue(),
             #[cfg(target_os = "macos")]
             webview_handle: None,
         });
@@ -482,6 +651,70 @@ impl BrowserWindow {
                 }
             }
             BrowserAction::ListTabs => {}
+            BrowserAction::Find(query) => {
+                self.find_query = query.clone();
+                self.find_active = true;
+                #[cfg(target_os = "macos")]
+                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                    wv.find_text(&query);
+                }
+            }
+            BrowserAction::AddBookmark => {
+                if let Some(tab) = self.tabs.get(self.active_tab) {
+                    if let Some(bm) = &self.bookmark_manager {
+                        let _ = bm.add(&tab.url, &tab.title);
+                        self.overlay_hint = Some(format!("Bookmarked: {}", tab.title));
+                    }
+                }
+            }
+            BrowserAction::RemoveBookmark(id) => {
+                if let Some(bm) = &self.bookmark_manager {
+                    let _ = bm.remove(id);
+                    self.overlay_hint = Some("Bookmark removed".to_string());
+                }
+            }
+            BrowserAction::ShowHistory => {
+                if let Some(hm) = &self.history_manager {
+                    let recent = hm.recent(10);
+                    if recent.is_empty() {
+                        self.overlay_hint = Some("No history".to_string());
+                    } else {
+                        let lines: Vec<String> = recent
+                            .iter()
+                            .map(|e| format!("{} — {}", e.title, e.url))
+                            .collect();
+                        self.overlay_hint = Some(lines.join("\n"));
+                    }
+                }
+            }
+            BrowserAction::SearchHistory(query) => {
+                if let Some(hm) = &self.history_manager {
+                    let results = hm.search(&query, 5);
+                    if results.is_empty() {
+                        self.overlay_hint = Some(format!("No history matching '{query}'"));
+                    } else {
+                        let lines: Vec<String> = results
+                            .iter()
+                            .map(|e| format!("{} — {}", e.title, e.url))
+                            .collect();
+                        self.overlay_hint = Some(lines.join("\n"));
+                    }
+                }
+            }
+            BrowserAction::SearchBookmarks(query) => {
+                if let Some(bm) = &self.bookmark_manager {
+                    let results = bm.search(&query);
+                    if results.is_empty() {
+                        self.overlay_hint = Some(format!("No bookmarks matching '{query}'"));
+                    } else {
+                        let lines: Vec<String> = results
+                            .iter()
+                            .map(|b| format!("{} — {}", b.title, b.url))
+                            .collect();
+                        self.overlay_hint = Some(lines.join("\n"));
+                    }
+                }
+            }
         }
         self.command_bar_active = false;
         cx.notify();
@@ -499,6 +732,8 @@ impl BrowserWindow {
     fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let text = std::mem::take(&mut self.command_bar_text);
         self.command_bar_active = false;
+        self.overlay_hint = None;
+
         // Tabs take priority over URL/search parsing
         if let Some((index, _)) = self.best_tab_match(&text) {
             self.switch_tab(index, window, cx);
@@ -551,6 +786,14 @@ impl BrowserWindow {
             }
         }
 
+        // Escape dismisses the find bar if active.
+        if key == "escape" && self.find_active {
+            self.find_active = false;
+            self.find_query.clear();
+            cx.notify();
+            return;
+        }
+
         if !self.command_bar_active {
             return;
         }
@@ -559,6 +802,7 @@ impl BrowserWindow {
             "escape" => {
                 self.command_bar_active = false;
                 self.command_bar_text.clear();
+                self.overlay_hint = None;
                 cx.notify();
             }
             "return" | "enter" => {
@@ -595,6 +839,12 @@ impl BrowserWindow {
         }
         best
     }
+
+    /// Returns Some(id) if the active tab's URL is bookmarked.
+    fn active_tab_bookmark_id(&self) -> Option<i64> {
+        let url = self.tabs.get(self.active_tab)?.url.clone();
+        self.bookmark_manager.as_ref()?.find_by_url(&url)
+    }
 }
 
 // ─── Focusable ────────────────────────────────────────────────────────────────
@@ -610,6 +860,7 @@ impl Focusable for BrowserWindow {
 impl Render for BrowserWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_active = self.command_bar_active;
+        let is_find_active = self.find_active;
 
         // Root: key bindings + focus tracking always active so cmd+\ fires globally
         let mut root = div()
@@ -626,6 +877,42 @@ impl Render for BrowserWindow {
             .flex_col()
             .bg(rgb(0x1e1e1e));
 
+        // Find bar (shown when find_active)
+        if is_find_active {
+            let find_text = self.find_query.clone();
+            root = root.child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .px_3()
+                    .h(px(32.0))
+                    .bg(rgb(0x2a2a2a))
+                    .border_b_1()
+                    .border_color(rgb(0x5588cc))
+                    .child(
+                        div()
+                            .text_color(rgb(0xaaaaaa))
+                            .text_size(px(11.0))
+                            .mr_2()
+                            .child(SharedString::from("Find:")),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(rgb(0xffffff))
+                            .text_size(px(12.0))
+                            .child(SharedString::from(format!("{find_text}▌"))),
+                    )
+                    .child(
+                        div()
+                            .text_color(rgb(0x666666))
+                            .text_size(px(10.0))
+                            .child(SharedString::from("Esc to close")),
+                    ),
+            );
+        }
+
         // Chrome bar only visible when cmd+\ is open
         if is_active {
             let bar_text = self.command_bar_text.clone();
@@ -636,6 +923,10 @@ impl Render for BrowserWindow {
             let page_title = active_tab.map(|t| t.title.clone()).unwrap_or_else(|| "New Tab".to_string());
             let page_url = active_tab.map(|t| t.url.clone()).unwrap_or_default();
             let page_domain = domain_from_url(&page_url).to_string();
+
+            // Bookmark indicator for active page
+            let bookmark_id = self.active_tab_bookmark_id();
+            let is_bookmarked = bookmark_id.is_some();
 
             // Hint: what pressing ↵ will do
             let hint: Option<String> = if !bar_text.is_empty() {
@@ -650,11 +941,18 @@ impl Render for BrowserWindow {
                         BrowserAction::Reload => Some("↵  reload".to_string()),
                         BrowserAction::CloseTab => Some("↵  close tab".to_string()),
                         BrowserAction::NewTab => Some("↵  new tab".to_string()),
+                        BrowserAction::Find(q) => Some(format!("↵  find: {q}")),
+                        BrowserAction::AddBookmark => Some("↵  bookmark this page".to_string()),
+                        BrowserAction::RemoveBookmark(_) => Some("↵  remove bookmark".to_string()),
+                        BrowserAction::ShowHistory => Some("↵  show history".to_string()),
+                        BrowserAction::SearchHistory(q) => Some(format!("↵  search history: {q}")),
+                        BrowserAction::SearchBookmarks(q) => Some(format!("↵  search bookmarks: {q}")),
                         _ => None,
                     }
                 }
             } else {
-                None
+                // Show overlay hint (download notification, search results, etc.)
+                self.overlay_hint.clone()
             };
 
             // Tab pills
@@ -693,7 +991,10 @@ impl Render for BrowserWindow {
                 );
             }
 
-            // Title row: page title (hover → domain) + tab pills
+            // Title row: page title (hover → domain) + bookmark star + tab pills
+            let bm_star = if is_bookmarked { "★" } else { "☆" };
+            let bm_color = if is_bookmarked { rgb(0xffbd2eu32) } else { rgb(0x555555u32) };
+            let bm_id_capture = bookmark_id;
             let title_row = div()
                 .flex().flex_row().items_center().gap_2()
                 .px_3().h(px(CHROME_HEIGHT))
@@ -712,6 +1013,23 @@ impl Render for BrowserWindow {
                                 .text_size(px(12.0))
                                 .child(SharedString::from(if self.title_hovered { page_domain } else { page_title })),
                         ),
+                )
+                // Bookmark star button
+                .child(
+                    div()
+                        .id("bookmark-star")
+                        .px_1()
+                        .cursor_pointer()
+                        .text_color(bm_color)
+                        .text_size(px(14.0))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(id) = bm_id_capture {
+                                this.execute_action(BrowserAction::RemoveBookmark(id), window, cx);
+                            } else {
+                                this.execute_action(BrowserAction::AddBookmark, window, cx);
+                            }
+                        }))
+                        .child(SharedString::from(bm_star)),
                 )
                 .child(tab_pills);
 
@@ -871,9 +1189,12 @@ impl Element for WebViewElement {
                                     tab.title = title;
                                 }
                             }
-                        } else if let Some(wv) = WebViewHandle::create(ns_view, x, y, width, height) {
-                            wv.navigate(&tab.url);
-                            tab.webview_handle = Some(wv);
+                        } else {
+                            let events = tab.events.clone();
+                            if let Some(wv) = WebViewHandle::create(ns_view, x, y, width, height, events) {
+                                wv.navigate(&tab.url);
+                                tab.webview_handle = Some(wv);
+                            }
                         }
                     }
                 });
@@ -884,7 +1205,7 @@ impl Element for WebViewElement {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-pub fn open_browser_window(cx: &mut App) {
+pub fn open_browser_window(cx: &mut App, db: Option<Arc<rover_db::RoverDb>>) {
     cx.bind_keys([KeyBinding::new("cmd-\\", FocusCommandBar, Some("BrowserWindow"))]);
 
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
@@ -899,7 +1220,7 @@ pub fn open_browser_window(cx: &mut App) {
             window_background: WindowBackgroundAppearance::Opaque,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| BrowserWindow::new(window, cx)),
+        |window, cx| cx.new(|cx| BrowserWindow::new(window, cx, db)),
     )
     .ok();
 }
@@ -986,6 +1307,31 @@ mod tests {
         match parse_command("") {
             BrowserAction::Navigate(url) => assert_eq!(url, "about:blank"),
             other => panic!("Expected Navigate(about:blank), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_command_find() {
+        match parse_command("/hello world") {
+            BrowserAction::Find(q) => assert_eq!(q, "hello world"),
+            other => panic!("Expected Find, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_command_history_search() {
+        match parse_command("h rust") {
+            BrowserAction::SearchHistory(q) => assert_eq!(q, "rust"),
+            other => panic!("Expected SearchHistory, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_command_bookmark() {
+        assert!(matches!(parse_command("bk!"), BrowserAction::AddBookmark));
+        match parse_command("bk rust") {
+            BrowserAction::SearchBookmarks(q) => assert_eq!(q, "rust"),
+            other => panic!("Expected SearchBookmarks, got {other:?}"),
         }
     }
 

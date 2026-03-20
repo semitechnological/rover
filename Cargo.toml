@@ -8,6 +8,8 @@ members = [
     "crates/rover_extension_api",
     "crates/rover_db",
     "crates/rover_browser",
+    "crates/rover_semantic",
+    "crates/rusty_foundationmodels",
 ]
 resolver = "2"
 
@@ -23,7 +25,9 @@ toml = "0.8"
 wasmtime = "29"
 fuzzy-matcher = "0.3"
 unicode-segmentation = "1"
-rusty_foundationmodels = { path = "../rusty_foundationmodels" }
+rusty_foundationmodels = { path = "crates/rusty_foundationmodels" }
+futures-core = "0.3"
+futures-channel = "0.3"
 
 rover_fuzzy = { path = "crates/rover_fuzzy" }
 rover_theme = { path = "crates/rover_theme" }
@@ -33,6 +37,7 @@ rover_extensions = { path = "crates/rover_extensions" }
 rover_extension_api = { path = "crates/rover_extension_api" }
 rover_db = { path = "crates/rover_db" }
 rover_browser = { path = "crates/rover_browser" }
+rover_semantic = { path = "crates/rover_semantic" }
 
 [package]
 name = "rover"

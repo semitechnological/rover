@@ -1,0 +1,14 @@
+[package]
+name = "rover_semantic"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+fastembed = "4"
+rusqlite = { version = "0.31", features = ["bundled"] }
+anyhow = "1"
+log = "0.4"
+serde_json = "1"

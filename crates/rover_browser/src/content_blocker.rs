@@ -96,7 +96,13 @@ mod macos {
                     }
                 }
             } else if list != nil {
-                *result_c.lock().unwrap() = Some(list);
+                // The rule list is autoreleased — retain it so it survives
+                // beyond the completion block's autorelease pool, which drains
+                // when the RunLoop iteration that fires this handler returns.
+                let retained: id = msg_send![list, retain];
+                if !retained.is_null() {
+                    *result_c.lock().unwrap() = Some(retained);
+                }
             }
             done_c.store(true, Ordering::Release);
         });
@@ -177,9 +183,15 @@ mod macos {
 
         // Layer 1 — network blocking via WKContentRuleList.
         // `Lazy` ensures compile_rules() runs only once per process.
+        // Double-check for nil: the retained pointer should be valid, but
+        // guard defensively to avoid CFRetain(NULL) if something went wrong.
         if let Some(rule_list) = CONTENT_RULE_LIST.as_ref().map(|rl| rl.0) {
-            let _: () = msg_send![ucc, addContentRuleList: rule_list];
-            log::debug!("content_blocker: network rule list applied");
+            if !rule_list.is_null() {
+                let _: () = msg_send![ucc, addContentRuleList: rule_list];
+                log::debug!("content_blocker: network rule list applied");
+            } else {
+                log::warn!("content_blocker: rule_list id is null, skipping addContentRuleList:");
+            }
         }
 
         // Layer 2 — cosmetic filtering (CSS element hiding + MutationObserver guard).

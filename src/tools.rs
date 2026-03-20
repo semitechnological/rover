@@ -45,16 +45,28 @@ fn applescript_tool() -> ToolDefinition {
 fn open_url_tool() -> ToolDefinition {
     ToolDefinition::new(
         "open_url",
-        "Open a URL in the default browser",
+        "Open a URL in the default browser using AppleScript",
         Schema::new("OpenUrlArgs")
             .property(SchemaProperty::new("url", SchemaPropertyType::String).description("The URL to open")),
         |args| {
-            let url = args["url"].as_str().unwrap_or("").to_string();
-            std::process::Command::new("open")
-                .arg(&url)
-                .spawn()
+            let url = args["url"].as_str().unwrap_or("").replace('"', "%22");
+            let script = format!(
+                r#"tell application "Safari"
+    activate
+    open location "{url}"
+end tell"#
+            );
+            let out = std::process::Command::new("osascript")
+                .arg("-e").arg(&script)
+                .output()
                 .map_err(|e| e.to_string())?;
-            Ok(format!("Opened {url}"))
+            if out.status.success() {
+                Ok(format!("Opened {url}"))
+            } else {
+                // Fallback to open command
+                std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
+                Ok(format!("Opened {url}"))
+            }
         },
     )
 }
@@ -62,17 +74,21 @@ fn open_url_tool() -> ToolDefinition {
 fn launch_app_tool() -> ToolDefinition {
     ToolDefinition::new(
         "launch_app",
-        "Launch a macOS application by name",
+        "Activate or launch a macOS application by name using AppleScript. Brings the app to the foreground.",
         Schema::new("LaunchAppArgs")
-            .property(SchemaProperty::new("name", SchemaPropertyType::String).description("Application name")),
+            .property(SchemaProperty::new("name", SchemaPropertyType::String).description("Application name (e.g. 'Finder', 'Safari', 'Mail')")),
         |args| {
-            let name = args["name"].as_str().unwrap_or("").to_string();
-            std::process::Command::new("open")
-                .arg("-a")
-                .arg(&name)
-                .spawn()
+            let name = args["name"].as_str().unwrap_or("").replace('"', "'");
+            let script = format!(r#"tell application "{name}" to activate"#);
+            let out = std::process::Command::new("osascript")
+                .arg("-e").arg(&script)
+                .output()
                 .map_err(|e| e.to_string())?;
-            Ok(format!("Launched {name}"))
+            if out.status.success() {
+                Ok(format!("Activated {name}"))
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+            }
         },
     )
 }
@@ -388,8 +404,8 @@ fn search_wikipedia_tool() -> ToolDefinition {
             }
             let title   = json["title"].as_str().unwrap_or(&topic);
             let extract = json["extract"].as_str().unwrap_or("No summary available.");
-            let extract = if extract.len() > 600 { format!("{}…", &extract[..600]) } else { extract.to_string() };
-            Ok(format!("{title}: {extract}"))
+            // Return the full extract — the AI will synthesise its own summary
+            Ok(format!("[Wikipedia: {title}]\n{extract}"))
         },
     )
 }

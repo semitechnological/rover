@@ -34,6 +34,7 @@ pub struct RoverDelegate {
     ai_enabled: bool,
     ai_result: Option<String>,
     ai_loading: bool,
+    inline_terminal: Option<String>,
 }
 
 struct QueryHistory {
@@ -158,6 +159,7 @@ impl RoverDelegate {
             ai_enabled,
             ai_result: None,
             ai_loading: false,
+            inline_terminal: None,
         }
     }
 
@@ -329,6 +331,42 @@ impl RoverDelegate {
         .into_any_element()
     }
 
+    fn render_terminal_row(
+        &self,
+        command: &str,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
+        if selected {
+            row = row.bg(colors.element_selected);
+        }
+        row.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .px(px(5.0))
+                        .py(px(2.0))
+                        .rounded(px(4.0))
+                        .bg(colors.text_muted.opacity(0.15))
+                        .text_color(colors.text_muted)
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(SharedString::from("$")),
+                )
+                .child(
+                    div()
+                        .text_color(colors.text)
+                        .text_size(px(13.0))
+                        .child(SharedString::from(command.to_string())),
+                ),
+        )
+        .into_any_element()
+    }
+
     fn render_ai_row(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
         let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
         if selected {
@@ -393,9 +431,10 @@ impl PickerDelegate for RoverDelegate {
     fn match_count(&self) -> usize {
         match self.view_mode {
             ViewMode::Main => {
-                let extra = if self.calculator_result.is_some() { 1 } else { 0 };
+                let terminal_extra = if self.inline_terminal.is_some() { 1 } else { 0 };
+                let calc_extra = if self.calculator_result.is_some() { 1 } else { 0 };
                 let ai_extra = if self.ai_loading || self.ai_result.is_some() { 1 } else { 0 };
-                self.matches.len() + extra + ai_extra
+                terminal_extra + calc_extra + ai_extra + self.matches.len()
             }
             ViewMode::ClipboardHistory => self.clipboard_filtered.len(),
             ViewMode::FileSearch => self.file_results.len(),
@@ -426,6 +465,21 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let normalized = normalize_query(&query);
 
+                // Priority 1: explicit terminal prefix (> cmd or ! cmd) — exclusive mode
+                let terminal_prefix = query.starts_with("> ") || query.starts_with("! ");
+                if terminal_prefix {
+                    let cmd = query[2..].trim().to_string();
+                    self.inline_terminal = if cmd.is_empty() { None } else { Some(cmd) };
+                    self.calculator_result = None;
+                    self.ai_result = None;
+                    self.ai_loading = false;
+                    self.matches = vec![];
+                    self.selected_ix = 0;
+                    return Task::ready(());
+                }
+                self.inline_terminal = None;
+
+                // Priority 2: calculator (always evaluate)
                 self.calculator_result = calculator::evaluate(&self.query).map(|v| {
                     if v.fract() == 0.0 {
                         format!("{}", v as i64)
@@ -437,55 +491,64 @@ impl PickerDelegate for RoverDelegate {
                     }
                 });
 
-                // Check for AI trigger prefix
-                let is_ai_query = self.ai_enabled
-                    && self.ai_session.is_some()
-                    && (query.starts_with("? ") || query.starts_with("ai "));
-
-                if is_ai_query {
-                    let prompt = if query.starts_with("? ") {
-                        query[2..].to_string()
-                    } else {
-                        query[3..].to_string()
-                    };
-
-                    if !prompt.is_empty() {
-                        self.ai_result = None;
-                        self.ai_loading = true;
-
-                        let session = self.ai_session.clone().unwrap();
-                        cx.spawn(async move |this, cx: &mut AsyncApp| {
-                            let result = session.respond(&prompt).await;
-                            let _ = cx.update(|cx| {
-                                let _ = this.update(cx, |picker, cx| {
-                                    picker.delegate.ai_loading = false;
-                                    picker.delegate.ai_result = Some(match result {
-                                        Ok(text) => text,
-                                        Err(e) => format!("Error: {e}"),
-                                    });
-                                    cx.notify();
-                                });
-                            });
-                        })
-                        .detach();
-                    } else {
-                        self.ai_result = None;
-                        self.ai_loading = false;
-                    }
-                } else {
-                    self.ai_result = None;
-                    self.ai_loading = false;
-                }
-
+                // Priority 3: fuzzy match against commands (always run)
                 let candidates: Vec<StringMatchCandidate> = self
                     .all_commands
                     .iter()
                     .enumerate()
                     .map(|(i, c)| StringMatchCandidate::new(i, &c.name))
                     .collect();
-
                 self.matches = match_strings(&candidates, &normalized, 50);
                 self.selected_ix = 0;
+
+                // Priority 4: AI — explicit prefix OR fallback when no good matches
+                let is_ai_explicit = self.ai_enabled
+                    && self.ai_session.is_some()
+                    && (query.starts_with("? ") || query.starts_with("ai "));
+
+                let has_good_matches = self.matches.first().map(|m| m.score > 0).unwrap_or(false);
+                let is_ai_fallback = self.ai_enabled
+                    && self.ai_session.is_some()
+                    && !query.is_empty()
+                    && query.len() >= 6
+                    && !has_good_matches
+                    && self.calculator_result.is_none();
+
+                let ai_prompt: Option<String> = if is_ai_explicit {
+                    let prompt = if query.starts_with("? ") {
+                        query[2..].to_string()
+                    } else {
+                        query[3..].to_string()
+                    };
+                    if prompt.is_empty() { None } else { Some(prompt) }
+                } else if is_ai_fallback {
+                    Some(query.clone())
+                } else {
+                    None
+                };
+
+                if let Some(prompt) = ai_prompt {
+                    self.ai_result = None;
+                    self.ai_loading = true;
+                    let session = self.ai_session.clone().unwrap();
+                    cx.spawn(async move |this, cx: &mut AsyncApp| {
+                        let result = session.respond(&prompt).await;
+                        let _ = cx.update(|cx| {
+                            let _ = this.update(cx, |picker, cx| {
+                                picker.delegate.ai_loading = false;
+                                picker.delegate.ai_result = Some(match result {
+                                    Ok(text) => text,
+                                    Err(e) => format!("Error: {e}"),
+                                });
+                                cx.notify();
+                            });
+                        });
+                    })
+                    .detach();
+                } else {
+                    self.ai_result = None;
+                    self.ai_loading = false;
+                }
             }
             ViewMode::ClipboardHistory => {
                 if query.is_empty() {
@@ -513,12 +576,21 @@ impl PickerDelegate for RoverDelegate {
     fn confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
+                let has_terminal = self.inline_terminal.is_some();
                 let has_calc = self.calculator_result.is_some();
                 let has_ai = self.ai_loading || self.ai_result.is_some();
-                let ai_ix = if has_calc { 1 } else { 0 };
-                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+                let calc_ix = if has_terminal { 1 } else { 0 };
+                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
+                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
 
-                if has_calc && self.selected_ix == 0 {
+                if has_terminal && self.selected_ix == 0 {
+                    if let Some(cmd) = &self.inline_terminal {
+                        let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
+                    }
+                    return true;
+                }
+
+                if has_calc && self.selected_ix == calc_ix {
                     if let Some(result) = &self.calculator_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
@@ -607,12 +679,21 @@ impl PickerDelegate for RoverDelegate {
     fn actions_for_selected(&self) -> Vec<ItemAction> {
         match self.view_mode {
             ViewMode::Main => {
+                let has_terminal = self.inline_terminal.is_some();
                 let has_calc = self.calculator_result.is_some();
                 let has_ai = self.ai_loading || self.ai_result.is_some();
-                let ai_ix = if has_calc { 1 } else { 0 };
-                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+                let calc_ix = if has_terminal { 1 } else { 0 };
+                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
+                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
 
-                if has_calc && self.selected_ix == 0 {
+                if has_terminal && self.selected_ix == 0 {
+                    return vec![ItemAction {
+                        name: "Run".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
+                if has_calc && self.selected_ix == calc_ix {
                     return vec![ItemAction {
                         name: "Copy Result".into(),
                         shortcut: Some("\u{21A9}".into()),
@@ -712,12 +793,21 @@ impl PickerDelegate for RoverDelegate {
     fn execute_action(&mut self, action_ix: usize, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
+                let has_terminal = self.inline_terminal.is_some();
                 let has_calc = self.calculator_result.is_some();
                 let has_ai = self.ai_loading || self.ai_result.is_some();
-                let ai_ix = if has_calc { 1 } else { 0 };
-                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+                let calc_ix = if has_terminal { 1 } else { 0 };
+                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
+                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
 
-                if has_calc && self.selected_ix == 0 {
+                if has_terminal && self.selected_ix == 0 {
+                    if let Some(cmd) = &self.inline_terminal {
+                        let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
+                    }
+                    return true;
+                }
+
+                if has_calc && self.selected_ix == calc_ix {
                     if let Some(result) = &self.calculator_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
@@ -846,12 +936,19 @@ impl PickerDelegate for RoverDelegate {
 
         match self.view_mode {
             ViewMode::Main => {
+                let has_terminal = self.inline_terminal.is_some();
                 let has_calc = self.calculator_result.is_some();
                 let has_ai = self.ai_loading || self.ai_result.is_some();
-                let ai_ix = if has_calc { 1 } else { 0 };
-                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+                let calc_ix = if has_terminal { 1 } else { 0 };
+                let ai_ix = calc_ix + if has_calc { 1 } else { 0 };
+                let command_offset = ai_ix + if has_ai { 1 } else { 0 };
 
-                if has_calc && ix == 0 {
+                if has_terminal && ix == 0 {
+                    let cmd = self.inline_terminal.as_deref().unwrap_or("");
+                    return Some(self.render_terminal_row(cmd, selected, colors));
+                }
+
+                if has_calc && ix == calc_ix {
                     return Some(self.render_calculator_row(selected, colors));
                 }
 

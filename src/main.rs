@@ -1,7 +1,9 @@
+mod ai;
 mod clipboard_monitor;
 mod delegate;
 mod hotkey;
 mod settings_window;
+mod tools;
 
 use delegate::RoverDelegate;
 use gpui::*;
@@ -12,7 +14,10 @@ use rover_picker::{bind_picker_keys, Picker, PickerEvent};
 use rover_theme::{self, ThemeRegistry};
 use std::sync::Arc;
 
-actions!(rover, [Toggle, Quit]);
+actions!(rover, [Toggle, Quit, OpenSettings, ShowAbout]);
+
+struct DbGlobal(pub Arc<RoverDb>);
+impl Global for DbGlobal {}
 
 fn main() {
     Application::new().run(|cx| {
@@ -30,6 +35,9 @@ fn main() {
 
         let db = Arc::new(RoverDb::open().expect("Failed to open database"));
 
+        // Make db accessible to global action handlers
+        cx.set_global(DbGlobal(db.clone()));
+
         clipboard_monitor::start(db.clone(), cx);
 
         if db
@@ -43,14 +51,32 @@ fn main() {
         }
 
         bind_picker_keys(cx);
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-,", OpenSettings, None),
+        ]);
 
         cx.set_menus(vec![Menu {
             name: "Rover".into(),
-            items: vec![MenuItem::action("Quit", Quit)],
+            items: vec![
+                MenuItem::action("About Rover", ShowAbout),
+                MenuItem::action("Settings...", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action("Quit", Quit),
+            ],
         }]);
 
         cx.on_action::<Quit>(|_, cx| cx.quit());
+
+        cx.on_action::<OpenSettings>(|_, cx| {
+            let db = cx.global::<DbGlobal>().0.clone();
+            settings_window::open_settings_window(db, cx);
+        });
+
+        cx.on_action::<ShowAbout>(|_, cx| {
+            let db = cx.global::<DbGlobal>().0.clone();
+            settings_window::open_settings_window_on_about(db, cx);
+        });
 
         hotkey::register_global_hotkey(cx);
 
@@ -60,6 +86,21 @@ fn main() {
 
 fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(680.0), px(420.0)), cx);
+
+    let ai_session = if cx
+        .global::<DbGlobal>()
+        .0
+        .get_setting("ai_enabled")
+        .ok()
+        .flatten()
+        .map(|v| v == "true")
+        .unwrap_or(false)
+    {
+        ai::create_session().map(Arc::new)
+    } else {
+        None
+    };
+    let ai_enabled = ai_session.is_some();
 
     let window = cx
         .open_window(
@@ -76,7 +117,7 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
             |window, cx| {
                 let settings_db = db.clone();
                 cx.new(|cx| {
-                    let delegate = RoverDelegate::new(commands, db);
+                    let delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled);
                     let picker = cx.new(|cx| Picker::new(delegate, cx));
 
                     cx.subscribe_in(

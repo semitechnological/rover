@@ -22,6 +22,7 @@ toml = "0.8"
 wasmtime = "29"
 fuzzy-matcher = "0.3"
 unicode-segmentation = "1"
+rusty_foundationmodels = { path = "../rusty_foundationmodels" }
 
 rover_fuzzy = { path = "crates/rover_fuzzy" }
 rover_theme = { path = "crates/rover_theme" }
@@ -49,3 +50,4 @@ rover_picker.workspace = true
 rover_commands.workspace = true
 rover_extensions.workspace = true
 rover_db.workspace = true
+rusty_foundationmodels.workspace = true

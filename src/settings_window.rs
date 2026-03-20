@@ -14,13 +14,17 @@ pub struct SettingsView {
     hyperkey_enabled: bool,
     show_recent_apps: bool,
     launch_at_login: bool,
+    ai_enabled: bool,
+    ai_terminal_enabled: bool,
+    picker_position: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum SettingsSection {
+pub enum SettingsSection {
     General,
     Appearance,
     Hotkeys,
+    AI,
     Data,
     About,
 }
@@ -31,6 +35,7 @@ impl SettingsSection {
             Self::General,
             Self::Appearance,
             Self::Hotkeys,
+            Self::AI,
             Self::Data,
             Self::About,
         ]
@@ -41,6 +46,7 @@ impl SettingsSection {
             Self::General => "General",
             Self::Appearance => "Appearance",
             Self::Hotkeys => "Hotkeys",
+            Self::AI => "AI",
             Self::Data => "Data",
             Self::About => "About",
         }
@@ -48,7 +54,7 @@ impl SettingsSection {
 }
 
 impl SettingsView {
-    pub fn new(db: Arc<RoverDb>, cx: &mut Context<Self>) -> Self {
+    pub fn new(db: Arc<RoverDb>, initial_section: SettingsSection, cx: &mut Context<Self>) -> Self {
         let theme_names: Vec<String> = {
             let registry = cx.global::<ThemeRegistry>();
             registry.list().iter().map(|t| t.name.clone()).collect()
@@ -73,15 +79,35 @@ impl SettingsView {
             .flatten()
             .map(|v| v == "true")
             .unwrap_or(false);
+        let ai_enabled = db
+            .get_setting("ai_enabled")
+            .ok()
+            .flatten()
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let ai_terminal_enabled = db
+            .get_setting("ai_terminal_enabled")
+            .ok()
+            .flatten()
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        let picker_position = db
+            .get_setting("picker_position")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "center".to_string());
 
         Self {
             db,
             selected_theme_ix,
             theme_names,
-            active_section: SettingsSection::General,
+            active_section: initial_section,
             hyperkey_enabled,
             show_recent_apps,
             launch_at_login,
+            ai_enabled,
+            ai_terminal_enabled,
+            picker_position,
         }
     }
 
@@ -165,6 +191,7 @@ impl SettingsView {
     }
 
     fn render_general(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
+        let picker_position = self.picker_position.clone();
         div()
             .flex()
             .flex_col()
@@ -204,6 +231,53 @@ impl SettingsView {
                             .set_setting("show_recent_apps", &this.show_recent_apps.to_string());
                         cx.notify();
                     })),
+            )
+            .child(
+                Self::setting_row(colors)
+                    .child(Self::setting_label(
+                        "Picker Position",
+                        "Where the picker appears on screen",
+                        colors,
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .children(["Top", "Center", "Bottom"].iter().map(|&pos| {
+                                let selected = picker_position == pos.to_lowercase();
+                                let pos_lower = pos.to_lowercase();
+                                div()
+                                    .id(SharedString::from(format!("picker-pos-{pos_lower}")))
+                                    .px(px(10.0))
+                                    .py(px(4.0))
+                                    .rounded(px(5.0))
+                                    .cursor_pointer()
+                                    .border_1()
+                                    .border_color(if selected {
+                                        colors.text_accent
+                                    } else {
+                                        colors.border_variant
+                                    })
+                                    .bg(if selected {
+                                        colors.element_selected
+                                    } else {
+                                        colors.surface_background
+                                    })
+                                    .text_color(if selected {
+                                        colors.text_accent
+                                    } else {
+                                        colors.text_muted
+                                    })
+                                    .text_size(px(12.0))
+                                    .child(SharedString::from(pos.to_string()))
+                                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                                        this.picker_position = pos_lower.clone();
+                                        let _ = this.db.set_setting("picker_position", &pos_lower);
+                                        cx.notify();
+                                    }))
+                            })),
+                    ),
             )
     }
 
@@ -346,6 +420,71 @@ impl SettingsView {
             )
     }
 
+    fn render_ai(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
+        let ai_available = rusty_foundationmodels::is_available();
+        div()
+            .flex()
+            .flex_col()
+            .child(Self::section_header("AI", colors))
+            .child(
+                Self::setting_row(colors)
+                    .id("ai-enabled")
+                    .cursor_pointer()
+                    .child(Self::setting_label(
+                        "Apple Intelligence",
+                        "Use on-device AI to interpret queries (requires macOS 26+)",
+                        colors,
+                    ))
+                    .child(Self::toggle_pill(self.ai_enabled, colors))
+                    .on_click(cx.listener(|this, _e, _w, cx| {
+                        this.ai_enabled = !this.ai_enabled;
+                        let _ = this.db.set_setting("ai_enabled", &this.ai_enabled.to_string());
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Self::setting_row(colors)
+                    .child(Self::setting_label(
+                        "Availability",
+                        "",
+                        colors,
+                    ))
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(if ai_available {
+                                colors.text_accent
+                            } else {
+                                colors.text_muted
+                            })
+                            .child(SharedString::from(if ai_available {
+                                "Available"
+                            } else {
+                                "Not available on this device"
+                            })),
+                    ),
+            )
+            .child(
+                Self::setting_row(colors)
+                    .id("ai-terminal-enabled")
+                    .cursor_pointer()
+                    .child(Self::setting_label(
+                        "AI Terminal Commands",
+                        "Interpret free-text queries as terminal commands",
+                        colors,
+                    ))
+                    .child(Self::toggle_pill(self.ai_terminal_enabled, colors))
+                    .on_click(cx.listener(|this, _e, _w, cx| {
+                        this.ai_terminal_enabled = !this.ai_terminal_enabled;
+                        let _ = this.db.set_setting(
+                            "ai_terminal_enabled",
+                            &this.ai_terminal_enabled.to_string(),
+                        );
+                        cx.notify();
+                    })),
+            )
+    }
+
     fn render_data(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
         div()
             .flex()
@@ -459,6 +598,7 @@ impl Render for SettingsView {
             SettingsSection::General => self.render_general(&colors, cx),
             SettingsSection::Appearance => self.render_appearance(&colors, cx),
             SettingsSection::Hotkeys => self.render_hotkeys(&colors, cx),
+            SettingsSection::AI => self.render_ai(&colors, cx),
             SettingsSection::Data => self.render_data(&colors, cx),
             SettingsSection::About => self.render_about(&colors),
         };
@@ -556,7 +696,7 @@ impl Render for SettingsView {
     }
 }
 
-pub fn open_settings_window(db: Arc<RoverDb>, cx: &mut App) {
+fn open_settings_window_with_section(db: Arc<RoverDb>, section: SettingsSection, cx: &mut App) {
     let bounds = Bounds::centered(None, size(px(640.0), px(480.0)), cx);
 
     let _window = cx
@@ -575,7 +715,15 @@ pub fn open_settings_window(db: Arc<RoverDb>, cx: &mut App) {
                 is_resizable: true,
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| SettingsView::new(db, cx)),
+            |_window, cx| cx.new(|cx| SettingsView::new(db, section, cx)),
         )
         .ok();
+}
+
+pub fn open_settings_window(db: Arc<RoverDb>, cx: &mut App) {
+    open_settings_window_with_section(db, SettingsSection::General, cx);
+}
+
+pub fn open_settings_window_on_about(db: Arc<RoverDb>, cx: &mut App) {
+    open_settings_window_with_section(db, SettingsSection::About, cx);
 }

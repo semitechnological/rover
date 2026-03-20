@@ -10,6 +10,7 @@ use rover_theme::theme;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ViewMode {
     Main,
@@ -29,6 +30,10 @@ pub struct RoverDelegate {
     clipboard_filtered: Vec<usize>,
     file_results: Vec<file_search::FileResult>,
     query_history: QueryHistory,
+    ai_session: Option<Arc<rusty_foundationmodels::Session>>,
+    ai_enabled: bool,
+    ai_result: Option<String>,
+    ai_loading: bool,
 }
 
 struct QueryHistory {
@@ -125,7 +130,12 @@ impl QueryHistory {
 }
 
 impl RoverDelegate {
-    pub fn new(commands: Vec<Command>, db: Arc<RoverDb>) -> Self {
+    pub fn new(
+        commands: Vec<Command>,
+        db: Arc<RoverDb>,
+        ai_session: Option<Arc<rusty_foundationmodels::Session>>,
+        ai_enabled: bool,
+    ) -> Self {
         let candidates: Vec<StringMatchCandidate> = commands
             .iter()
             .enumerate()
@@ -144,6 +154,10 @@ impl RoverDelegate {
             clipboard_filtered: Vec::new(),
             file_results: Vec::new(),
             query_history: QueryHistory::default(),
+            ai_session,
+            ai_enabled,
+            ai_result: None,
+            ai_loading: false,
         }
     }
 
@@ -315,6 +329,42 @@ impl RoverDelegate {
         .into_any_element()
     }
 
+    fn render_ai_row(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
+        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
+        if selected {
+            row = row.bg(colors.element_selected);
+        }
+        let text = if self.ai_loading {
+            "...".to_string()
+        } else {
+            self.ai_result.clone().unwrap_or_default()
+        };
+        row.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_3()
+                .child(
+                    div()
+                        .px(px(5.0))
+                        .py(px(2.0))
+                        .rounded(px(4.0))
+                        .bg(colors.text_accent.opacity(0.15))
+                        .text_color(colors.text_accent)
+                        .text_size(px(11.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(SharedString::from("AI")),
+                )
+                .child(
+                    div()
+                        .text_color(colors.text)
+                        .text_size(px(13.0))
+                        .child(SharedString::from(text)),
+                ),
+        )
+        .into_any_element()
+    }
+
     pub fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
         if self.view_mode != ViewMode::Main {
             return None;
@@ -343,12 +393,9 @@ impl PickerDelegate for RoverDelegate {
     fn match_count(&self) -> usize {
         match self.view_mode {
             ViewMode::Main => {
-                let extra = if self.calculator_result.is_some() {
-                    1
-                } else {
-                    0
-                };
-                self.matches.len() + extra
+                let extra = if self.calculator_result.is_some() { 1 } else { 0 };
+                let ai_extra = if self.ai_loading || self.ai_result.is_some() { 1 } else { 0 };
+                self.matches.len() + extra + ai_extra
             }
             ViewMode::ClipboardHistory => self.clipboard_filtered.len(),
             ViewMode::FileSearch => self.file_results.len(),
@@ -371,7 +418,7 @@ impl PickerDelegate for RoverDelegate {
         }
     }
 
-    fn update_matches(&mut self, query: String, _cx: &mut Context<Picker<Self>>) -> Task<()> {
+    fn update_matches(&mut self, query: String, cx: &mut Context<Picker<Self>>) -> Task<()> {
         self.query = query.clone();
         self.query_history.reset_cursor();
 
@@ -389,6 +436,46 @@ impl PickerDelegate for RoverDelegate {
                             .to_string()
                     }
                 });
+
+                // Check for AI trigger prefix
+                let is_ai_query = self.ai_enabled
+                    && self.ai_session.is_some()
+                    && (query.starts_with("? ") || query.starts_with("ai "));
+
+                if is_ai_query {
+                    let prompt = if query.starts_with("? ") {
+                        query[2..].to_string()
+                    } else {
+                        query[3..].to_string()
+                    };
+
+                    if !prompt.is_empty() {
+                        self.ai_result = None;
+                        self.ai_loading = true;
+
+                        let session = self.ai_session.clone().unwrap();
+                        cx.spawn(async move |this, cx: &mut AsyncApp| {
+                            let result = session.respond(&prompt).await;
+                            let _ = cx.update(|cx| {
+                                let _ = this.update(cx, |picker, cx| {
+                                    picker.delegate.ai_loading = false;
+                                    picker.delegate.ai_result = Some(match result {
+                                        Ok(text) => text,
+                                        Err(e) => format!("Error: {e}"),
+                                    });
+                                    cx.notify();
+                                });
+                            });
+                        })
+                        .detach();
+                    } else {
+                        self.ai_result = None;
+                        self.ai_loading = false;
+                    }
+                } else {
+                    self.ai_result = None;
+                    self.ai_loading = false;
+                }
 
                 let candidates: Vec<StringMatchCandidate> = self
                     .all_commands
@@ -426,18 +513,26 @@ impl PickerDelegate for RoverDelegate {
     fn confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
-                if self.calculator_result.is_some() && self.selected_ix == 0 {
+                let has_calc = self.calculator_result.is_some();
+                let has_ai = self.ai_loading || self.ai_result.is_some();
+                let ai_ix = if has_calc { 1 } else { 0 };
+                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+
+                if has_calc && self.selected_ix == 0 {
                     if let Some(result) = &self.calculator_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
                 }
 
-                let match_ix = if self.calculator_result.is_some() {
-                    self.selected_ix - 1
-                } else {
-                    self.selected_ix
-                };
+                if has_ai && self.selected_ix == ai_ix {
+                    if let Some(result) = &self.ai_result {
+                        cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
+                    }
+                    return false;
+                }
+
+                let match_ix = self.selected_ix.saturating_sub(command_offset);
 
                 if let Some(string_match) = self.matches.get(match_ix) {
                     if let Some(command) = self.all_commands.get(string_match.candidate_id) {
@@ -512,17 +607,26 @@ impl PickerDelegate for RoverDelegate {
     fn actions_for_selected(&self) -> Vec<ItemAction> {
         match self.view_mode {
             ViewMode::Main => {
-                let match_ix = if self.calculator_result.is_some() {
-                    if self.selected_ix == 0 {
-                        return vec![ItemAction {
-                            name: "Copy Result".into(),
-                            shortcut: Some("\u{21A9}".into()),
-                        }];
-                    }
-                    self.selected_ix - 1
-                } else {
-                    self.selected_ix
-                };
+                let has_calc = self.calculator_result.is_some();
+                let has_ai = self.ai_loading || self.ai_result.is_some();
+                let ai_ix = if has_calc { 1 } else { 0 };
+                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+
+                if has_calc && self.selected_ix == 0 {
+                    return vec![ItemAction {
+                        name: "Copy Result".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
+                if has_ai && self.selected_ix == ai_ix {
+                    return vec![ItemAction {
+                        name: "Copy Answer".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
+                let match_ix = self.selected_ix.saturating_sub(command_offset);
 
                 if let Some(string_match) = self.matches.get(match_ix) {
                     if let Some(command) = self.all_commands.get(string_match.candidate_id) {
@@ -608,18 +712,26 @@ impl PickerDelegate for RoverDelegate {
     fn execute_action(&mut self, action_ix: usize, cx: &mut Context<Picker<Self>>) -> bool {
         match self.view_mode {
             ViewMode::Main => {
-                if self.calculator_result.is_some() && self.selected_ix == 0 {
+                let has_calc = self.calculator_result.is_some();
+                let has_ai = self.ai_loading || self.ai_result.is_some();
+                let ai_ix = if has_calc { 1 } else { 0 };
+                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+
+                if has_calc && self.selected_ix == 0 {
                     if let Some(result) = &self.calculator_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
                 }
 
-                let match_ix = if self.calculator_result.is_some() {
-                    self.selected_ix - 1
-                } else {
-                    self.selected_ix
-                };
+                if has_ai && self.selected_ix == ai_ix {
+                    if let Some(result) = &self.ai_result {
+                        cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
+                    }
+                    return false;
+                }
+
+                let match_ix = self.selected_ix.saturating_sub(command_offset);
 
                 if let Some(string_match) = self.matches.get(match_ix) {
                     if let Some(command) = self.all_commands.get(string_match.candidate_id) {
@@ -734,15 +846,20 @@ impl PickerDelegate for RoverDelegate {
 
         match self.view_mode {
             ViewMode::Main => {
-                if self.calculator_result.is_some() && ix == 0 {
+                let has_calc = self.calculator_result.is_some();
+                let has_ai = self.ai_loading || self.ai_result.is_some();
+                let ai_ix = if has_calc { 1 } else { 0 };
+                let command_offset = (if has_calc { 1 } else { 0 }) + (if has_ai { 1 } else { 0 });
+
+                if has_calc && ix == 0 {
                     return Some(self.render_calculator_row(selected, colors));
                 }
 
-                let match_ix = if self.calculator_result.is_some() {
-                    ix - 1
-                } else {
-                    ix
-                };
+                if has_ai && ix == ai_ix {
+                    return Some(self.render_ai_row(selected, colors));
+                }
+
+                let match_ix = ix.saturating_sub(command_offset);
                 let string_match = self.matches.get(match_ix)?;
                 let command = self.all_commands.get(string_match.candidate_id)?;
                 Some(self.render_command_row(command, selected, colors))

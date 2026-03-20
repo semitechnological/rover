@@ -883,8 +883,13 @@ impl Element for WebViewElement {
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
 pub fn open_browser_window(cx: &mut App) {
+    open_browser_window_with_url(cx, DEFAULT_URL);
+}
+
+pub fn open_browser_window_with_url(cx: &mut App, url: &str) {
     cx.bind_keys([KeyBinding::new("cmd-\\", FocusCommandBar, Some("BrowserWindow"))]);
 
+    let url = url.to_string();
     let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
     cx.open_window(
         WindowOptions {
@@ -897,7 +902,27 @@ pub fn open_browser_window(cx: &mut App) {
             window_background: WindowBackgroundAppearance::Opaque,
             ..Default::default()
         },
-        |window, cx| cx.new(|cx| BrowserWindow::new(window, cx)),
+        move |window, cx| {
+            cx.new(|cx| {
+                let mut bw = BrowserWindow::new(window, cx);
+                if let Some(tab) = bw.tabs.get_mut(0) {
+                    tab.url = url.clone();
+                    tab.title = looks_like_url(&url)
+                        .then(|| {
+                            url.strip_prefix("https://")
+                                .or_else(|| url.strip_prefix("http://"))
+                                .unwrap_or(&url)
+                                .split('/')
+                                .next()
+                                .unwrap_or(&url)
+                                .trim_start_matches("www.")
+                                .to_string()
+                        })
+                        .unwrap_or_else(|| url.clone());
+                }
+                bw
+            })
+        },
     )
     .ok();
 }

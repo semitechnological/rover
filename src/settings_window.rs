@@ -17,6 +17,19 @@ pub struct SettingsView {
     ai_enabled: bool,
     ai_terminal_enabled: bool,
     picker_position: String,
+    hotkey_key_name: String,
+    hotkey_modifiers: u32,
+    hotkey_display: String,
+    // Focus handle so the Hotkeys section can receive raw key events
+    focus_handle: FocusHandle,
+    // Pulse states — true while the corresponding key is being pressed
+    pulse_key: bool,
+    pulse_cmd: bool,
+    pulse_opt: bool,
+    pulse_ctrl: bool,
+    // Recording state — Raycast-style click-to-record
+    hotkey_recording: bool,
+    recording_mods: u32,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -96,6 +109,35 @@ impl SettingsView {
             .ok()
             .flatten()
             .unwrap_or_else(|| "center".to_string());
+        // Try to load a custom recorded hotkey; fall back to preset
+        let (hotkey_key_name, hotkey_modifiers, hotkey_display) = {
+            let stored_key = db.get_setting("hotkey_key_name").ok().flatten();
+            let stored_mods = db
+                .get_setting("hotkey_modifiers")
+                .ok()
+                .flatten()
+                .and_then(|v| v.parse::<u32>().ok());
+            match (stored_key, stored_mods) {
+                (Some(k), Some(m)) => {
+                    let display = hotkey::display_for_combo(m, &k);
+                    (k, m, display)
+                }
+                _ => {
+                    let preset = db
+                        .get_setting("hotkey_preset")
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "cmd-space".to_string());
+                    let (_, _, _, m) = hotkey::PRESETS
+                        .iter()
+                        .find(|(id, _, _, _)| *id == preset.as_str())
+                        .copied()
+                        .unwrap_or(("cmd-space", "⌘ Space", hotkey::K_VK_SPACE, hotkey::CMD_KEY));
+                    let display = hotkey::display_for_combo(m, "space");
+                    ("space".to_string(), m, display)
+                }
+            }
+        };
 
         Self {
             db,
@@ -108,8 +150,146 @@ impl SettingsView {
             ai_enabled,
             ai_terminal_enabled,
             picker_position,
+            hotkey_key_name,
+            hotkey_modifiers,
+            hotkey_display,
+            focus_handle: cx.focus_handle(),
+            pulse_key: false,
+            pulse_cmd: false,
+            pulse_opt: false,
+            pulse_ctrl: false,
+            hotkey_recording: false,
+            recording_mods: 0,
         }
     }
+
+    // ── Hotkey pulse helpers ──────────────────────────────────────────────────
+
+    /// Returns (modifier_parts, key_part) where each is (display_text, is_pulsing).
+    fn hotkey_badge_parts(&self) -> (Vec<(&'static str, bool)>, (String, bool)) {
+        let mods = self.hotkey_modifiers;
+        let mut modifier_parts = Vec::new();
+        if mods & hotkey::CTRL_KEY  != 0 { modifier_parts.push(("⌃", self.pulse_ctrl)); }
+        if mods & hotkey::OPT_KEY   != 0 { modifier_parts.push(("⌥", self.pulse_opt)); }
+        if mods & hotkey::CMD_KEY   != 0 { modifier_parts.push(("⌘", self.pulse_cmd)); }
+        let key_display = match self.hotkey_key_name.as_str() {
+            "space" => "Space".to_string(),
+            "return" => "↩".to_string(),
+            "tab" => "⇥".to_string(),
+            "backspace" | "delete" => "⌫".to_string(),
+            "escape" => "⎋".to_string(),
+            other => other.to_uppercase(),
+        };
+        (modifier_parts, (key_display, self.pulse_key))
+    }
+
+    fn on_hotkey_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.active_section != SettingsSection::Hotkeys {
+            return;
+        }
+
+        let key = event.keystroke.key.as_str();
+
+        // Ignore bare modifier keys — they don't count as a trigger key
+        if matches!(key, "control" | "alt" | "shift" | "cmd" | "super" | "meta" | "capslock") {
+            return;
+        }
+
+        if self.hotkey_recording {
+            // Escape cancels recording
+            if key == "escape" {
+                self.hotkey_recording = false;
+                self.recording_mods = 0;
+                cx.notify();
+                return;
+            }
+
+            let mods = self.recording_mods;
+            let key_name = key.to_string();
+
+            // Need at least one modifier for a global hotkey
+            if mods == 0 {
+                return;
+            }
+
+            if let Some(vk) = hotkey::key_name_to_vk(&key_name) {
+                let display = hotkey::display_for_combo(mods, &key_name);
+                self.hotkey_key_name = key_name.clone();
+                self.hotkey_modifiers = mods;
+                self.hotkey_display = display.clone();
+                self.hotkey_recording = false;
+                self.recording_mods = 0;
+
+                // Persist the custom hotkey to DB
+                let _ = self.db.set_setting("hotkey_key_name", &key_name);
+                let _ = self.db.set_setting("hotkey_modifiers", &mods.to_string());
+
+                // Re-register the Carbon hotkey
+                hotkey::unregister_main_hotkey();
+                hotkey::register_main_hotkey(vk, mods);
+
+                cx.notify();
+            }
+            return;
+        }
+
+        // Not recording — pulse preview mode (Space key only)
+        if event.keystroke.key != "space" {
+            return;
+        }
+        self.pulse_key = true;
+        cx.notify();
+        // Reset after 300 ms
+        cx.spawn(async move |entity, cx: &mut AsyncApp| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(300))
+                .await;
+            let _ = entity.update(cx, |this: &mut SettingsView, cx| {
+                this.pulse_key = false;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn on_hotkey_mods_changed(&mut self, event: &ModifiersChangedEvent, cx: &mut Context<Self>) {
+        if self.active_section != SettingsSection::Hotkeys {
+            return;
+        }
+
+        if self.hotkey_recording {
+            // Track which modifiers are held during recording
+            self.recording_mods = hotkey::mods_from_gpui(
+                event.modifiers.platform,
+                event.modifiers.alt,
+                event.modifiers.control,
+                event.modifiers.shift,
+            );
+            cx.notify();
+            return;
+        }
+
+        // Pulse preview: light up modifier badges matching the current hotkey
+        let mods = self.hotkey_modifiers;
+        let mut changed = false;
+        if mods & hotkey::CMD_KEY != 0 {
+            let v = event.modifiers.platform;
+            if self.pulse_cmd != v { self.pulse_cmd = v; changed = true; }
+        }
+        if mods & hotkey::OPT_KEY != 0 {
+            let v = event.modifiers.alt;
+            if self.pulse_opt != v { self.pulse_opt = v; changed = true; }
+        }
+        if mods & hotkey::CTRL_KEY != 0 {
+            let v = event.modifiers.control;
+            if self.pulse_ctrl != v { self.pulse_ctrl = v; changed = true; }
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    // ── UI helpers ────────────────────────────────────────────────────────────
 
     fn section_header(text: &str, colors: &rover_theme::ThemeColors) -> Div {
         div()
@@ -186,6 +366,31 @@ impl SettingsView {
             .border_1()
             .border_color(colors.border_variant)
             .text_color(colors.text_muted)
+            .text_size(px(11.0))
+            .child(SharedString::from(text.to_string()))
+    }
+
+    fn kbd_badge_pulsed(text: &str, pulsing: bool, colors: &rover_theme::ThemeColors) -> Div {
+        div()
+            .px(px(6.0))
+            .py(px(3.0))
+            .rounded(px(4.0))
+            .bg(if pulsing {
+                colors.text_accent.opacity(0.15)
+            } else {
+                colors.element_hover
+            })
+            .border_1()
+            .border_color(if pulsing {
+                colors.text_accent
+            } else {
+                colors.border_variant
+            })
+            .text_color(if pulsing {
+                colors.text_accent
+            } else {
+                colors.text_muted
+            })
             .text_size(px(11.0))
             .child(SharedString::from(text.to_string()))
     }
@@ -364,18 +569,75 @@ impl SettingsView {
     }
 
     fn render_hotkeys(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
+        let (mod_parts, (key_text, key_pulsing)) = self.hotkey_badge_parts();
+        let is_recording = self.hotkey_recording;
+        let recording_mods = self.recording_mods;
+
         div()
             .flex()
             .flex_col()
             .child(Self::section_header("Hotkeys", colors))
+            // Row: current hotkey display with pulsable badges + click-to-record
             .child(
                 Self::setting_row(colors)
                     .child(Self::setting_label(
                         "Toggle Rover",
-                        "Show or hide the main window",
+                        if is_recording {
+                            "Press a key combination (Esc to cancel)"
+                        } else {
+                            "Click the badge to change • press keys to preview"
+                        },
                         colors,
                     ))
-                    .child(Self::kbd_badge("\u{2318} Space", colors)),
+                    .child(
+                        div()
+                            .id("hotkey-record-area")
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _e, w, cx| {
+                                this.hotkey_recording = !this.hotkey_recording;
+                                this.recording_mods = 0;
+                                if this.hotkey_recording {
+                                    w.focus(&this.focus_handle);
+                                }
+                                cx.notify();
+                            }))
+                            .map(|el| {
+                                if is_recording {
+                                    // Show "recording" state: highlight held mods
+                                    let display = if recording_mods == 0 {
+                                        "Hold modifiers...".to_string()
+                                    } else {
+                                        hotkey::display_for_combo(recording_mods, "?")
+                                    };
+                                    el.child(
+                                        div()
+                                            .px(px(10.0))
+                                            .py(px(4.0))
+                                            .rounded(px(5.0))
+                                            .border_1()
+                                            .border_color(colors.text_accent)
+                                            .bg(colors.text_accent.opacity(0.12))
+                                            .text_color(colors.text_accent)
+                                            .text_size(px(12.0))
+                                            .child(SharedString::from(display)),
+                                    )
+                                } else {
+                                    // Show current hotkey with pulsable badges
+                                    el.children(
+                                        mod_parts
+                                            .into_iter()
+                                            .map(|(text, pulsing)| {
+                                                Self::kbd_badge_pulsed(text, pulsing, colors)
+                                            })
+                                            .collect::<Vec<_>>(),
+                                    )
+                                    .child(Self::kbd_badge_pulsed(&key_text, key_pulsing, colors))
+                                }
+                            }),
+                    ),
             )
             .child(
                 Self::setting_row(colors)
@@ -586,6 +848,12 @@ impl SettingsView {
     }
 }
 
+impl Focusable for SettingsView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
 impl Render for SettingsView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let t = theme(cx);
@@ -602,10 +870,25 @@ impl Render for SettingsView {
 
         let active = self.active_section;
 
+        // Capture the entity handle so the key/modifier closures can update our state.
+        // These closures are `Fn + 'static` — Entity<T> is Clone + 'static.
+        let entity_kd = cx.entity();
+        let entity_mc = entity_kd.clone();
+
         div()
             .size_full()
             .flex()
             .flex_col()
+            // Track focus so this root div can receive key events (used for hotkey preview)
+            .track_focus(&self.focus_handle)
+            .on_key_down(move |event: &KeyDownEvent, _: &mut Window, cx: &mut App| {
+                entity_kd.update(cx, |this, cx| this.on_hotkey_key_down(event, cx));
+            })
+            .on_modifiers_changed(
+                move |event: &ModifiersChangedEvent, _: &mut Window, cx: &mut App| {
+                    entity_mc.update(cx, |this, cx| this.on_hotkey_mods_changed(event, cx));
+                },
+            )
             // Custom titlebar area (transparent native titlebar, we draw our own)
             .child(
                 div()
@@ -674,8 +957,13 @@ impl Render for SettingsView {
                                             })
                                             .child(SharedString::from(label)),
                                     )
-                                    .on_click(cx.listener(move |this, _e, _w, cx| {
+                                    .on_click(cx.listener(move |this, _e, w, cx| {
                                         this.active_section = section;
+                                        // Give focus to the settings view when switching to
+                                        // Hotkeys so key events reach the pulse preview
+                                        if section == SettingsSection::Hotkeys {
+                                            w.focus(&this.focus_handle);
+                                        }
                                         cx.notify();
                                     }))
                             })),

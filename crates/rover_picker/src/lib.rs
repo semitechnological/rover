@@ -27,6 +27,7 @@ pub enum PickerEvent {
     Dismiss,
     OpenSettings,
     ToggleActions,
+    OpenTerminal,
 }
 
 pub trait PickerDelegate: Sized + 'static {

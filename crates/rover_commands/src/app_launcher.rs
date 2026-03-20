@@ -1,6 +1,20 @@
 use crate::{Command, CommandKind, CommandRegistry};
 use std::path::PathBuf;
 
+/// Terminal emulator app names to exclude from the launcher list.
+/// Rover has its own built-in terminal; these apps just confuse the picker.
+const TERMINAL_APPS: &[&str] = &[
+    "Terminal",
+    "iTerm2",
+    "iTerm",
+    "Alacritty",
+    "Kitty",
+    "WezTerm",
+    "Warp",
+    "Ghostty",
+    "Hyper",
+];
+
 /// Scan /Applications and ~/Applications for .app bundles.
 pub fn discover_apps() -> Vec<Command> {
     let mut apps = Vec::new();
@@ -22,6 +36,9 @@ pub fn discover_apps() -> Vec<Command> {
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
+                    if TERMINAL_APPS.iter().any(|t| name.eq_ignore_ascii_case(t)) {
+                        continue;
+                    }
                     apps.push(Command {
                         name: name.clone(),
                         description: format!("Launch {}", name),

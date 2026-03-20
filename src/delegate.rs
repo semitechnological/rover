@@ -455,6 +455,10 @@ impl PickerDelegate for RoverDelegate {
                                     cx.emit(rover_picker::PickerEvent::OpenSettings);
                                     return false;
                                 }
+                                BuiltInCommand::OpenTerminal => {
+                                    cx.emit(rover_picker::PickerEvent::OpenTerminal);
+                                    return true;
+                                }
                                 BuiltInCommand::Snippets => return false,
                             }
                         }

@@ -34,6 +34,7 @@ pub enum BuiltInCommand {
     FileSearch,
     Settings,
     Snippets,
+    OpenTerminal,
 }
 
 pub struct CommandRegistry {
@@ -99,6 +100,15 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         icon: None,
         kind: CommandKind::BuiltIn {
             id: BuiltInCommand::Settings,
+        },
+        has_submenu: false,
+    });
+    registry.register(Command {
+        name: "Terminal".into(),
+        description: "Open floating terminal window".into(),
+        icon: None,
+        kind: CommandKind::BuiltIn {
+            id: BuiltInCommand::OpenTerminal,
         },
         has_submenu: false,
     });

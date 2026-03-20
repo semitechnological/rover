@@ -101,6 +101,7 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                                     .detach();
                                 }
                                 PickerEvent::ToggleActions => {}
+                                PickerEvent::OpenTerminal => {}
                             }
                         },
                     )

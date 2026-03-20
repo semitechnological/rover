@@ -3,3 +3,6 @@
 # the OS Swift runtime. cargo:rustc-link-arg in a dependency's build script
 # doesn't propagate rpath to the final binary, so we set it here instead.
 rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]
+
+[env]
+DYLD_LIBRARY_PATH = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx"

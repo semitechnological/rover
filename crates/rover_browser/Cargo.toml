@@ -1,0 +1,19 @@
+[package]
+name = "rover_browser"
+version = "0.1.0"
+edition = "2021"
+description = "WebKit browser window for Rover, driven by a command bar"
+
+[lib]
+path = "src/rover_browser.rs"
+
+[dependencies]
+gpui.workspace = true
+log.workspace = true
+anyhow.workspace = true
+urlencoding = "2"
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.26"
+objc = "0.2"

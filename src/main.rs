@@ -5,7 +5,7 @@ mod settings_window;
 
 use delegate::RoverDelegate;
 use gpui::*;
-use rover_commands::{register_apps, register_builtins, CommandRegistry};
+use rover_commands::{register_apps, register_browser, register_builtins, CommandRegistry};
 use rover_db::RoverDb;
 use rover_extensions::{load_extensions, register_extension_themes};
 use rover_picker::{bind_picker_keys, Picker, PickerEvent};
@@ -25,6 +25,7 @@ fn main() {
 
         let mut cmd_registry = CommandRegistry::new();
         register_builtins(&mut cmd_registry);
+        register_browser(&mut cmd_registry);
         register_apps(&mut cmd_registry);
         let commands: Vec<_> = cmd_registry.commands().to_vec();
 

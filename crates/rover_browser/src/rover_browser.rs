@@ -1,6 +1,8 @@
 #![recursion_limit = "4096"]
 
 mod webview;
+#[cfg(target_os = "macos")]
+mod content_blocker;
 
 use gpui::*;
 use std::time::{Duration, Instant};

@@ -21,6 +21,10 @@ mod macos {
         ) -> Option<Self> {
             unsafe {
                 let config: id = msg_send![class!(WKWebViewConfiguration), new];
+
+                // Apply uBOL-derived content blocking rules to this configuration.
+                crate::content_blocker::apply_to_config(config);
+
                 let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
                 let webview: id = msg_send![class!(WKWebView), alloc];
                 let webview: id =

@@ -31,11 +31,20 @@ Math expressions are always evaluated alongside matches.
 - macOS 14+
 - Apple Silicon (for AI features — macOS 26+ required)
 - Xcode with macOS 26 SDK (for AI builds)
+- **Xcode Command Line Tools** — required at runtime; the AI crate (`rusty_foundationmodels`) links against `libswift_Concurrency.dylib` which ships with Xcode
 
 ## Building
 
 ```sh
-cargo build -p rover
+cargo build
+```
+
+## Running
+
+`cargo run` requires Xcode's Swift runtime on the dynamic library path. A `.cargo/config.toml` is included that sets this automatically, but it assumes Xcode is installed at the default path (`/Applications/Xcode.app`). If it isn't, run with:
+
+```sh
+DYLD_LIBRARY_PATH="/path/to/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-5.5/macosx" cargo run
 ```
 
 ## Settings

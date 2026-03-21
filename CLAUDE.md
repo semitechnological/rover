@@ -141,3 +141,4 @@ WindowOptions {
 - Truncate Wikipedia results before passing to AI — let AI summarise
 - Ask the AI to write AppleScript — it does this autonomously via `run_applescript`
 - Use `when_some` or `hide_window` — not in gpui 0.2 public API
+- Use `brew install` — use `wax install` for CLI tools and `bun install` for JS/TS packages

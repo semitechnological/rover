@@ -846,8 +846,10 @@ fn close_window_tool() -> ToolDefinition {
          Use when the user asks to close, quit, or dismiss the current window.",
         Schema::new("CloseWindowArgs"),
         |_args| {
-            // Use Cmd+W keystroke instead of menu clicking (no assistive access needed)
-            let script = r#"tell application "System Events" to keystroke "w" using command down"#;
+            let script = r#"tell application "System Events"
+    set frontApp to name of first application process whose frontmost is true
+end tell
+tell application frontApp to close window 1"#;
             match run_osascript(script) {
                 Ok(_) => Ok("Closed frontmost window".to_string()),
                 Err(e) => Err(e),
@@ -886,15 +888,21 @@ fn close_browser_tab_tool() -> ToolDefinition {
     ToolDefinition::new(
         "close_browser_tab",
         "Close the active tab in the Rover browser. Use when the user asks to close the current \
-         browser tab, close a tab, or close the current page.",
+         browser tab, close a tab, or close the current page. \
+         This works by signalling the Rover browser to close its active tab.",
         Schema::new("CloseBrowserTabArgs"),
         |_args| {
-            // Send Cmd+W to close the frontmost browser tab
-            let script = r#"tell application "System Events" to keystroke "w" using command down"#;
-            match run_osascript(script) {
-                Ok(_) => Ok("Closed browser tab".to_string()),
-                Err(e) => Err(e),
+            // Signal Rover's browser to close the active tab via a flag file.
+            // The browser polls for this and closes the tab internally.
+            let flag_path = dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join("rover")
+                .join(".close_tab_flag");
+            if let Some(parent) = flag_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
             }
+            let _ = std::fs::write(&flag_path, "close");
+            Ok("Closing browser tab".to_string())
         },
     )
 }

@@ -112,6 +112,13 @@ impl RoverDb {
                 title TEXT NOT NULL DEFAULT '',
                 created_at INTEGER NOT NULL DEFAULT (unixepoch())
             );
+
+            CREATE TABLE IF NOT EXISTS browser_session (
+                tab_index INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                is_active INTEGER NOT NULL DEFAULT 0
+            );
             ",
         )?;
         Ok(())
@@ -376,6 +383,46 @@ impl RoverDb {
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    // --- Browser Session ---
+
+    /// Save the current tab list for session restore.
+    pub fn save_session(&self, tabs: &[(String, String, bool)]) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM browser_session", [])?;
+        let mut stmt = conn.prepare(
+            "INSERT INTO browser_session (tab_index, url, title, is_active) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for (i, (url, title, active)) in tabs.iter().enumerate() {
+            stmt.execute(rusqlite::params![i as i64, url, title, *active as i64])?;
+        }
+        Ok(())
+    }
+
+    /// Load the saved session. Returns (url, title, is_active) tuples.
+    pub fn load_session(&self) -> Result<Vec<(String, String, bool)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT url, title, is_active FROM browser_session ORDER BY tab_index ASC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)? != 0,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Clear saved session data.
+    pub fn clear_session(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM browser_session", [])?;
+        Ok(())
     }
 
     /// Returns the bookmark id for the given URL if it exists, or None.

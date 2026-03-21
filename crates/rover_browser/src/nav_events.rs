@@ -10,6 +10,9 @@ pub enum NavEvent {
     NewTabRequested { url: String },
     DownloadStarted { suggested_filename: String, destination: String },
     FindResult { found: bool, match_count: u32 },
+    /// The web content process crashed or was terminated by the OS.
+    /// The tab should reload its URL to recover.
+    ProcessTerminated,
 }
 
 pub type NavEventQueue = Arc<Mutex<Vec<NavEvent>>>;

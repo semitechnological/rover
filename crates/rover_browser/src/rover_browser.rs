@@ -14,6 +14,11 @@ mod download_manager;
 mod extensions;
 mod history;
 mod bookmarks;
+mod dns_prefetch;
+#[cfg(target_os = "macos")]
+mod resource_hints;
+#[cfg(target_os = "macos")]
+mod warmup_pool;
 pub mod transport;
 
 use gpui::*;
@@ -315,6 +320,7 @@ pub struct BrowserWindow {
     pub history_manager: Option<HistoryManager>,
     pub bookmark_manager: Option<BookmarkManager>,
     pub semantic_index: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+    db: Option<Arc<rover_db::RoverDb>>,
     focus: FocusHandle,
     _lifecycle_task: Task<()>,
     _event_task: Task<()>,
@@ -331,6 +337,9 @@ impl BrowserWindow {
         let history_manager = db.as_ref().map(|d| HistoryManager::new(d.clone()));
         let bookmark_manager = db.as_ref().map(|d| BookmarkManager::new(d.clone()));
 
+        // Pre-resolve common CDN hostnames in the background.
+        dns_prefetch::prefetch_common();
+
         let lifecycle_task = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(LIFECYCLE_INTERVAL).await;
             if this.update(cx, |b, cx| b.run_lifecycle(cx)).is_err() {
@@ -345,21 +354,53 @@ impl BrowserWindow {
             }
         });
 
+        // Restore previous session if available.
+        let (tabs, active_tab) = match db.as_ref().and_then(|d| d.load_session().ok()) {
+            Some(session) if !session.is_empty() => {
+                let mut active = 0;
+                let tabs: Vec<BrowserTab> = session
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (url, title, is_active))| {
+                        if is_active {
+                            active = i;
+                        }
+                        BrowserTab {
+                            title,
+                            url,
+                            state: if is_active { TabState::Active } else { TabState::Frozen },
+                            last_active: Instant::now(),
+                            events: nav_events::new_queue(),
+                            #[cfg(target_os = "macos")]
+                            webview_handle: None,
+                        }
+                    })
+                    .collect();
+                log::info!("session: restored {} tabs", tabs.len());
+                (tabs, active)
+            }
+            _ => {
+                let tabs = vec![BrowserTab {
+                    title: "Perplexity".to_string(),
+                    url: DEFAULT_URL.to_string(),
+                    state: TabState::Active,
+                    last_active: Instant::now(),
+                    events: nav_events::new_queue(),
+                    #[cfg(target_os = "macos")]
+                    webview_handle: None,
+                }];
+                (tabs, 0)
+            }
+        };
+
         Self {
             semantic_index: None,
-            tabs: vec![BrowserTab {
-                title: "Perplexity".to_string(),
-                url: DEFAULT_URL.to_string(),
-                state: TabState::Active,
-                last_active: Instant::now(),
-                events: nav_events::new_queue(),
-                #[cfg(target_os = "macos")]
-                webview_handle: None,
-            }],
-            active_tab: 0,
+            tabs,
+            active_tab,
             overlay_hint: None,
             history_manager,
             bookmark_manager,
+            db: db.clone(),
             focus,
             _lifecycle_task: lifecycle_task,
             _event_task: event_task,
@@ -411,6 +452,7 @@ impl BrowserWindow {
         if let Some(tab) = self.tabs.get(self.active_tab) {
             if let Some(wv) = &tab.webview_handle {
                 wv.hide();
+                wv.suspend_media();
             }
         }
 
@@ -422,6 +464,7 @@ impl BrowserWindow {
         #[cfg(target_os = "macos")]
         if let Some(wv) = &tab.webview_handle {
             wv.show();
+            wv.resume_media();
         }
 
         cx.notify();
@@ -431,6 +474,7 @@ impl BrowserWindow {
     pub fn execute_action_external(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
         match action {
             BrowserAction::Navigate(url) => {
+                dns_prefetch::prefetch_url(&url);
                 if let Some(tab) = self.tabs.get_mut(self.active_tab) {
                     tab.url = url.clone();
                     tab.last_active = Instant::now();
@@ -607,6 +651,20 @@ impl BrowserWindow {
         self.tabs[self.active_tab].last_active = Instant::now();
     }
 
+    fn save_session(&self) {
+        if let Some(db) = &self.db {
+            let tabs: Vec<(String, String, bool)> = self
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (t.url.clone(), t.title.clone(), i == self.active_tab))
+                .collect();
+            if let Err(e) = db.save_session(&tabs) {
+                log::warn!("session save failed: {e}");
+            }
+        }
+    }
+
     fn drain_events(&mut self, cx: &mut Context<Self>) {
         let mut changed = false;
 
@@ -708,6 +766,14 @@ impl BrowserWindow {
                             self.overlay_hint = Some("No matches".to_string());
                         }
                     }
+                    NavEvent::ProcessTerminated => {
+                        log::warn!("browser: tab {i} web content process terminated, reloading");
+                        #[cfg(target_os = "macos")]
+                        if let Some(wv) = &tab.webview_handle {
+                            wv.navigate(&tab.url);
+                        }
+                        self.overlay_hint = Some("Page crashed — reloading".to_string());
+                    }
                 }
             }
         }
@@ -733,6 +799,7 @@ impl BrowserWindow {
                         #[cfg(target_os = "macos")]
                         if let Some(wv) = &tab.webview_handle {
                             wv.hide();
+                            wv.suspend_media();
                         }
                     }
                 }
@@ -771,6 +838,9 @@ impl BrowserWindow {
                 self.active_tab = self.active_tab.min(self.tabs.len().saturating_sub(1));
             }
         }
+
+        // Persist session state for restore on next launch.
+        self.save_session();
 
         cx.notify();
     }
@@ -941,9 +1011,14 @@ impl Element for WebViewElement {
                             }
                         } else {
                             let events = tab.events.clone();
-                            if let Some(wv) = WebViewHandle::create(ns_view, x, y, width, height, events) {
+                            // Try the warm-up pool first (pre-spun process), fall back to fresh.
+                            let wv = warmup_pool::take(ns_view, x, y, width, height, events.clone())
+                                .or_else(|| WebViewHandle::create(ns_view, x, y, width, height, events));
+                            if let Some(wv) = wv {
                                 wv.navigate(&tab.url);
                                 tab.webview_handle = Some(wv);
+                                // Refill the pool in the background for next time.
+                                unsafe { warmup_pool::refill(ns_view); }
                             }
                         }
                     }

@@ -114,6 +114,22 @@ mod macos {
                     .push(NavEvent::LoadFailed { error: desc });
             }
 
+            // Fired when the web content process crashes or is terminated by the OS.
+            // We push a ProcessTerminated event so the tab auto-reloads.
+            #[unsafe(method(webViewWebContentProcessDidTerminate:))]
+            unsafe fn webview_web_content_process_did_terminate(
+                &self,
+                web_view: &WKWebView,
+            ) {
+                let url = url_from_webview(web_view);
+                log::warn!("content process terminated for {url}");
+                self.ivars()
+                    .events
+                    .lock()
+                    .unwrap()
+                    .push(NavEvent::ProcessTerminated);
+            }
+
             // Decide whether to allow or cancel a navigation action.
             // We allow all normal navigations; mailto: and tel: links are
             // handled by the OS via the "allow" path (WKWebView forwards

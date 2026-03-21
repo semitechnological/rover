@@ -1,4 +1,9 @@
-[
+/// Network-blocking rules in WKContentRuleList JSON format.
+///
+/// Covers major ad networks (DoubleClick, AdSense, Criteo, Taboola, Outbrain,
+/// AppNexus, 30+ more), trackers (GA, FB Pixel, Hotjar, Segment, Amplitude,
+/// etc.), and css-display-none rules for common ad slot selectors.
+pub(super) const RULES_JSON: &str = r##"[
   {"trigger":{"url-filter":".*\\.doubleclick\\.net"},"action":{"type":"block"}},
   {"trigger":{"url-filter":".*\\.googlesyndication\\.com"},"action":{"type":"block"}},
   {"trigger":{"url-filter":".*googleadservices\\.com"},"action":{"type":"block"}},
@@ -155,4 +160,4 @@
   {"trigger":{"url-filter":".*"},"action":{"type":"css-display-none","selector":"[id*='taboola'], [class*='taboola'], [id*='outbrain'], [class*='outbrain'], .OUTBRAIN, #carbonads, .carbon-ads"}},
   {"trigger":{"url-filter":".*"},"action":{"type":"css-display-none","selector":"[aria-label*='Advertisement' i], [aria-label*='Sponsored' i], .sponsored, .sponsored-content, .promoted, .promoted-content, .native-ad"}},
   {"trigger":{"url-filter":".*"},"action":{"type":"css-display-none","selector":".dfp-ad, .dfp-slot, .leaderboard-ad, .billboard-ad, .sticky-ad, .fixed-ad, .floating-ad, .overlay-ad, [data-sponsored]"}}
-]
+]"##;

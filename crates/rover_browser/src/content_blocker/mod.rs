@@ -15,6 +15,10 @@
 //!    out tracking SDKs and ad-framework entry-points before page scripts run,
 //!    mirroring uBOL's `web_accessible_resources/` scriptlets.
 
+mod cosmetic;
+mod rules;
+mod scriptlets;
+
 #[cfg(target_os = "macos")]
 mod macos {
     use block::ConcreteBlock;
@@ -23,46 +27,25 @@ mod macos {
     use objc::*;
     use once_cell::sync::Lazy;
 
-    // -------------------------------------------------------------------------
-    // Bundled resources (compiled into the binary)
-    // -------------------------------------------------------------------------
+    use super::cosmetic::COSMETIC_JS;
+    use super::rules::RULES_JSON;
+    use super::scriptlets::SCRIPTLETS_JS;
 
-    /// Network-blocking rules in WKContentRuleList JSON format.
-    static RULES_JSON: &str = include_str!("../resources/content_rules.json");
-
-    /// CSS element-hiding script (cosmetic filtering).
-    static COSMETIC_JS: &str = include_str!("../resources/cosmetic.js");
-
-    /// Ad-framework and tracker stubs (scriptlet injection).
-    static SCRIPTLETS_JS: &str = include_str!("../resources/scriptlets.js");
-
-    /// Bump this whenever `content_rules.json` changes materially to force
-    /// the OS to recompile the cached bytecode.
+    /// Bump this whenever the rules change materially to force the OS to
+    /// recompile the cached bytecode.
     const RULES_ID: &str = "rover-content-blocker-v3";
-
-    // -------------------------------------------------------------------------
-    // Thread-safe id wrapper
-    // -------------------------------------------------------------------------
 
     struct RuleList(id);
     unsafe impl Send for RuleList {}
     unsafe impl Sync for RuleList {}
 
-    // -------------------------------------------------------------------------
-    // Global compiled rule-list (initialised once per process)
-    // -------------------------------------------------------------------------
-
     static CONTENT_RULE_LIST: Lazy<Option<RuleList>> =
         Lazy::new(|| unsafe { compile_rules() }.map(RuleList));
-
-    // -------------------------------------------------------------------------
-    // Rule compilation
-    // -------------------------------------------------------------------------
 
     /// Compile `RULES_JSON` via `WKContentRuleListStore`.
     ///
     /// The store caches compiled bytecode on disk keyed by `RULES_ID`, so the
-    /// JSON→bytecode pass only runs on first launch (or when the ID changes).
+    /// JSON->bytecode pass only runs on first launch (or when the ID changes).
     ///
     /// # Safety
     /// Must be called from the main thread; NSRunLoop is spun to drive the
@@ -96,9 +79,6 @@ mod macos {
                     }
                 }
             } else if list != nil {
-                // The rule list is autoreleased — retain it so it survives
-                // beyond the completion block's autorelease pool, which drains
-                // when the RunLoop iteration that fires this handler returns.
                 let retained: id = msg_send![list, retain];
                 if !retained.is_null() {
                     *result_c.lock().unwrap() = Some(retained);
@@ -115,9 +95,6 @@ mod macos {
             completionHandler: &*completion
         ];
 
-        // Spin the main-thread RunLoop until the completion fires.
-        // This is the standard pattern for synchronising async ObjC callbacks
-        // when you must stay on the main thread.
         let runloop: id = msg_send![class!(NSRunLoop), currentRunLoop];
         while !done.load(Ordering::Acquire) {
             let interval: std::os::raw::c_double = 0.01;
@@ -133,17 +110,8 @@ mod macos {
         list
     }
 
-    // -------------------------------------------------------------------------
-    // User-script helpers
-    // -------------------------------------------------------------------------
-
-    /// `WKUserScriptInjectionTime` values (from WebKit headers).
     const AT_DOCUMENT_START: usize = 0;
 
-    /// Create a `WKUserScript` and add it to the config's userContentController.
-    ///
-    /// `for_main_frame_only = false` means the script also runs inside iframes,
-    /// matching uBOL's `"allFrames": true` content-script setting.
     unsafe fn add_user_script(ucc: id, source: &str, injection_time: usize) {
         let src_ns: id = NSString::alloc(nil).init_str(source);
         let script: id = msg_send![class!(WKUserScript), alloc];
@@ -158,19 +126,10 @@ mod macos {
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Public API
-    // -------------------------------------------------------------------------
-
     /// Apply all three layers of content blocking to a `WKWebViewConfiguration`.
     ///
     /// Call this **before** `initWithFrame:configuration:` so every new WebView
     /// has blocking active from its very first request / paint.
-    ///
-    /// Layers applied:
-    /// - Network rule-list (WKContentRuleList) — blocks ad/tracker requests
-    /// - Cosmetic script  (WKUserScript, document-start) — hides ad elements
-    /// - Scriptlet script (WKUserScript, document-start) — stubs tracking SDKs
     ///
     /// # Safety
     /// `config` must be a valid `WKWebViewConfiguration *` on the main thread.
@@ -182,9 +141,6 @@ mod macos {
         let ucc: id = msg_send![config, userContentController];
 
         // Layer 1 — network blocking via WKContentRuleList.
-        // `Lazy` ensures compile_rules() runs only once per process.
-        // Double-check for nil: the retained pointer should be valid, but
-        // guard defensively to avoid CFRetain(NULL) if something went wrong.
         if let Some(rule_list) = CONTENT_RULE_LIST.as_ref().map(|rl| rl.0) {
             if !rule_list.is_null() {
                 let _: () = msg_send![ucc, addContentRuleList: rule_list];
@@ -194,11 +150,11 @@ mod macos {
             }
         }
 
-        // Layer 2 — cosmetic filtering (CSS element hiding + MutationObserver guard).
+        // Layer 2 — cosmetic filtering.
         add_user_script(ucc, COSMETIC_JS, AT_DOCUMENT_START);
         log::debug!("content_blocker: cosmetic script injected");
 
-        // Layer 3 — scriptlets (ad-framework stubs, tracker no-ops).
+        // Layer 3 — scriptlets.
         add_user_script(ucc, SCRIPTLETS_JS, AT_DOCUMENT_START);
         log::debug!("content_blocker: scriptlet script injected");
     }
@@ -206,6 +162,3 @@ mod macos {
 
 #[cfg(target_os = "macos")]
 pub use macos::apply_to_config;
-
-// On non-macOS targets this module is a no-op; callers are already gated by
-// `#[cfg(target_os = "macos")]`.

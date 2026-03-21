@@ -51,6 +51,9 @@ mod macos {
                 // Apply uBOL-derived content blocking rules to this configuration.
                 crate::content_blocker::apply_to_config(config);
 
+                // Inject preconnect/dns-prefetch hints for common CDN origins.
+                crate::resource_hints::apply_to_config(config);
+
                 let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
                 let webview: id = msg_send![class!(WKWebView), alloc];
                 let webview: id =
@@ -242,6 +245,21 @@ mod macos {
                     evaluateJavaScript: ns_script
                     completionHandler: &*completion
                 ];
+            }
+        }
+
+        /// Suspend all media playback (audio/video) in this webview.
+        /// Call when the tab goes to background to save CPU/battery.
+        pub fn suspend_media(&self) {
+            unsafe {
+                let _: () = msg_send![self.raw, setAllMediaPlaybackSuspended: true];
+            }
+        }
+
+        /// Resume media playback when the tab becomes active again.
+        pub fn resume_media(&self) {
+            unsafe {
+                let _: () = msg_send![self.raw, setAllMediaPlaybackSuspended: false];
             }
         }
 

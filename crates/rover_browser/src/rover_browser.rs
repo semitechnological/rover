@@ -53,10 +53,12 @@ pub struct LiveBrowserTabs {
     pub url_inbox: Vec<String>,
     /// Tab indices to close (pushed by picker, consumed by browser).
     pub close_inbox: Vec<usize>,
+    /// Actions pushed by keybindings (new tab, reload, back, forward).
+    pub action_inbox: Vec<BrowserAction>,
 }
 impl Default for LiveBrowserTabs {
     fn default() -> Self {
-        Self { tabs: Vec::new(), active_tab: 0, url_inbox: Vec::new(), close_inbox: Vec::new() }
+        Self { tabs: Vec::new(), active_tab: 0, url_inbox: Vec::new(), close_inbox: Vec::new(), action_inbox: Vec::new() }
     }
 }
 
@@ -689,11 +691,12 @@ impl BrowserWindow {
     fn drain_events(&mut self, cx: &mut Context<Self>) {
         // Check URL inbox for navigation requests from the picker
         if let Some(ref live) = self.live_tabs {
-            let (urls, close_indices) = {
+            let (urls, close_indices, actions) = {
                 let mut lock = live.lock().unwrap();
                 (
                     std::mem::take(&mut lock.url_inbox),
                     std::mem::take(&mut lock.close_inbox),
+                    std::mem::take(&mut lock.action_inbox),
                 )
             };
             if !urls.is_empty() {
@@ -713,6 +716,14 @@ impl BrowserWindow {
                     if ix < self.tabs.len() {
                         self.close_tab(ix, cx);
                     }
+                }
+                self.save_session();
+                self.update_live_tabs();
+                cx.notify();
+            }
+            if !actions.is_empty() {
+                for action in actions {
+                    self.execute_action_external(action, cx);
                 }
                 self.save_session();
                 self.update_live_tabs();

@@ -266,10 +266,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
         };
         let match_count = self.delegate.match_count();
         let query_is_empty = self.text_input.read(cx).text().is_empty();
-
-        let no_matches = self.delegate.no_matches_text();
         let bg = colors.surface_background;
-        let border_v = colors.border_variant;
         let text_muted = colors.text_muted;
 
         let in_submenu = self.delegate.in_submenu();
@@ -281,53 +278,8 @@ impl<D: PickerDelegate> Render for Picker<D> {
             match_count > 0
         };
 
-        // Build pills container (flex-wrap)
-        let pills = if show_items {
-            let mut pills_div = div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(4.0))
-                .px_2()
-                .py_1();
-
-            for ix in 0..match_count {
-                let selected = ix == self.delegate.selected_index();
-                if let Some(el) = self.delegate.render_match(ix, selected, cx) {
-                    pills_div = pills_div.child(el);
-                }
-            }
-            Some(pills_div)
-        } else {
-            None
-        };
-
-        // Input row
-        let input_row = div()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(border_v)
-            .flex()
-            .items_center()
-            .gap_2()
-            .when(in_submenu, |el| {
-                el.child(
-                    div()
-                        .text_color(colors.text_muted)
-                        .text_size(px(14.0))
-                        .child(SharedString::from("‹ ")),
-                )
-            })
-            .child(
-                div()
-                    .flex_grow()
-                    .text_color(colors.text)
-                    .text_size(px(16.0))
-                    .line_height(px(24.0))
-                    .child(self.text_input.clone()),
-            );
-
+        // Root: fills window, anchors content to bottom.
+        // Window has transparent bg so only content divs are visible.
         let mut root = div()
             .id("picker")
             .key_context("Picker")
@@ -335,41 +287,50 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .size_full()
             .flex()
             .flex_col()
-            .overflow_hidden()
-            .bg(bg)
-            .rounded_xl()
-            .shadow_lg()
+            .justify_end()
             .on_action(cx.listener(Self::handle_select_next))
             .on_action(cx.listener(Self::handle_select_prev))
             .on_action(cx.listener(Self::handle_confirm))
             .on_action(cx.listener(Self::handle_cancel))
             .on_action(cx.listener(Self::handle_show_actions));
 
-        if self.compact {
-            // Compact mode: pills above input
-            if let Some(pills_div) = pills {
-                root = root.child(pills_div);
+        // Floating pills container (above the bar, separate visual element)
+        if show_items {
+            let mut pills_div = div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(4.0))
+                .px_2()
+                .py(px(6.0))
+                .mb(px(6.0))
+                .bg(bg)
+                .rounded_lg()
+                .shadow_md()
+                .border_1()
+                .border_color(colors.border_variant);
+
+            for ix in 0..match_count {
+                let selected = ix == self.delegate.selected_index();
+                if let Some(el) = self.delegate.render_match(ix, selected, cx) {
+                    pills_div = pills_div.child(el);
+                }
             }
-            root = root.child(input_row);
-        } else {
-            // Normal mode: input on top, pills below
-            root = root.child(input_row);
-            if let Some(pills_div) = pills {
-                root = root.child(pills_div);
-            } else if !query_is_empty {
-                root = root.child(div().px_3().py_4().text_color(text_muted).child(no_matches));
-            }
+            root = root.child(pills_div);
         }
 
-        // Action bar overlay
+        // Action bar (floating between pills and input bar)
         if self.show_actions {
             let actions = self.delegate.actions_for_selected();
             if !actions.is_empty() {
                 root = root.child(
                     div()
-                        .border_t_1()
-                        .border_color(border_v)
-                        .bg(colors.surface_background)
+                        .mb(px(4.0))
+                        .bg(bg)
+                        .rounded_lg()
+                        .shadow_md()
+                        .border_1()
+                        .border_color(colors.border_variant)
                         .px_1()
                         .py_1()
                         .flex()
@@ -410,49 +371,46 @@ impl<D: PickerDelegate> Render for Picker<D> {
             }
         }
 
-        // Footer
-        let footer_left = if in_submenu {
-            "ESC to go back"
-        } else if self.show_actions {
-            "ESC to close"
-        } else {
-            ""
-        };
-
-        let footer_right = if self.show_actions {
-            SharedString::from("Actions")
-        } else if in_submenu {
-            SharedString::from(format!("{} items", match_count))
-        } else if match_count > 0 {
-            SharedString::from("\u{2318}K Actions")
-        } else {
-            SharedString::default()
-        };
-
-        if !footer_left.is_empty() || !footer_right.is_empty() {
-            root = root.child(
+        // Input bar — always at the bottom, the main visual element
+        let mut input_bar = div()
+            .px_3()
+            .py_2()
+            .bg(bg)
+            .rounded_xl()
+            .shadow_lg()
+            .border_1()
+            .border_color(colors.border_variant)
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(in_submenu, |el| {
+                el.child(
+                    div()
+                        .text_color(colors.text_muted)
+                        .text_size(px(14.0))
+                        .child(SharedString::from("‹ ")),
+                )
+            })
+            .child(
                 div()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(border_v)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(11.0))
-                            .child(SharedString::from(footer_left)),
-                    )
-                    .child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(11.0))
-                            .child(footer_right),
-                    ),
+                    .flex_grow()
+                    .text_color(colors.text)
+                    .text_size(px(16.0))
+                    .line_height(px(24.0))
+                    .child(self.text_input.clone()),
+            );
+
+        // Subtle hint on the right side of the bar
+        if in_submenu {
+            input_bar = input_bar.child(
+                div()
+                    .text_color(text_muted)
+                    .text_size(px(10.0))
+                    .child(SharedString::from(format!("{match_count}"))),
             );
         }
+
+        root = root.child(input_bar);
 
         root
     }

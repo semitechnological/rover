@@ -321,7 +321,13 @@ fn main() {
         .detach();
 
         match cli {
-            CliCommand::None | CliCommand::Browser => {
+            CliCommand::None => {
+                // Just start the menubar app — picker opens via hotkey
+                let commands = cx.global::<CommandsGlobal>().0.clone();
+                let db_clone = cx.global::<DbGlobal>().0.clone();
+                open_window(commands, db_clone, cx);
+            }
+            CliCommand::Browser => {
                 rover_browser::open_browser_window(cx, Some(db));
             }
             CliCommand::OpenUrl(url) => {
@@ -340,7 +346,8 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
 
-    let bounds = Bounds::centered(None, size(px(680.0), px(420.0)), cx);
+    // Slim bar with room for floating pills above (transparent bg hides unused area)
+    let bounds = Bounds::centered(None, size(px(680.0), px(320.0)), cx);
 
     let ai_session = if cx
         .global::<DbGlobal>()
@@ -436,6 +443,30 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
             cx.activate(true);
         })
         .unwrap();
+
+    // Auto-dismiss when the window loses focus (user switches apps / clicks outside)
+    let dismiss_flag = window_open_flag;
+    cx.spawn(async move |cx: &mut AsyncApp| {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(300))
+            .await;
+        loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(100))
+                .await;
+            let active = window
+                .update(cx, |_, window, _cx| window.is_window_active())
+                .unwrap_or(false);
+            if !active {
+                dismiss_flag.store(false, Ordering::Relaxed);
+                let _ = window.update(cx, |_, window, _cx| {
+                    window.remove_window();
+                });
+                break;
+            }
+        }
+    })
+    .detach();
 }
 
 struct RoverWindow {

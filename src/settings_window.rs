@@ -457,7 +457,7 @@ impl SettingsView {
                             .flex()
                             .items_center()
                             .gap(px(4.0))
-                            .children(["Top", "Center", "Bottom"].iter().map(|&pos| {
+                            .children(["Top", "Center", "Bottom", "Cursor"].iter().map(|&pos| {
                                 let selected = picker_position == pos.to_lowercase();
                                 let pos_lower = pos.to_lowercase();
                                 div()

@@ -26,6 +26,11 @@ pub enum CommandKind {
     BuiltIn {
         id: BuiltInCommand,
     },
+    /// A command provided by a WASM or native extension
+    Extension {
+        ext_id: String,
+        command: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -73,6 +78,9 @@ impl CommandRegistry {
             CommandKind::Calculator { .. } => {}
             CommandKind::Action(action) => action(),
             CommandKind::BuiltIn { .. } => {}
+            CommandKind::Extension { .. } => {
+                // Extension commands are handled by the delegate, not here.
+            }
         }
     }
 }

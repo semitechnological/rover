@@ -5363,6 +5363,7 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "gpui",
+ "libloading",
  "log",
  "rover_extension_api",
  "rover_theme",

@@ -45,6 +45,28 @@ pub fn build_os_tools() -> Vec<ToolDefinition> {
         create_note_tool(),
         // Knowledge
         search_wikipedia_tool(),
+        // Device / system resources
+        get_system_resources_tool(),
+        get_network_info_tool(),
+        // Clipboard
+        get_clipboard_tool(),
+        set_clipboard_tool(),
+        // Notifications
+        send_notification_tool(),
+        // Volume
+        get_volume_tool(),
+        set_volume_tool(),
+        // Screenshot
+        take_screenshot_tool(),
+        // Contacts & messaging
+        lookup_contact_tool(),
+        send_imessage_tool(),
+        send_email_tool(),
+        // Discovery
+        spotlight_search_tool(),
+        list_bluetooth_devices_tool(),
+        // Keychain (read-only)
+        get_keychain_secret_tool(),
     ]
 }
 
@@ -398,6 +420,462 @@ fn search_wikipedia_tool() -> ToolDefinition {
             let extract = json["extract"].as_str().unwrap_or("No summary available.");
             // Return the full extract — the AI will synthesise its own summary
             Ok(format!("[Wikipedia: {title}]\n{extract}"))
+        },
+    )
+}
+
+// ─── System Resources ─────────────────────────────────────────────────────────
+
+fn get_system_resources_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "get_system_resources",
+        "Get current system resource usage: battery percentage and charging state, CPU load, \
+         and memory pressure. Use when the user asks about battery life, CPU usage, or how \
+         much memory is being used.",
+        Schema::new("GetSystemResourcesArgs"),
+        |_args| {
+            // Battery via pmset
+            let battery = std::process::Command::new("pmset")
+                .args(["-g", "batt"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                .unwrap_or_default();
+
+            // CPU load average (1-min) via sysctl
+            let load = std::process::Command::new("sysctl")
+                .args(["-n", "vm.loadavg"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+
+            // Memory pressure via memory_pressure tool
+            let mem = std::process::Command::new("sh")
+                .args(["-c", "vm_stat | awk '/Pages free/{f=$3} /Pages active/{a=$3} /Pages wired/{w=$4} END{total=f+a+w; printf \"free=%d active=%d wired=%d pages\\n\",f,a,w}'"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_default();
+
+            Ok(format!("Battery:\n{battery}\nCPU load avg (1m 5m 15m): {load}\nMemory pages: {mem}"))
+        },
+    )
+}
+
+// ─── Network Info ─────────────────────────────────────────────────────────────
+
+fn get_network_info_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "get_network_info",
+        "Get current network information: WiFi SSID and local IP address. \
+         Use when the user asks what network they're on or their IP address.",
+        Schema::new("GetNetworkInfoArgs"),
+        |_args| {
+            let ssid = std::process::Command::new("networksetup")
+                .args(["-getairportnetwork", "en0"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_else(|_| "WiFi info unavailable".into());
+
+            let ip = std::process::Command::new("sh")
+                .args(["-c", "ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo 'No IP'"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .unwrap_or_else(|_| "IP unavailable".into());
+
+            Ok(format!("{ssid}\nLocal IP: {ip}"))
+        },
+    )
+}
+
+// ─── Clipboard ────────────────────────────────────────────────────────────────
+
+fn get_clipboard_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "get_clipboard_text",
+        "Read the current text contents of the system clipboard. \
+         Use when the user asks what's on their clipboard or to use clipboard contents.",
+        Schema::new("GetClipboardArgs"),
+        |_args| {
+            let out = std::process::Command::new("pbpaste")
+                .output()
+                .map_err(|e| e.to_string())?;
+            let text = String::from_utf8_lossy(&out.stdout).to_string();
+            if text.is_empty() {
+                Ok("Clipboard is empty".into())
+            } else {
+                Ok(text)
+            }
+        },
+    )
+}
+
+fn set_clipboard_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "set_clipboard_text",
+        "Write text to the system clipboard. Use when the user asks to copy something to the clipboard.",
+        Schema::new("SetClipboardArgs")
+            .property(SchemaProperty::new("text", SchemaPropertyType::String).description("Text to put on the clipboard")),
+        |args| {
+            let text = args["text"].as_str().unwrap_or("").to_string();
+            use std::io::Write;
+            let mut child = std::process::Command::new("pbcopy")
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            if let Some(stdin) = child.stdin.as_mut() {
+                stdin.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+            }
+            child.wait().map_err(|e| e.to_string())?;
+            Ok("Copied to clipboard".into())
+        },
+    )
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+fn send_notification_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "send_notification",
+        "Show a macOS system notification banner. Use when the user asks to be notified, \
+         set an alert, or remind themselves of something.",
+        Schema::new("SendNotificationArgs")
+            .property(SchemaProperty::new("title", SchemaPropertyType::String).description("Notification title"))
+            .property(SchemaProperty::new("message", SchemaPropertyType::String).description("Notification body text"))
+            .property(SchemaProperty::new("subtitle", SchemaPropertyType::String).description("Optional subtitle line").optional()),
+        |args| {
+            let title    = escape_applescript(args["title"].as_str().unwrap_or("Rover"));
+            let message  = escape_applescript(args["message"].as_str().unwrap_or(""));
+            let subtitle = args["subtitle"].as_str().unwrap_or("");
+            let sub_clause = if subtitle.is_empty() {
+                String::new()
+            } else {
+                format!(" subtitle \"{}\"", escape_applescript(subtitle))
+            };
+            let script = format!(
+                r#"display notification "{message}"{sub_clause} with title "{title}""#
+            );
+            run_osascript(&script)?;
+            Ok("Notification sent".into())
+        },
+    )
+}
+
+// ─── Volume ───────────────────────────────────────────────────────────────────
+
+fn get_volume_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "get_volume",
+        "Get the current system output volume level (0–100) and whether it's muted.",
+        Schema::new("GetVolumeArgs"),
+        |_args| {
+            run_osascript("output volume of (get volume settings) & \", muted: \" & (output muted of (get volume settings))")
+        },
+    )
+}
+
+fn set_volume_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "set_volume",
+        "Set the system output volume. Use when the user asks to turn the volume up, down, \
+         mute, or set it to a specific level.",
+        Schema::new("SetVolumeArgs")
+            .property(SchemaProperty::new("level", SchemaPropertyType::Double).description("Volume level 0–100, or -1 to mute").optional())
+            .property(SchemaProperty::new("mute", SchemaPropertyType::Bool).description("true to mute, false to unmute").optional()),
+        |args| {
+            if let Some(true) = args["mute"].as_bool() {
+                run_osascript("set volume with output muted")?;
+                return Ok("Muted".into());
+            }
+            if let Some(false) = args["mute"].as_bool() {
+                run_osascript("set volume without output muted")?;
+                return Ok("Unmuted".into());
+            }
+            if let Some(level) = args["level"].as_f64() {
+                let level = level.clamp(0.0, 100.0) as u32;
+                run_osascript(&format!("set volume output volume {level}"))?;
+                return Ok(format!("Volume set to {level}"));
+            }
+            Err("Provide 'level' (0-100) or 'mute' (true/false)".into())
+        },
+    )
+}
+
+// ─── Screenshot ───────────────────────────────────────────────────────────────
+
+fn take_screenshot_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "take_screenshot",
+        "Take a screenshot of the screen or a specific window and save it to ~/Desktop. \
+         Returns the file path. Use when the user asks to capture their screen.",
+        Schema::new("TakeScreenshotArgs")
+            .property(SchemaProperty::new("filename", SchemaPropertyType::String).description("Output filename without extension (default: screenshot)").optional())
+            .property(SchemaProperty::new("interactive", SchemaPropertyType::Bool).description("true to let the user select a region (default: false)").optional()),
+        |args| {
+            let name = args["filename"].as_str().unwrap_or("screenshot");
+            // Sanitize: only allow alphanumeric, dash, underscore
+            let safe_name: String = name.chars()
+                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+            let path = format!("{home}/Desktop/{safe_name}.png");
+
+            let interactive = args["interactive"].as_bool().unwrap_or(false);
+            let mut cmd = std::process::Command::new("screencapture");
+            cmd.arg("-x"); // no camera click
+            if interactive {
+                cmd.arg("-i"); // interactive region selection
+            }
+            cmd.arg(&path);
+            let out = cmd.output().map_err(|e| e.to_string())?;
+            if out.status.success() {
+                Ok(format!("Screenshot saved to {path}"))
+            } else {
+                Err(String::from_utf8_lossy(&out.stderr).trim().to_string())
+            }
+        },
+    )
+}
+
+// ─── Contacts ─────────────────────────────────────────────────────────────────
+
+fn lookup_contact_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "lookup_contact",
+        "Search for a contact in macOS Contacts.app by name. Returns name, phone numbers, \
+         and email addresses. Use when the user asks for someone's contact info.",
+        Schema::new("LookupContactArgs")
+            .property(SchemaProperty::new("name", SchemaPropertyType::String).description("Full or partial name to search for")),
+        |args| {
+            let name = escape_applescript(args["name"].as_str().unwrap_or(""));
+            let script = format!(
+                r#"tell application "Contacts"
+    set results to every person whose name contains "{name}"
+    if results is {{}} then return "No contacts found for '{name}'"
+    set output to ""
+    repeat with p in results
+        set output to output & (name of p)
+        try
+            set phones to phones of p
+            repeat with ph in phones
+                set output to output & linefeed & "  Phone: " & (value of ph)
+            end repeat
+        end try
+        try
+            set emails to emails of p
+            repeat with em in emails
+                set output to output & linefeed & "  Email: " & (value of em)
+            end repeat
+        end try
+        set output to output & linefeed
+    end repeat
+    return output
+end tell"#
+            );
+            run_osascript(&script)
+        },
+    )
+}
+
+// ─── iMessage ─────────────────────────────────────────────────────────────────
+
+fn send_imessage_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "send_imessage",
+        "Send an iMessage or SMS via Messages.app. Use when the user asks to send a message \
+         to someone. Requires Messages.app to be signed in.",
+        Schema::new("SendIMessageArgs")
+            .property(SchemaProperty::new("recipient", SchemaPropertyType::String).description("Phone number (e.g. '+447700900000') or Apple ID email"))
+            .property(SchemaProperty::new("message", SchemaPropertyType::String).description("Message text to send")),
+        |args| {
+            let recipient = escape_applescript(args["recipient"].as_str().unwrap_or(""));
+            let message   = escape_applescript(args["message"].as_str().unwrap_or(""));
+            let script = format!(
+                r#"tell application "Messages"
+    set targetService to 1st service whose service type = iMessage
+    set targetBuddy to buddy "{recipient}" of targetService
+    send "{message}" to targetBuddy
+end tell"#
+            );
+            run_osascript(&script)?;
+            Ok(format!("Message sent to {recipient}"))
+        },
+    )
+}
+
+// ─── Email ────────────────────────────────────────────────────────────────────
+
+fn send_email_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "send_email",
+        "Compose and send an email via macOS Mail.app. Use when the user asks to send an email.",
+        Schema::new("SendEmailArgs")
+            .property(SchemaProperty::new("to", SchemaPropertyType::String).description("Recipient email address"))
+            .property(SchemaProperty::new("subject", SchemaPropertyType::String).description("Email subject"))
+            .property(SchemaProperty::new("body", SchemaPropertyType::String).description("Email body text"))
+            .property(SchemaProperty::new("cc", SchemaPropertyType::String).description("CC email address").optional()),
+        |args| {
+            let to      = escape_applescript(args["to"].as_str().unwrap_or(""));
+            let subject = escape_applescript(args["subject"].as_str().unwrap_or(""));
+            let body    = escape_applescript(args["body"].as_str().unwrap_or(""));
+            let cc      = args["cc"].as_str().unwrap_or("");
+
+            let cc_clause = if cc.is_empty() {
+                String::new()
+            } else {
+                let cc_safe = escape_applescript(cc);
+                format!("make new to recipient at theMessage with properties {{address:\"{cc_safe}\", recipient type:cc recipient}}\n        ")
+            };
+
+            let script = format!(
+                r#"tell application "Mail"
+    set theMessage to make new outgoing message with properties {{subject:"{subject}", content:"{body}", visible:false}}
+    tell theMessage
+        make new to recipient with properties {{address:"{to}"}}
+        {cc_clause}
+    end tell
+    send theMessage
+end tell"#
+            );
+            run_osascript(&script)?;
+            Ok(format!("Email sent to {to}"))
+        },
+    )
+}
+
+// ─── Spotlight Search ─────────────────────────────────────────────────────────
+
+fn spotlight_search_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "spotlight_search",
+        "Search for files and documents on this Mac using Spotlight (mdfind). \
+         Use when the user wants to find a file, document, or any item by name or content.",
+        Schema::new("SpotlightSearchArgs")
+            .property(SchemaProperty::new("query", SchemaPropertyType::String).description("Search query (filename, content, or metadata query)"))
+            .property(SchemaProperty::new("max_results", SchemaPropertyType::Double).description("Maximum number of results (default: 20)").optional()),
+        |args| {
+            let query = args["query"].as_str().unwrap_or("").to_string();
+            let max = args["max_results"].as_u64().unwrap_or(20).min(50);
+
+            // Run mdfind with the user's query
+            let out = std::process::Command::new("mdfind")
+                .arg("-name")
+                .arg(&query)
+                .output()
+                .map_err(|e| e.to_string())?;
+
+            let results: Vec<&str> = std::str::from_utf8(&out.stdout)
+                .unwrap_or("")
+                .lines()
+                .filter(|l| !l.is_empty())
+                .take(max as usize)
+                .collect();
+
+            if results.is_empty() {
+                Ok(format!("No files found matching '{query}'"))
+            } else {
+                Ok(results.join("\n"))
+            }
+        },
+    )
+}
+
+// ─── Bluetooth ────────────────────────────────────────────────────────────────
+
+fn list_bluetooth_devices_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "list_bluetooth_devices",
+        "List paired and connected Bluetooth devices on this Mac. \
+         Use when the user asks what Bluetooth devices are connected or available.",
+        Schema::new("ListBluetoothDevicesArgs"),
+        |_args| {
+            let out = std::process::Command::new("system_profiler")
+                .args(["SPBluetoothDataType", "-json"])
+                .output()
+                .map_err(|e| e.to_string())?;
+
+            let json: serde_json::Value =
+                serde_json::from_slice(&out.stdout).map_err(|e| format!("Parse error: {e}"))?;
+
+            let mut lines: Vec<String> = Vec::new();
+            if let Some(items) = json["SPBluetoothDataType"].as_array() {
+                for item in items {
+                    if let Some(devices) = item["device_connected"].as_array() {
+                        for d in devices {
+                            if let Some(obj) = d.as_object() {
+                                for (name, info) in obj {
+                                    let minor_type = info["device_minorType"].as_str().unwrap_or("");
+                                    lines.push(format!("✓ {name} [{minor_type}] (connected)"));
+                                }
+                            }
+                        }
+                    }
+                    if let Some(devices) = item["device_not_connected"].as_array() {
+                        for d in devices {
+                            if let Some(obj) = d.as_object() {
+                                for (name, info) in obj {
+                                    let minor_type = info["device_minorType"].as_str().unwrap_or("");
+                                    lines.push(format!("○ {name} [{minor_type}]"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if lines.is_empty() {
+                Ok("No Bluetooth devices found".into())
+            } else {
+                Ok(lines.join("\n"))
+            }
+        },
+    )
+}
+
+// ─── Keychain ─────────────────────────────────────────────────────────────────
+
+fn get_keychain_secret_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "get_keychain_secret",
+        "Retrieve a password or secret from the macOS Keychain by service name and account. \
+         Use when the user asks to fetch a stored password or credential. \
+         The user will be prompted by macOS to allow access.",
+        Schema::new("GetKeychainSecretArgs")
+            .property(SchemaProperty::new("service", SchemaPropertyType::String).description("Service name (e.g. 'github.com', 'MyApp')"))
+            .property(SchemaProperty::new("account", SchemaPropertyType::String).description("Account name or username").optional()),
+        |args| {
+            let service = args["service"].as_str().unwrap_or("").to_string();
+            let account = args["account"].as_str().unwrap_or("").to_string();
+
+            // Sanitize: only allow safe chars in service/account to prevent shell injection
+            let safe_service: String = service.chars()
+                .filter(|c| c.is_alphanumeric() || matches!(*c, '.' | '-' | '_' | '@' | ':' | '/'))
+                .collect();
+            let safe_account: String = account.chars()
+                .filter(|c| c.is_alphanumeric() || matches!(*c, '.' | '-' | '_' | '@'))
+                .collect();
+
+            let mut cmd = std::process::Command::new("security");
+            cmd.args(["find-generic-password", "-s", &safe_service, "-w"]);
+            if !safe_account.is_empty() {
+                cmd.args(["-a", &safe_account]);
+            }
+            let out = cmd.output().map_err(|e| e.to_string())?;
+            if out.status.success() {
+                let secret = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                Ok(secret)
+            } else {
+                // Try internet password
+                let mut cmd2 = std::process::Command::new("security");
+                cmd2.args(["find-internet-password", "-s", &safe_service, "-w"]);
+                if !safe_account.is_empty() {
+                    cmd2.args(["-a", &safe_account]);
+                }
+                let out2 = cmd2.output().map_err(|e| e.to_string())?;
+                if out2.status.success() {
+                    Ok(String::from_utf8_lossy(&out2.stdout).trim().to_string())
+                } else {
+                    Err(format!("No keychain entry found for service '{safe_service}'"))
+                }
+            }
         },
     )
 }

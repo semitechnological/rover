@@ -14,6 +14,23 @@ pub struct ClipboardEntry {
     pub timestamp: i64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HistoryRow {
+    pub id: i64,
+    pub url: String,
+    pub title: String,
+    pub visited_at: i64,
+    pub visit_count: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BookmarkRow {
+    pub id: i64,
+    pub url: String,
+    pub title: String,
+    pub created_at: i64,
+}
+
 impl RoverDb {
     pub fn open() -> Result<Self> {
         let path = Self::db_path()?;
@@ -78,6 +95,23 @@ impl RoverDb {
 
             CREATE INDEX IF NOT EXISTS idx_command_usage_timestamp
                 ON command_usage (timestamp);
+
+            CREATE TABLE IF NOT EXISTS browser_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                visited_at INTEGER NOT NULL DEFAULT (unixepoch()),
+                visit_count INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE INDEX IF NOT EXISTS idx_browser_history_visited_at ON browser_history(visited_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_browser_history_url ON browser_history(url);
+
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                url TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                created_at INTEGER NOT NULL DEFAULT (unixepoch())
+            );
             ",
         )?;
         Ok(())
@@ -211,6 +245,150 @@ impl RoverDb {
         )?;
         Ok(())
     }
+
+    // --- Browser History ---
+
+    /// Upsert a URL into browser_history, incrementing visit_count on conflict.
+    pub fn add_history(&self, url: &str, title: &str) -> Result<()> {
+        if url.trim().is_empty() || url == "about:blank" {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO browser_history (url, title, visited_at, visit_count)
+             VALUES (?1, ?2, unixepoch(), 1)
+             ON CONFLICT(url) DO UPDATE SET
+               title = excluded.title,
+               visited_at = excluded.visited_at,
+               visit_count = visit_count + 1",
+            rusqlite::params![url, title],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_history(&self, query: &str, limit: usize) -> Result<Vec<HistoryRow>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, visited_at, visit_count FROM browser_history
+             WHERE url LIKE ?1 OR title LIKE ?1
+             ORDER BY visited_at DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![pattern, limit as i64], |row| {
+                Ok(HistoryRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    visited_at: row.get(3)?,
+                    visit_count: row.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn recent_history(&self, limit: usize) -> Result<Vec<HistoryRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, visited_at, visit_count FROM browser_history
+             ORDER BY visited_at DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| {
+                Ok(HistoryRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    visited_at: row.get(3)?,
+                    visit_count: row.get(4)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn clear_history(&self) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM browser_history", [])?;
+        Ok(())
+    }
+
+    // --- Bookmarks ---
+
+    pub fn add_bookmark(&self, url: &str, title: &str) -> Result<()> {
+        if url.trim().is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO bookmarks (url, title, created_at) VALUES (?1, ?2, unixepoch())",
+            rusqlite::params![url, title],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_bookmark(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM bookmarks WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn search_bookmarks(&self, query: &str) -> Result<Vec<BookmarkRow>> {
+        let conn = self.conn.lock().unwrap();
+        let pattern = format!("%{}%", query);
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, created_at FROM bookmarks
+             WHERE url LIKE ?1 OR title LIKE ?1
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![pattern], |row| {
+                Ok(BookmarkRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn list_bookmarks(&self) -> Result<Vec<BookmarkRow>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, url, title, created_at FROM bookmarks ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(BookmarkRow {
+                    id: row.get(0)?,
+                    url: row.get(1)?,
+                    title: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Returns the bookmark id for the given URL if it exists, or None.
+    pub fn find_bookmark_by_url(&self, url: &str) -> Result<Option<i64>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT id FROM bookmarks WHERE url = ?1")?;
+        let mut rows = stmt.query_map(rusqlite::params![url], |row| row.get(0))?;
+        match rows.next() {
+            Some(Ok(id)) => Ok(Some(id)),
+            _ => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -266,5 +444,140 @@ mod tests {
         assert_eq!(db.get_setting("theme").unwrap(), None);
         db.set_setting("theme", "dark").unwrap();
         assert_eq!(db.get_setting("theme").unwrap(), Some("dark".to_string()));
+        // Overwrite
+        db.set_setting("theme", "light").unwrap();
+        assert_eq!(db.get_setting("theme").unwrap(), Some("light".to_string()));
+    }
+
+    #[test]
+    fn test_clipboard_delete() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_clipboard_entry("keep").unwrap();
+        db.add_clipboard_entry("delete_me").unwrap();
+        let entries = db.list_clipboard_history().unwrap();
+        let delete_id = entries.iter().find(|e| e.content == "delete_me").unwrap().id;
+        db.delete_clipboard_entry(delete_id).unwrap();
+        let entries = db.list_clipboard_history().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].content, "keep");
+    }
+
+    #[test]
+    fn test_clipboard_clear() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_clipboard_entry("a").unwrap();
+        db.add_clipboard_entry("b").unwrap();
+        db.clear_clipboard_history().unwrap();
+        assert!(db.list_clipboard_history().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_empty_entries_ignored() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_query("").unwrap();
+        db.add_query("   ").unwrap();
+        assert!(db.list_query_history().unwrap().is_empty());
+
+        db.add_clipboard_entry("").unwrap();
+        db.add_clipboard_entry("  ").unwrap();
+        assert!(db.list_clipboard_history().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_browser_history() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("https://example.com", "Example").unwrap();
+        db.add_history("https://rust-lang.org", "Rust").unwrap();
+
+        let recent = db.recent_history(10).unwrap();
+        assert_eq!(recent.len(), 2);
+        // Both inserted in same second — just verify both present
+        let urls: Vec<&str> = recent.iter().map(|r| r.url.as_str()).collect();
+        assert!(urls.contains(&"https://example.com"));
+        assert!(urls.contains(&"https://rust-lang.org"));
+
+        // Revisit increments count and updates title
+        db.add_history("https://example.com", "Example Updated").unwrap();
+        let recent = db.recent_history(10).unwrap();
+        let example = recent.iter().find(|r| r.url == "https://example.com").unwrap();
+        assert_eq!(example.visit_count, 2);
+        assert_eq!(example.title, "Example Updated");
+    }
+
+    #[test]
+    fn test_browser_history_search() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("https://github.com/rust-lang", "Rust on GitHub").unwrap();
+        db.add_history("https://docs.rs", "Docs.rs").unwrap();
+
+        let results = db.search_history("rust", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://github.com/rust-lang");
+
+        // Search by URL
+        let results = db.search_history("docs.rs", 10).unwrap();
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_browser_history_ignores_blank() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("about:blank", "").unwrap();
+        db.add_history("", "Empty").unwrap();
+        assert!(db.recent_history(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_clear_history() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("https://example.com", "Ex").unwrap();
+        db.clear_history().unwrap();
+        assert!(db.recent_history(10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_bookmarks() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("https://example.com", "Example").unwrap();
+        db.add_bookmark("https://rust-lang.org", "Rust").unwrap();
+
+        let all = db.list_bookmarks().unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Find by URL
+        let id = db.find_bookmark_by_url("https://example.com").unwrap();
+        assert!(id.is_some());
+        let id = db.find_bookmark_by_url("https://nope.com").unwrap();
+        assert!(id.is_none());
+    }
+
+    #[test]
+    fn test_bookmark_search() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("https://github.com", "GitHub").unwrap();
+        db.add_bookmark("https://docs.rs", "Docs").unwrap();
+
+        let results = db.search_bookmarks("git").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].title, "GitHub");
+    }
+
+    #[test]
+    fn test_bookmark_remove() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("https://example.com", "Ex").unwrap();
+        let all = db.list_bookmarks().unwrap();
+        assert_eq!(all.len(), 1);
+
+        db.remove_bookmark(all[0].id).unwrap();
+        assert!(db.list_bookmarks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_bookmark_empty_ignored() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("", "Empty").unwrap();
+        db.add_bookmark("  ", "Spaces").unwrap();
+        assert!(db.list_bookmarks().unwrap().is_empty());
     }
 }

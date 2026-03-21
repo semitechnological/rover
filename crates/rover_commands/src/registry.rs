@@ -36,6 +36,7 @@ pub enum BuiltInCommand {
     Snippets,
     OpenTerminal,
     Browser,
+    Help,
 }
 
 pub struct CommandRegistry {
@@ -123,6 +124,15 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         icon: None,
         kind: CommandKind::BuiltIn {
             id: BuiltInCommand::OpenTerminal,
+        },
+        has_submenu: false,
+    });
+    registry.register(Command {
+        name: "Help".into(),
+        description: "Show Rover keyboard shortcuts and tips".into(),
+        icon: None,
+        kind: CommandKind::BuiltIn {
+            id: BuiltInCommand::Help,
         },
         has_submenu: false,
     });

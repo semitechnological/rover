@@ -88,7 +88,7 @@ pub struct ItemAction {
 pub struct Picker<D: PickerDelegate> {
     pub delegate: D,
     pub text_input: Entity<TextInput>,
-    scroll_handle: UniformListScrollHandle,
+    pub compact: bool,
     focus_handle: FocusHandle,
     show_actions: bool,
     action_selected_ix: usize,
@@ -115,7 +115,7 @@ impl<D: PickerDelegate> Picker<D> {
         let mut picker = Self {
             delegate,
             text_input,
-            scroll_handle: UniformListScrollHandle::new(),
+            compact: false,
             focus_handle: cx.focus_handle(),
             show_actions: false,
             action_selected_ix: 0,
@@ -162,7 +162,6 @@ impl<D: PickerDelegate> Picker<D> {
         }
         let ix = (self.delegate.selected_index() + 1).min(count - 1);
         self.delegate.set_selected_index(ix, cx);
-        self.scroll_handle.scroll_to_item(ix, ScrollStrategy::Top);
         cx.notify();
     }
 
@@ -182,7 +181,6 @@ impl<D: PickerDelegate> Picker<D> {
         }
         let ix = self.delegate.selected_index().saturating_sub(1);
         self.delegate.set_selected_index(ix, cx);
-        self.scroll_handle.scroll_to_item(ix, ScrollStrategy::Top);
         cx.notify();
     }
 
@@ -262,8 +260,10 @@ impl<D: PickerDelegate> Focusable for Picker<D> {
 
 impl<D: PickerDelegate> Render for Picker<D> {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = theme(cx);
-        let colors = &theme.colors;
+        let colors = {
+            let t = theme(cx);
+            t.colors.clone()
+        };
         let match_count = self.delegate.match_count();
         let query_is_empty = self.text_input.read(cx).text().is_empty();
 
@@ -273,6 +273,60 @@ impl<D: PickerDelegate> Render for Picker<D> {
         let text_muted = colors.text_muted;
 
         let in_submenu = self.delegate.in_submenu();
+
+        // In compact mode, hide suggestions until user starts typing
+        let show_items = if self.compact {
+            !query_is_empty && match_count > 0
+        } else {
+            match_count > 0
+        };
+
+        // Build pills container (flex-wrap)
+        let pills = if show_items {
+            let mut pills_div = div()
+                .flex()
+                .flex_row()
+                .flex_wrap()
+                .gap(px(4.0))
+                .px_2()
+                .py_1();
+
+            for ix in 0..match_count {
+                let selected = ix == self.delegate.selected_index();
+                if let Some(el) = self.delegate.render_match(ix, selected, cx) {
+                    pills_div = pills_div.child(el);
+                }
+            }
+            Some(pills_div)
+        } else {
+            None
+        };
+
+        // Input row
+        let input_row = div()
+            .px_3()
+            .py_2()
+            .border_b_1()
+            .border_color(border_v)
+            .flex()
+            .items_center()
+            .gap_2()
+            .when(in_submenu, |el| {
+                el.child(
+                    div()
+                        .text_color(colors.text_muted)
+                        .text_size(px(14.0))
+                        .child(SharedString::from("‹ ")),
+                )
+            })
+            .child(
+                div()
+                    .flex_grow()
+                    .text_color(colors.text)
+                    .text_size(px(16.0))
+                    .line_height(px(24.0))
+                    .child(self.text_input.clone()),
+            );
 
         let mut root = div()
             .id("picker")
@@ -289,61 +343,22 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .on_action(cx.listener(Self::handle_select_prev))
             .on_action(cx.listener(Self::handle_confirm))
             .on_action(cx.listener(Self::handle_cancel))
-            .on_action(cx.listener(Self::handle_show_actions))
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .border_b_1()
-                    .border_color(border_v)
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .when(in_submenu, |el| {
-                        el.child(
-                            div()
-                                .text_color(colors.text_muted)
-                                .text_size(px(14.0))
-                                .child(SharedString::from("‹ ")),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex_grow()
-                            .text_color(colors.text)
-                            .text_size(px(16.0))
-                            .line_height(px(24.0))
-                            .child(self.text_input.clone()),
-                    ),
-            );
+            .on_action(cx.listener(Self::handle_show_actions));
 
-        if match_count > 0 {
-            root = root.child(
-                uniform_list(
-                    "picker-list",
-                    match_count,
-                    cx.processor(
-                        |picker: &mut Self,
-                         range: std::ops::Range<usize>,
-                         _window: &mut Window,
-                         cx: &mut Context<Self>| {
-                            range
-                                .filter_map(|ix| {
-                                    let selected = ix == picker.delegate.selected_index();
-                                    picker.delegate.render_match(ix, selected, cx)
-                                })
-                                .map(|el: D::ListItem| el.into_any_element())
-                                .collect::<Vec<_>>()
-                        },
-                    ),
-                )
-                .flex_grow()
-                .px_1()
-                .py_1()
-                .track_scroll(self.scroll_handle.clone()),
-            );
-        } else if !query_is_empty {
-            root = root.child(div().px_3().py_4().text_color(text_muted).child(no_matches));
+        if self.compact {
+            // Compact mode: pills above input
+            if let Some(pills_div) = pills {
+                root = root.child(pills_div);
+            }
+            root = root.child(input_row);
+        } else {
+            // Normal mode: input on top, pills below
+            root = root.child(input_row);
+            if let Some(pills_div) = pills {
+                root = root.child(pills_div);
+            } else if !query_is_empty {
+                root = root.child(div().px_3().py_4().text_color(text_muted).child(no_matches));
+            }
         }
 
         // Action bar overlay

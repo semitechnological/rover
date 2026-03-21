@@ -13,7 +13,19 @@ log.workspace = true
 anyhow.workspace = true
 urlencoding = "2"
 raw-window-handle = "0.6"
+rover_db = { path = "../rover_db" }
+rover_semantic = { path = "../rover_semantic" }
+serde_json.workspace = true
+dirs.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"
 objc = "0.2"
+block = "0.1"
+once_cell = "1"
+# objc2 ecosystem for typed delegate code
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSError", "NSRunLoop", "NSDate", "NSProcessInfo", "NSFileManager", "NSDictionary", "NSArray", "NSURLResponse", "NSData"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKWebViewConfiguration", "WKWebsiteDataStore", "WKProcessPool", "WKNavigationDelegate", "WKUIDelegate", "WKDownloadDelegate", "WKUserContentController", "WKUserScript", "WKContentRuleList", "WKContentRuleListStore", "WKNavigation", "WKNavigationAction", "WKNavigationResponse", "WKFrameInfo", "WKDownload", "WKFindConfiguration", "WKFindResult", "WKOpenPanelParameters", "WKWindowFeatures"] }
+objc2-app-kit = { version = "0.3", features = ["NSAlert", "NSOpenPanel", "NSSavePanel", "NSWindow", "NSApplication", "NSRunningApplication", "NSTextField", "NSView", "NSButton", "NSResponder"] }
+block2 = "0.6"

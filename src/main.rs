@@ -36,6 +36,18 @@ impl Global for CommandsGlobal {}
 struct WindowOpenGlobal(Arc<AtomicBool>);
 impl Global for WindowOpenGlobal {}
 
+/// Shared browser state so the picker can show context about open browser tabs.
+pub struct BrowserContextGlobal {
+    pub tabs: Vec<(String, String)>, // (title, url)
+    pub active_tab: usize,
+}
+impl Global for BrowserContextGlobal {}
+impl Default for BrowserContextGlobal {
+    fn default() -> Self {
+        Self { tabs: Vec::new(), active_tab: 0 }
+    }
+}
+
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -342,12 +354,80 @@ fn main() {
     });
 }
 
+/// Get screen dimensions (width, height) from macOS.
+#[cfg(target_os = "macos")]
+fn screen_size() -> (f32, f32) {
+    use objc::{class, msg_send, sel, sel_impl};
+    use cocoa::foundation::NSRect;
+    unsafe {
+        let main: *mut objc::runtime::Object = msg_send![class!(NSScreen), mainScreen];
+        let frame: NSRect = msg_send![main, frame];
+        (frame.size.width as f32, frame.size.height as f32)
+    }
+}
+
+/// Get current cursor position in GPUI coords (top-left origin).
+#[cfg(target_os = "macos")]
+fn cursor_position() -> (f32, f32) {
+    use objc::{class, msg_send, sel, sel_impl};
+    use cocoa::foundation::{NSPoint, NSRect};
+    unsafe {
+        let loc: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+        let main: *mut objc::runtime::Object = msg_send![class!(NSScreen), mainScreen];
+        let frame: NSRect = msg_send![main, frame];
+        let sh = frame.size.height as f32;
+        (loc.x as f32, sh - loc.y as f32)
+    }
+}
+
+/// Make the NSPanel truly borderless — no shadow, clear background, non-opaque.
+#[cfg(target_os = "macos")]
+fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) {
+    use objc::{class, msg_send, sel, sel_impl};
+    use raw_window_handle::HasWindowHandle;
+
+    let _ = window.update(cx, |_, window, _cx| {
+        if let Ok(handle) = window.window_handle() {
+            if let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_ref() {
+                // ns_view → walk up to the NSWindow via the view's window property
+                let ns_view = appkit.ns_view.as_ptr() as *mut objc::runtime::Object;
+                unsafe {
+                    let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
+                    if !ns_window.is_null() {
+                        let _: () = msg_send![ns_window, setHasShadow: false];
+                        let _: () = msg_send![ns_window, setOpaque: false];
+                        let clear: *mut objc::runtime::Object =
+                            msg_send![class!(NSColor), clearColor];
+                        let _: () = msg_send![ns_window, setBackgroundColor: clear];
+                    }
+                }
+            }
+        }
+    });
+}
+
 fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mut App) {
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
 
-    // Slim bar with room for floating pills above (transparent bg hides unused area)
-    let bounds = Bounds::centered(None, size(px(680.0), px(320.0)), cx);
+    // Position near cursor — bar at bottom of window, pills float above
+    let w = 680.0f32;
+    let h = 320.0f32;
+
+    #[cfg(target_os = "macos")]
+    let bounds = {
+        let (cx_pos, cy_pos) = cursor_position();
+        let (sw, sh) = screen_size();
+        // Center horizontally on cursor, bar appears near cursor vertically
+        let x = (cx_pos - w / 2.0).max(8.0).min(sw - w - 8.0);
+        let y = (cy_pos - h + 20.0).max(8.0).min(sh - h - 8.0);
+        Bounds {
+            origin: point(px(x), px(y)),
+            size: size(px(w), px(h)),
+        }
+    };
+    #[cfg(not(target_os = "macos"))]
+    let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
 
     let ai_session = if cx
         .global::<DbGlobal>()
@@ -421,8 +501,9 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                                 PickerEvent::OpenTerminal => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
                                     window.remove_window();
-                                    let _ = std::process::Command::new("open")
-                                        .args(["-a", "Terminal"])
+                                    let _ = std::process::Command::new("osascript")
+                                        .arg("-e")
+                                        .arg(r#"tell application "Terminal" to activate"#)
                                         .spawn();
                                 }
                             }
@@ -444,12 +525,17 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
         })
         .unwrap();
 
-    // Auto-dismiss when the window loses focus (user switches apps / clicks outside)
+    // Make the NSPanel truly borderless (no macOS window shadow/frame)
+    #[cfg(target_os = "macos")]
+    configure_borderless_panel(&window, cx);
+
+    // Auto-dismiss when the window loses focus (debounced — 3 consecutive inactive polls)
     let dismiss_flag = window_open_flag;
     cx.spawn(async move |cx: &mut AsyncApp| {
         cx.background_executor()
             .timer(std::time::Duration::from_millis(300))
             .await;
+        let mut inactive_count = 0u32;
         loop {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(100))
@@ -458,11 +544,16 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                 .update(cx, |_, window, _cx| window.is_window_active())
                 .unwrap_or(false);
             if !active {
-                dismiss_flag.store(false, Ordering::Relaxed);
-                let _ = window.update(cx, |_, window, _cx| {
-                    window.remove_window();
-                });
-                break;
+                inactive_count += 1;
+                if inactive_count >= 3 {
+                    dismiss_flag.store(false, Ordering::Relaxed);
+                    let _ = window.update(cx, |_, window, _cx| {
+                        window.remove_window();
+                    });
+                    break;
+                }
+            } else {
+                inactive_count = 0;
             }
         }
     })

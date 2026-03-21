@@ -5277,9 +5277,12 @@ name = "rover"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "cocoa 0.26.0",
  "dirs 6.0.0",
  "gpui",
  "log",
+ "objc",
+ "raw-window-handle",
  "rover_browser",
  "rover_commands",
  "rover_db",

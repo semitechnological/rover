@@ -18,6 +18,13 @@ pub enum ViewMode {
     FileSearch,
 }
 
+/// Browser tab context shown as pills in the picker.
+#[derive(Clone, Default)]
+pub struct BrowserContext {
+    pub tabs: Vec<(String, String)>, // (title, url)
+    pub active_tab: usize,
+}
+
 pub struct RoverDelegate {
     all_commands: Vec<Command>,
     candidates: Vec<StringMatchCandidate>,
@@ -42,6 +49,10 @@ pub struct RoverDelegate {
     help_query: Option<String>,
     help_result: Option<String>,
     help_loading: bool,
+    /// Browser context — tabs open in the Rover browser
+    browser_ctx: BrowserContext,
+    /// Recent clipboard entries shown in compact mode when query is empty
+    recent_clips: Vec<ClipboardEntry>,
 }
 
 struct QueryHistory {
@@ -138,17 +149,25 @@ impl QueryHistory {
 }
 
 struct RowOffsets {
+    has_browser: bool,
+    browser_count: usize,
+    has_recent_clips: bool,
+    recent_clips_count: usize,
     has_terminal: bool,
     has_url: bool,
     has_calc: bool,
     has_ai: bool,
     has_help: bool,
+    browser_start: usize,
+    recent_clips_start: usize,
     terminal_ix: usize,
     url_ix: usize,
     calc_ix: usize,
     ai_ix: usize,
     help_ix: usize,
     command_offset: usize,
+    /// Number of items that are "context" (browser + clips) — rendered as pills
+    context_count: usize,
 }
 
 impl RoverDelegate {
@@ -165,6 +184,13 @@ impl RoverDelegate {
             .map(|(i, c)| StringMatchCandidate::new(i, &c.name))
             .collect();
         let matches = match_strings(&candidates, "", 50);
+        // Load a few recent clipboard entries for compact mode default display
+        let recent_clips = db
+            .list_clipboard_history()
+            .unwrap_or_default()
+            .into_iter()
+            .take(5)
+            .collect();
         Self {
             all_commands: commands,
             candidates,
@@ -189,7 +215,14 @@ impl RoverDelegate {
             help_query: None,
             help_result: None,
             help_loading: false,
+            browser_ctx: BrowserContext::default(),
+            recent_clips,
         }
+    }
+
+    /// Update browser context from the global state.
+    pub fn refresh_browser_context(&mut self, ctx: BrowserContext) {
+        self.browser_ctx = ctx;
     }
 
     pub fn enter_submenu(&mut self, mode: ViewMode, cx: &mut Context<Picker<Self>>) {
@@ -219,13 +252,23 @@ impl RoverDelegate {
         cx.notify();
     }
 
-    /// Returns `(has_terminal, has_url, has_calc, has_ai, terminal_ix, url_ix, calc_ix, ai_ix, command_offset)`.
     fn row_offsets(&self) -> RowOffsets {
+        let has_browser = !self.browser_ctx.tabs.is_empty() && self.query.is_empty();
+        let browser_count = if has_browser { self.browser_ctx.tabs.len() } else { 0 };
+        let has_recent_clips = !self.recent_clips.is_empty() && self.query.is_empty();
+        let recent_clips_count = if has_recent_clips { self.recent_clips.len() } else { 0 };
         let has_terminal = self.inline_terminal.is_some();
         let has_url = self.url_result.is_some();
         let has_calc = self.calculator_result.is_some();
         let has_ai = self.ai_loading || self.ai_result.is_some();
+        let has_help = self.help_query.is_some();
+
         let mut next = 0usize;
+        let browser_start = next;
+        next += browser_count;
+        let recent_clips_start = next;
+        next += recent_clips_count;
+        let context_count = next; // everything up to here is "context" (pills)
         let terminal_ix = next;
         if has_terminal { next += 1; }
         let url_ix = next;
@@ -234,11 +277,16 @@ impl RoverDelegate {
         if has_calc { next += 1; }
         let ai_ix = next;
         if has_ai { next += 1; }
-        let has_help = self.help_query.is_some();
         let help_ix = next;
         if has_help { next += 1; }
         let command_offset = next;
-        RowOffsets { has_terminal, has_url, has_calc, has_ai, has_help, terminal_ix, url_ix, calc_ix, ai_ix, help_ix, command_offset }
+        RowOffsets {
+            has_browser, browser_count, has_recent_clips, recent_clips_count,
+            has_terminal, has_url, has_calc, has_ai, has_help,
+            browser_start, recent_clips_start,
+            terminal_ix, url_ix, calc_ix, ai_ix, help_ix,
+            command_offset, context_count,
+        }
     }
 
     // ── Pill rendering helpers ──────────────────────────────────────────────
@@ -446,6 +494,104 @@ impl RoverDelegate {
             .into_any_element()
     }
 
+    fn render_browser_pill(
+        &self,
+        title: &str,
+        _url: &str,
+        is_active: bool,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        let dot_color = if is_active { rgba(0x34c759ffu32) } else { rgba(0x8e8e93ffu32) };
+        let text_color = if selected { colors.text_accent } else { colors.text };
+        let short = if title.chars().count() > 20 {
+            let end = title.char_indices().nth(18).map(|(b, _)| b).unwrap_or(title.len());
+            format!("{}…", &title[..end])
+        } else {
+            title.to_string()
+        };
+        Self::pill(selected, colors)
+            .child(
+                div()
+                    .w(px(6.0))
+                    .h(px(6.0))
+                    .rounded_full()
+                    .bg(dot_color),
+            )
+            .child(
+                div()
+                    .text_color(text_color)
+                    .text_size(px(11.0))
+                    .child(SharedString::from(short)),
+            )
+            .into_any_element()
+    }
+
+    fn render_recent_clip_pill(
+        &self,
+        entry: &ClipboardEntry,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        let preview: String = entry.content.chars().take(20).collect::<String>().replace('\n', " ");
+        Self::state_pill("📋", rgba(0x88888826u32), colors.text_muted, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .overflow_hidden()
+                    .child(SharedString::from(preview)),
+            )
+            .into_any_element()
+    }
+
+    /// Render a command as a full-width list row (non-compact mode).
+    fn render_command_row(
+        &self,
+        command: &Command,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        let bg = if selected { colors.element_selected } else { gpui::transparent_black() };
+        let text_color = if selected { colors.text_accent } else { colors.text };
+        div()
+            .px_2()
+            .py(px(5.0))
+            .rounded_md()
+            .bg(bg)
+            .flex()
+            .items_center()
+            .justify_between()
+            .cursor_pointer()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_color(text_color)
+                            .text_size(px(13.0))
+                            .child(SharedString::from(command.name.clone())),
+                    )
+                    .child(
+                        div()
+                            .text_color(colors.text_muted)
+                            .text_size(px(11.0))
+                            .child(SharedString::from(command.description.clone())),
+                    ),
+            )
+            .when(command.has_submenu, |el| {
+                el.child(
+                    div()
+                        .text_color(colors.text_muted)
+                        .text_size(px(10.0))
+                        .child(SharedString::from("›")),
+                )
+            })
+            .into_any_element()
+    }
+
     pub fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
         if self.view_mode != ViewMode::Main {
             return None;
@@ -620,6 +766,21 @@ impl PickerDelegate for RoverDelegate {
         match self.view_mode {
             ViewMode::Main => {
                 let o = self.row_offsets();
+
+                // Browser context — switch to that tab in the browser
+                if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
+                    // Just dismiss — the browser tab is already open
+                    return true;
+                }
+
+                // Recent clipboard — paste to clipboard
+                if o.has_recent_clips && self.selected_ix >= o.recent_clips_start && self.selected_ix < o.recent_clips_start + o.recent_clips_count {
+                    let clip_ix = self.selected_ix - o.recent_clips_start;
+                    if let Some(entry) = self.recent_clips.get(clip_ix) {
+                        cx.write_to_clipboard(ClipboardItem::new_string(entry.content.clone()));
+                    }
+                    return true;
+                }
 
                 if o.has_terminal && self.selected_ix == o.terminal_ix {
                     if let Some(cmd) = &self.inline_terminal {
@@ -799,11 +960,15 @@ impl PickerDelegate for RoverDelegate {
                                     return true;
                                 }
                                 BuiltInCommand::CloseWindow => {
-                                    // Close the frontmost window via AppleScript
-                                    let _ = std::process::Command::new("osascript")
-                                        .arg("-e")
-                                        .arg("tell application \"System Events\" to tell (first application process whose frontmost is true) to click menu item \"Close Window\" of menu \"File\" of menu bar 1")
-                                        .spawn();
+                                    // Dismiss picker first, then close the frontmost window
+                                    // after a delay so the previous app regains focus.
+                                    std::thread::spawn(|| {
+                                        std::thread::sleep(std::time::Duration::from_millis(400));
+                                        let _ = std::process::Command::new("osascript")
+                                            .arg("-e")
+                                            .arg(r#"tell application "System Events" to tell (first application process whose frontmost is true) to click menu item "Close Window" of menu "File" of menu bar 1"#)
+                                            .status();
+                                    });
                                     return true;
                                 }
                             }
@@ -859,6 +1024,22 @@ impl PickerDelegate for RoverDelegate {
         match self.view_mode {
             ViewMode::Main => {
                 let o = self.row_offsets();
+
+                // Browser context pills
+                if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
+                    return vec![ItemAction {
+                        name: "Switch to Tab".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
+                // Recent clips
+                if o.has_recent_clips && self.selected_ix >= o.recent_clips_start && self.selected_ix < o.recent_clips_start + o.recent_clips_count {
+                    return vec![ItemAction {
+                        name: "Copy to Clipboard".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
 
                 if o.has_terminal && self.selected_ix == o.terminal_ix {
                     return vec![ItemAction {
@@ -983,6 +1164,14 @@ impl PickerDelegate for RoverDelegate {
         match self.view_mode {
             ViewMode::Main => {
                 let o = self.row_offsets();
+
+                if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
+                    return self.confirm(cx);
+                }
+
+                if o.has_recent_clips && self.selected_ix >= o.recent_clips_start && self.selected_ix < o.recent_clips_start + o.recent_clips_count {
+                    return self.confirm(cx);
+                }
 
                 if o.has_terminal && self.selected_ix == o.terminal_ix {
                     if let Some(cmd) = &self.inline_terminal {
@@ -1117,6 +1306,11 @@ impl PickerDelegate for RoverDelegate {
         }
     }
 
+    fn context_item_count(&self) -> usize {
+        if self.view_mode != ViewMode::Main { return 0; }
+        self.row_offsets().context_count
+    }
+
     fn render_match(
         &self,
         ix: usize,
@@ -1129,6 +1323,21 @@ impl PickerDelegate for RoverDelegate {
         match self.view_mode {
             ViewMode::Main => {
                 let o = self.row_offsets();
+
+                // Browser context pills
+                if o.has_browser && ix >= o.browser_start && ix < o.browser_start + o.browser_count {
+                    let tab_ix = ix - o.browser_start;
+                    let (title, url) = &self.browser_ctx.tabs[tab_ix];
+                    let is_active = tab_ix == self.browser_ctx.active_tab;
+                    return Some(self.render_browser_pill(title, url, is_active, selected, colors));
+                }
+
+                // Recent clipboard pills
+                if o.has_recent_clips && ix >= o.recent_clips_start && ix < o.recent_clips_start + o.recent_clips_count {
+                    let clip_ix = ix - o.recent_clips_start;
+                    let entry = &self.recent_clips[clip_ix];
+                    return Some(self.render_recent_clip_pill(entry, selected, colors));
+                }
 
                 if o.has_terminal && ix == o.terminal_ix {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");
@@ -1166,6 +1375,47 @@ impl PickerDelegate for RoverDelegate {
                 let file = self.file_results.get(ix)?;
                 Some(self.render_file_pill(file, selected, colors))
             }
+        }
+    }
+
+    fn render_row(
+        &self,
+        ix: usize,
+        selected: bool,
+        cx: &mut Context<Picker<Self>>,
+    ) -> Option<Self::ListItem> {
+        let theme = theme(cx);
+        let colors = &theme.colors;
+
+        match self.view_mode {
+            ViewMode::Main => {
+                let o = self.row_offsets();
+
+                // Non-context items rendered as list rows
+                if o.has_terminal && ix == o.terminal_ix {
+                    let cmd = self.inline_terminal.as_deref().unwrap_or("");
+                    return Some(self.render_terminal_pill(cmd, selected, colors));
+                }
+                if o.has_url && ix == o.url_ix {
+                    let url = self.url_result.as_deref().unwrap_or("");
+                    return Some(self.render_url_pill(url, selected, colors));
+                }
+                if o.has_calc && ix == o.calc_ix {
+                    return Some(self.render_calculator_pill(selected, colors));
+                }
+                if o.has_ai && ix == o.ai_ix {
+                    return Some(self.render_ai_pill(selected, colors));
+                }
+                if o.has_help && ix == o.help_ix {
+                    return Some(self.render_help_pill(selected, colors));
+                }
+
+                let match_ix = ix.saturating_sub(o.command_offset);
+                let string_match = self.matches.get(match_ix)?;
+                let command = self.all_commands.get(string_match.candidate_id)?;
+                Some(self.render_command_row(command, selected, colors))
+            }
+            _ => self.render_match(ix, selected, cx),
         }
     }
 }

@@ -54,6 +54,23 @@ pub trait PickerDelegate: Sized + 'static {
         cx: &mut Context<Picker<Self>>,
     ) -> Option<Self::ListItem>;
 
+    /// Render item as a list row (non-compact mode). Falls back to render_match.
+    fn render_row(
+        &self,
+        ix: usize,
+        selected: bool,
+        cx: &mut Context<Picker<Self>>,
+    ) -> Option<Self::ListItem> {
+        self.render_match(ix, selected, cx)
+    }
+
+    /// Number of context items at the start that should always render as pills
+    /// (e.g. browser tabs, clipboard previews). Remaining items render as list rows
+    /// in non-compact mode.
+    fn context_item_count(&self) -> usize {
+        0
+    }
+
     /// Called before handling up/down. Return Some(query) to set the input text
     /// and prevent normal selection (used for query history).
     fn select_history(&mut self, _up: bool, _query: &str) -> Option<String> {
@@ -270,16 +287,13 @@ impl<D: PickerDelegate> Render for Picker<D> {
         let text_muted = colors.text_muted;
 
         let in_submenu = self.delegate.in_submenu();
+        let context_count = self.delegate.context_item_count();
 
-        // In compact mode, hide suggestions until user starts typing
-        let show_items = if self.compact {
-            !query_is_empty && match_count > 0
-        } else {
-            match_count > 0
-        };
+        // Always show items when there are any (compact shows context/clipboard by default)
+        let show_items = match_count > 0;
 
         // Root: fills window, anchors content to bottom.
-        // Window has transparent bg so only content divs are visible.
+        // No background — window is transparent, only content elements are visible.
         let mut root = div()
             .id("picker")
             .key_context("Picker")
@@ -294,32 +308,76 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .on_action(cx.listener(Self::handle_cancel))
             .on_action(cx.listener(Self::handle_show_actions));
 
-        // Floating pills container (above the bar, separate visual element)
         if show_items {
-            let mut pills_div = div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(4.0))
-                .px_2()
-                .py(px(6.0))
-                .mb(px(6.0))
-                .bg(bg)
-                .rounded_lg()
-                .shadow_md()
-                .border_1()
-                .border_color(colors.border_variant);
+            if self.compact {
+                // ── Compact mode: everything as floating pills, no container bg ──
+                let mut pills_div = div()
+                    .flex()
+                    .flex_row()
+                    .flex_wrap()
+                    .gap(px(4.0))
+                    .px_2()
+                    .py(px(6.0))
+                    .mb(px(6.0));
 
-            for ix in 0..match_count {
-                let selected = ix == self.delegate.selected_index();
-                if let Some(el) = self.delegate.render_match(ix, selected, cx) {
-                    pills_div = pills_div.child(el);
+                for ix in 0..match_count {
+                    let selected = ix == self.delegate.selected_index();
+                    if let Some(el) = self.delegate.render_match(ix, selected, cx) {
+                        pills_div = pills_div.child(el);
+                    }
+                }
+                root = root.child(pills_div);
+            } else {
+                // ── Non-compact mode: context items as pills, rest as list rows ──
+
+                // Context pills (browser tabs, etc.) — floating, no container bg
+                if context_count > 0 {
+                    let mut ctx_pills = div()
+                        .flex()
+                        .flex_row()
+                        .flex_wrap()
+                        .gap(px(4.0))
+                        .px_2()
+                        .py(px(4.0))
+                        .mb(px(4.0));
+
+                    for ix in 0..context_count.min(match_count) {
+                        let selected = ix == self.delegate.selected_index();
+                        if let Some(el) = self.delegate.render_match(ix, selected, cx) {
+                            ctx_pills = ctx_pills.child(el);
+                        }
+                    }
+                    root = root.child(ctx_pills);
+                }
+
+                // List rows — vertical list with bg
+                let list_start = context_count;
+                if list_start < match_count {
+                    let mut list_div = div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(1.0))
+                        .px_1()
+                        .py_1()
+                        .mb(px(6.0))
+                        .bg(bg)
+                        .rounded_lg()
+                        .shadow_md()
+                        .max_h(px(240.0))
+                        .overflow_y_hidden();
+
+                    for ix in list_start..match_count {
+                        let selected = ix == self.delegate.selected_index();
+                        if let Some(el) = self.delegate.render_row(ix, selected, cx) {
+                            list_div = list_div.child(el);
+                        }
+                    }
+                    root = root.child(list_div);
                 }
             }
-            root = root.child(pills_div);
         }
 
-        // Action bar (floating between pills and input bar)
+        // Action bar (floating between items and input bar)
         if self.show_actions {
             let actions = self.delegate.actions_for_selected();
             if !actions.is_empty() {
@@ -329,8 +387,6 @@ impl<D: PickerDelegate> Render for Picker<D> {
                         .bg(bg)
                         .rounded_lg()
                         .shadow_md()
-                        .border_1()
-                        .border_color(colors.border_variant)
                         .px_1()
                         .py_1()
                         .flex()
@@ -371,15 +427,13 @@ impl<D: PickerDelegate> Render for Picker<D> {
             }
         }
 
-        // Input bar — always at the bottom, the main visual element
+        // Input bar — always at the bottom, the main visual element. No border.
         let mut input_bar = div()
             .px_3()
             .py_2()
             .bg(bg)
             .rounded_xl()
             .shadow_lg()
-            .border_1()
-            .border_color(colors.border_variant)
             .flex()
             .items_center()
             .gap_2()

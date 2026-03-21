@@ -1,9 +1,33 @@
 #![recursion_limit = "4096"]
 
 mod webview;
+#[cfg(target_os = "macos")]
+mod content_blocker;
+mod nav_events;
+mod shared_config;
+#[cfg(target_os = "macos")]
+mod navigation_delegate;
+#[cfg(target_os = "macos")]
+mod ui_delegate;
+#[cfg(target_os = "macos")]
+mod download_manager;
+mod extensions;
+mod history;
+mod bookmarks;
+mod dns_prefetch;
+#[cfg(target_os = "macos")]
+mod resource_hints;
+#[cfg(target_os = "macos")]
+mod warmup_pool;
+pub mod transport;
 
 use gpui::*;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+use nav_events::{NavEvent, NavEventQueue};
+use history::HistoryManager;
+use bookmarks::BookmarkManager;
 
 #[cfg(target_os = "macos")]
 use webview::WebViewHandle;
@@ -16,9 +40,9 @@ pub const CACHED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const FROZEN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 pub const CLOSED_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(30);
-const CHROME_HEIGHT: f32 = 44.0;
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
-actions!(rover_browser, [FocusCommandBar]);
+actions!(rover_browser, [OpenTransport, ShareCurrentUrl]);
 
 // ─── Search engines ───────────────────────────────────────────────────────────
 
@@ -112,6 +136,7 @@ pub struct BrowserTab {
     pub url: String,
     pub state: TabState,
     pub last_active: Instant,
+    pub events: NavEventQueue,
     #[cfg(target_os = "macos")]
     pub webview_handle: Option<WebViewHandle>,
 }
@@ -127,6 +152,13 @@ pub enum BrowserAction {
     Reload,
     ListTabs,
     NewSearch { engine_name: String, query: String },
+    Find(String),
+    AddBookmark,
+    RemoveBookmark(i64),
+    ShowHistory,
+    SearchHistory(String),
+    SearchBookmarks(String),
+    Share,
 }
 
 // ─── Command parsing ──────────────────────────────────────────────────────────
@@ -137,6 +169,29 @@ pub fn parse_command(input: &str) -> BrowserAction {
         return BrowserAction::Navigate("about:blank".to_string());
     }
 
+    if trimmed.starts_with('/') {
+        let query = &trimmed[1..];
+        return BrowserAction::Find(query.to_string());
+    }
+
+    if trimmed.starts_with("h ") {
+        let query = trimmed[2..].trim();
+        return BrowserAction::SearchHistory(query.to_string());
+    }
+
+    if trimmed == "bk!" || trimmed.starts_with("bk!") {
+        return BrowserAction::AddBookmark;
+    }
+
+    if trimmed.starts_with("bk ") {
+        let query = trimmed[3..].trim();
+        return BrowserAction::SearchBookmarks(query.to_string());
+    }
+
+    if trimmed == "history" {
+        return BrowserAction::ShowHistory;
+    }
+
     match trimmed {
         "back" | "<" => return BrowserAction::Back,
         "forward" | ">" => return BrowserAction::Forward,
@@ -144,6 +199,7 @@ pub fn parse_command(input: &str) -> BrowserAction {
         "close" => return BrowserAction::CloseTab,
         "new tab" | "newtab" => return BrowserAction::NewTab,
         "tabs" | "ls" | "list" => return BrowserAction::ListTabs,
+        "share" => return BrowserAction::Share,
         _ => {}
     }
 
@@ -204,7 +260,6 @@ pub fn search_url(engine_name: &str, query: &str) -> String {
             return engine.url_template.replace("{query}", &encoded);
         }
     }
-    // Fallback to perplexity
     format!(
         "https://www.perplexity.ai/search?q={}",
         urlencoding::encode(query)
@@ -240,7 +295,7 @@ pub fn fuzzy_score(query: &str, text: &str) -> f32 {
 }
 
 /// Extracts the bare domain from a URL for display (e.g. "perplexity.ai").
-fn domain_from_url(url: &str) -> &str {
+pub fn domain_from_url(url: &str) -> &str {
     let stripped = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
@@ -253,21 +308,37 @@ fn domain_from_url(url: &str) -> &str {
 }
 
 // ─── BrowserWindow ────────────────────────────────────────────────────────────
+//
+// Pure WebView host — no embedded chrome. All UI lives in the floating transport.
 
 pub struct BrowserWindow {
-    tabs: Vec<BrowserTab>,
-    active_tab: usize,
-    command_bar_text: String,
-    command_bar_active: bool,
-    command_bar_focus: FocusHandle,
-    /// Hover state for the title area (hover shows full URL, default shows page title).
-    title_hovered: bool,
+    pub tabs: Vec<BrowserTab>,
+    pub active_tab: usize,
+    /// Last ephemeral hint (download completion, search result, etc.).
+    /// The transport reads and clears this.
+    pub overlay_hint: Option<String>,
+    pub history_manager: Option<HistoryManager>,
+    pub bookmark_manager: Option<BookmarkManager>,
+    pub semantic_index: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+    db: Option<Arc<rover_db::RoverDb>>,
+    focus: FocusHandle,
     _lifecycle_task: Task<()>,
+    _event_task: Task<()>,
 }
 
 impl BrowserWindow {
-    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+        db: Option<Arc<rover_db::RoverDb>>,
+    ) -> Self {
         let focus = cx.focus_handle();
+
+        let history_manager = db.as_ref().map(|d| HistoryManager::new(d.clone()));
+        let bookmark_manager = db.as_ref().map(|d| BookmarkManager::new(d.clone()));
+
+        // Pre-resolve common CDN hostnames in the background.
+        dns_prefetch::prefetch_common();
 
         let lifecycle_task = cx.spawn(async move |this, cx| loop {
             cx.background_executor().timer(LIFECYCLE_INTERVAL).await;
@@ -276,25 +347,441 @@ impl BrowserWindow {
             }
         });
 
+        let event_task = cx.spawn(async move |this, cx| loop {
+            cx.background_executor().timer(EVENT_POLL_INTERVAL).await;
+            if this.update(cx, |b, cx| b.drain_events(cx)).is_err() {
+                break;
+            }
+        });
+
+        // Restore previous session if available.
+        let (tabs, active_tab) = match db.as_ref().and_then(|d| d.load_session().ok()) {
+            Some(session) if !session.is_empty() => {
+                let mut active = 0;
+                let tabs: Vec<BrowserTab> = session
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (url, title, is_active))| {
+                        if is_active {
+                            active = i;
+                        }
+                        BrowserTab {
+                            title,
+                            url,
+                            state: if is_active { TabState::Active } else { TabState::Frozen },
+                            last_active: Instant::now(),
+                            events: nav_events::new_queue(),
+                            #[cfg(target_os = "macos")]
+                            webview_handle: None,
+                        }
+                    })
+                    .collect();
+                log::info!("session: restored {} tabs", tabs.len());
+                (tabs, active)
+            }
+            _ => {
+                let tabs = vec![BrowserTab {
+                    title: "Perplexity".to_string(),
+                    url: DEFAULT_URL.to_string(),
+                    state: TabState::Active,
+                    last_active: Instant::now(),
+                    events: nav_events::new_queue(),
+                    #[cfg(target_os = "macos")]
+                    webview_handle: None,
+                }];
+                (tabs, 0)
+            }
+        };
+
         Self {
-            tabs: vec![BrowserTab {
-                title: "Perplexity".to_string(),
-                url: DEFAULT_URL.to_string(),
-                state: TabState::Active,
-                last_active: Instant::now(),
-                #[cfg(target_os = "macos")]
-                webview_handle: None,
-            }],
-            active_tab: 0,
-            command_bar_text: String::new(),
-            command_bar_active: false,
-            command_bar_focus: focus,
-            title_hovered: false,
+            semantic_index: None,
+            tabs,
+            active_tab,
+            overlay_hint: None,
+            history_manager,
+            bookmark_manager,
+            db: db.clone(),
+            focus,
             _lifecycle_task: lifecycle_task,
+            _event_task: event_task,
         }
     }
 
-    // ── Lifecycle ──────────────────────────────────────────────────────────────
+    // ── Public API for the transport ───────────────────────────────────────────
+
+    /// Returns (title, tab_state) pairs for all tabs plus the active index.
+    pub fn tab_infos(&self) -> (Vec<(String, TabState)>, usize) {
+        let infos = self
+            .tabs
+            .iter()
+            .map(|t| (t.title.clone(), t.state.clone()))
+            .collect();
+        (infos, self.active_tab)
+    }
+
+    /// Active tab's URL for display in transport.
+    pub fn active_url(&self) -> String {
+        self.tabs
+            .get(self.active_tab)
+            .map(|t| t.url.clone())
+            .unwrap_or_default()
+    }
+
+    /// Active tab's title.
+    pub fn active_title(&self) -> String {
+        self.tabs
+            .get(self.active_tab)
+            .map(|t| t.title.clone())
+            .unwrap_or_default()
+    }
+
+    /// Returns Some(bookmark_id) if the active tab is bookmarked.
+    pub fn active_tab_bookmark_id(&self) -> Option<i64> {
+        let url = self.tabs.get(self.active_tab)?.url.clone();
+        self.bookmark_manager.as_ref()?.find_by_url(&url)
+    }
+
+    /// Switch tab — callable from transport without a Window ref.
+    pub fn switch_tab_external(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index >= self.tabs.len() || index == self.active_tab {
+            cx.notify();
+            return;
+        }
+
+        #[cfg(target_os = "macos")]
+        if let Some(tab) = self.tabs.get(self.active_tab) {
+            if let Some(wv) = &tab.webview_handle {
+                wv.hide();
+                wv.suspend_media();
+            }
+        }
+
+        self.active_tab = index;
+        let tab = &mut self.tabs[index];
+        tab.last_active = Instant::now();
+        tab.state = TabState::Active;
+
+        #[cfg(target_os = "macos")]
+        if let Some(wv) = &tab.webview_handle {
+            wv.show();
+            wv.resume_media();
+        }
+
+        cx.notify();
+    }
+
+    /// Execute an action — callable from transport without a Window ref.
+    pub fn execute_action_external(&mut self, action: BrowserAction, cx: &mut Context<Self>) {
+        match action {
+            BrowserAction::Navigate(url) => {
+                dns_prefetch::prefetch_url(&url);
+                if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+                    tab.url = url.clone();
+                    tab.last_active = Instant::now();
+                    tab.state = TabState::Active;
+                    #[cfg(target_os = "macos")]
+                    if let Some(wv) = &tab.webview_handle {
+                        wv.navigate(&url);
+                    }
+                }
+            }
+            BrowserAction::NewSearch { engine_name, query } => {
+                let url = search_url(&engine_name, &query);
+                self.execute_action_external(BrowserAction::Navigate(url), cx);
+                return;
+            }
+            BrowserAction::SwitchToTab(i) => {
+                self.switch_tab_external(i, cx);
+                return;
+            }
+            BrowserAction::NewTab => {
+                self.open_tab_external(DEFAULT_URL, cx);
+            }
+            BrowserAction::CloseTab => {
+                let i = self.active_tab;
+                self.close_tab(i, cx);
+            }
+            BrowserAction::Back => {
+                #[cfg(target_os = "macos")]
+                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                    wv.go_back();
+                }
+            }
+            BrowserAction::Forward => {
+                #[cfg(target_os = "macos")]
+                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                    wv.go_forward();
+                }
+            }
+            BrowserAction::Reload => {
+                #[cfg(target_os = "macos")]
+                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                    wv.reload();
+                }
+            }
+            BrowserAction::Find(query) => {
+                #[cfg(target_os = "macos")]
+                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                    wv.find_text(&query);
+                }
+            }
+            BrowserAction::AddBookmark => {
+                if let Some(tab) = self.tabs.get(self.active_tab) {
+                    if let Some(bm) = &self.bookmark_manager {
+                        let _ = bm.add(&tab.url, &tab.title);
+                        self.overlay_hint = Some(format!("Bookmarked: {}", tab.title));
+                    }
+                }
+            }
+            BrowserAction::RemoveBookmark(id) => {
+                if let Some(bm) = &self.bookmark_manager {
+                    let _ = bm.remove(id);
+                    self.overlay_hint = Some("Bookmark removed".to_string());
+                }
+            }
+            BrowserAction::ShowHistory => {
+                if let Some(hm) = &self.history_manager {
+                    let recent = hm.recent(10);
+                    if recent.is_empty() {
+                        self.overlay_hint = Some("No history".to_string());
+                    } else {
+                        let lines: Vec<String> = recent
+                            .iter()
+                            .map(|e| format!("{} — {}", e.title, e.url))
+                            .collect();
+                        self.overlay_hint = Some(lines.join("\n"));
+                    }
+                }
+            }
+            BrowserAction::SearchHistory(query) => {
+                if let Some(hm) = &self.history_manager {
+                    let results = hm.search(&query, 5);
+                    if results.is_empty() {
+                        self.overlay_hint = Some(format!("No history matching '{query}'"));
+                    } else {
+                        let lines: Vec<String> = results
+                            .iter()
+                            .map(|e| format!("{} — {}", e.title, e.url))
+                            .collect();
+                        self.overlay_hint = Some(lines.join("\n"));
+                    }
+                }
+            }
+            BrowserAction::SearchBookmarks(query) => {
+                if let Some(bm) = &self.bookmark_manager {
+                    let results = bm.search(&query);
+                    if results.is_empty() {
+                        self.overlay_hint = Some(format!("No bookmarks matching '{query}'"));
+                    } else {
+                        let lines: Vec<String> = results
+                            .iter()
+                            .map(|b| format!("{} — {}", b.title, b.url))
+                            .collect();
+                        self.overlay_hint = Some(lines.join("\n"));
+                    }
+                }
+            }
+            BrowserAction::Share => {
+                if let Some(tab) = self.tabs.get(self.active_tab) {
+                    let url = tab.url.clone();
+                    use std::io::Write;
+                    if let Ok(mut child) = std::process::Command::new("pbcopy")
+                        .stdin(std::process::Stdio::piped())
+                        .spawn()
+                    {
+                        if let Some(stdin) = child.stdin.as_mut() {
+                            let _ = stdin.write_all(url.as_bytes());
+                        }
+                        let _ = child.wait();
+                        self.overlay_hint = Some(format!("Copied: {url}"));
+                    }
+                }
+            }
+            BrowserAction::ListTabs => {}
+        }
+        cx.notify();
+    }
+
+    // ── Internal helpers ───────────────────────────────────────────────────────
+
+    fn open_tab_external(&mut self, url: &str, _cx: &mut Context<Self>) {
+        #[cfg(target_os = "macos")]
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            if let Some(wv) = &tab.webview_handle {
+                wv.hide();
+            }
+            tab.state = TabState::Cached;
+            tab.last_active = Instant::now();
+        }
+        #[cfg(not(target_os = "macos"))]
+        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
+            tab.state = TabState::Cached;
+            tab.last_active = Instant::now();
+        }
+
+        self.tabs.push(BrowserTab {
+            title: domain_from_url(url).to_string(),
+            url: url.to_string(),
+            state: TabState::Active,
+            last_active: Instant::now(),
+            events: nav_events::new_queue(),
+            #[cfg(target_os = "macos")]
+            webview_handle: None,
+        });
+        self.active_tab = self.tabs.len() - 1;
+    }
+
+    fn close_tab(&mut self, index: usize, _cx: &mut Context<Self>) {
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        #[cfg(target_os = "macos")]
+        {
+            self.tabs[index].webview_handle = None;
+        }
+        self.tabs.remove(index);
+        if self.active_tab >= self.tabs.len() {
+            self.active_tab = self.tabs.len() - 1;
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(wv) = &self.tabs[self.active_tab].webview_handle {
+            wv.show();
+        }
+        self.tabs[self.active_tab].state = TabState::Active;
+        self.tabs[self.active_tab].last_active = Instant::now();
+    }
+
+    fn save_session(&self) {
+        if let Some(db) = &self.db {
+            let tabs: Vec<(String, String, bool)> = self
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (t.url.clone(), t.title.clone(), i == self.active_tab))
+                .collect();
+            if let Err(e) = db.save_session(&tabs) {
+                log::warn!("session save failed: {e}");
+            }
+        }
+    }
+
+    fn drain_events(&mut self, cx: &mut Context<Self>) {
+        let mut changed = false;
+
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            let events: Vec<NavEvent> = {
+                let mut queue = tab.events.lock().unwrap();
+                std::mem::take(&mut *queue)
+            };
+            if events.is_empty() {
+                continue;
+            }
+            changed = true;
+            for event in events {
+                match event {
+                    NavEvent::LoadStarted { url } => {
+                        if !url.is_empty() {
+                            tab.url = url;
+                        }
+                    }
+                    NavEvent::LoadCommitted { url } => {
+                        if !url.is_empty() {
+                            tab.url = url;
+                        }
+                    }
+                    NavEvent::LoadFinished { url, title } => {
+                        if !url.is_empty() {
+                            tab.url = url.clone();
+                        }
+                        if !title.is_empty() {
+                            tab.title = title.clone();
+                        }
+                        if i == self.active_tab {
+                            if let Some(hm) = &self.history_manager {
+                                hm.record(&url, &title);
+                            }
+                        }
+                        // Index page content for semantic search
+                        #[cfg(target_os = "macos")]
+                        if let Some(semantic) = &self.semantic_index {
+                            if let Some(wv) = &tab.webview_handle {
+                                let sem = semantic.clone();
+                                let page_url = url.clone();
+                                let page_title = title.clone();
+                                wv.evaluate_javascript(
+                                    "document.body ? document.body.innerText.substring(0, 5000) : ''",
+                                    move |text| {
+                                        if let Some(content) = text {
+                                            if content.len() > 50 {
+                                                let doc_id = format!("page:{page_url}");
+                                                let doc_text = format!("{page_title}\n\n{content}");
+                                                std::thread::spawn(move || {
+                                                    if let Ok(mut idx) = sem.lock() {
+                                                        let meta = serde_json::json!({
+                                                            "url": page_url,
+                                                            "title": page_title,
+                                                        });
+                                                        if let Err(e) = idx.upsert(&doc_id, "pages", &doc_text, meta) {
+                                                            log::warn!("semantic index page failed: {e}");
+                                                        } else {
+                                                            log::debug!("semantic: indexed page {page_url}");
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    },
+                                );
+                            }
+                        }
+                    }
+                    NavEvent::LoadFailed { error } => {
+                        log::warn!("browser: tab {i} load failed: {error}");
+                    }
+                    NavEvent::TitleChanged { title } => {
+                        if !title.is_empty() {
+                            tab.title = title;
+                        }
+                    }
+                    NavEvent::NewTabRequested { url } => {
+                        cx.spawn({
+                            let url = url.clone();
+                            async move |this, cx: &mut AsyncApp| {
+                                let _ = this.update(cx, |bw: &mut BrowserWindow, cx| {
+                                    bw.open_tab_external(&url, cx);
+                                    cx.notify();
+                                });
+                            }
+                        })
+                        .detach();
+                    }
+                    NavEvent::DownloadStarted { suggested_filename, destination } => {
+                        self.overlay_hint =
+                            Some(format!("Downloaded {suggested_filename} to {destination}"));
+                    }
+                    NavEvent::FindResult { found, match_count } => {
+                        if found {
+                            self.overlay_hint = Some(format!("{match_count} matches"));
+                        } else {
+                            self.overlay_hint = Some("No matches".to_string());
+                        }
+                    }
+                    NavEvent::ProcessTerminated => {
+                        log::warn!("browser: tab {i} web content process terminated, reloading");
+                        #[cfg(target_os = "macos")]
+                        if let Some(wv) = &tab.webview_handle {
+                            wv.navigate(&tab.url);
+                        }
+                        self.overlay_hint = Some("Page crashed — reloading".to_string());
+                    }
+                }
+            }
+        }
+
+        if changed {
+            cx.notify();
+        }
+    }
 
     fn run_lifecycle(&mut self, cx: &mut Context<Self>) {
         let now = Instant::now();
@@ -312,6 +799,7 @@ impl BrowserWindow {
                         #[cfg(target_os = "macos")]
                         if let Some(wv) = &tab.webview_handle {
                             wv.hide();
+                            wv.suspend_media();
                         }
                     }
                 }
@@ -351,247 +839,10 @@ impl BrowserWindow {
             }
         }
 
+        // Persist session state for restore on next launch.
+        self.save_session();
+
         cx.notify();
-    }
-
-    // ── Navigation ─────────────────────────────────────────────────────────────
-
-    fn navigate_current(&mut self, url: &str, _window: &mut Window, _cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            tab.url = url.to_string();
-            tab.last_active = Instant::now();
-            tab.state = TabState::Active;
-            #[cfg(target_os = "macos")]
-            if let Some(wv) = &tab.webview_handle {
-                wv.navigate(url);
-            }
-        }
-    }
-
-    fn open_tab(&mut self, url: &str, _cx: &mut Context<Self>) {
-        // Cache / hide current tab's webview
-        #[cfg(target_os = "macos")]
-        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            if let Some(wv) = &tab.webview_handle {
-                wv.hide();
-            }
-            tab.state = TabState::Cached;
-            tab.last_active = Instant::now();
-        }
-        #[cfg(not(target_os = "macos"))]
-        if let Some(tab) = self.tabs.get_mut(self.active_tab) {
-            tab.state = TabState::Cached;
-            tab.last_active = Instant::now();
-        }
-
-        self.tabs.push(BrowserTab {
-            title: domain_from_url(url).to_string(),
-            url: url.to_string(),
-            state: TabState::Active,
-            last_active: Instant::now(),
-            #[cfg(target_os = "macos")]
-            webview_handle: None,
-        });
-        self.active_tab = self.tabs.len() - 1;
-    }
-
-    fn switch_tab(&mut self, index: usize, _window: &mut Window, cx: &mut Context<Self>) {
-        if index >= self.tabs.len() || index == self.active_tab {
-            self.command_bar_active = false;
-            cx.notify();
-            return;
-        }
-
-        // Hide old tab's webview
-        #[cfg(target_os = "macos")]
-        if let Some(tab) = self.tabs.get(self.active_tab) {
-            if let Some(wv) = &tab.webview_handle {
-                wv.hide();
-            }
-        }
-
-        self.active_tab = index;
-        let tab = &mut self.tabs[index];
-        tab.last_active = Instant::now();
-        tab.state = TabState::Active;
-
-        // Show new tab's webview (if already loaded)
-        #[cfg(target_os = "macos")]
-        if let Some(wv) = &tab.webview_handle {
-            wv.show();
-        }
-
-        self.command_bar_active = false;
-        cx.notify();
-    }
-
-    fn close_tab(&mut self, index: usize, _cx: &mut Context<Self>) {
-        if self.tabs.len() <= 1 {
-            return;
-        }
-        #[cfg(target_os = "macos")]
-        {
-            self.tabs[index].webview_handle = None;
-        }
-        self.tabs.remove(index);
-        if self.active_tab >= self.tabs.len() {
-            self.active_tab = self.tabs.len() - 1;
-        }
-        #[cfg(target_os = "macos")]
-        if let Some(wv) = &self.tabs[self.active_tab].webview_handle {
-            wv.show();
-        }
-        self.tabs[self.active_tab].state = TabState::Active;
-        self.tabs[self.active_tab].last_active = Instant::now();
-    }
-
-    fn execute_action(&mut self, action: BrowserAction, window: &mut Window, cx: &mut Context<Self>) {
-        match action {
-            BrowserAction::Navigate(url) => self.navigate_current(&url, window, cx),
-            BrowserAction::NewSearch { engine_name, query } => {
-                let url = search_url(&engine_name, &query);
-                self.navigate_current(&url, window, cx);
-            }
-            BrowserAction::SwitchToTab(i) => {
-                self.switch_tab(i, window, cx);
-                return; // switch_tab calls notify
-            }
-            BrowserAction::NewTab => self.open_tab(DEFAULT_URL, cx),
-            BrowserAction::CloseTab => {
-                let i = self.active_tab;
-                self.close_tab(i, cx);
-            }
-            BrowserAction::Back => {
-                #[cfg(target_os = "macos")]
-                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
-                    wv.go_back();
-                }
-            }
-            BrowserAction::Forward => {
-                #[cfg(target_os = "macos")]
-                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
-                    wv.go_forward();
-                }
-            }
-            BrowserAction::Reload => {
-                #[cfg(target_os = "macos")]
-                if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
-                    wv.reload();
-                }
-            }
-            BrowserAction::ListTabs => {}
-        }
-        self.command_bar_active = false;
-        cx.notify();
-    }
-
-    // ── Command bar ────────────────────────────────────────────────────────────
-
-    fn activate_command_bar(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.command_bar_active = true;
-        self.command_bar_text.clear();
-        window.focus(&self.command_bar_focus);
-        cx.notify();
-    }
-
-    fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = std::mem::take(&mut self.command_bar_text);
-        self.command_bar_active = false;
-        // Tabs take priority over URL/search parsing
-        if let Some((index, _)) = self.best_tab_match(&text) {
-            self.switch_tab(index, window, cx);
-        } else {
-            let action = parse_command(&text);
-            self.execute_action(action, window, cx);
-        }
-    }
-
-    fn handle_key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        let key = event.keystroke.key.as_str();
-        let mods = &event.keystroke.modifiers;
-
-        // Global cmd shortcuts always available
-        if mods.platform {
-            match key {
-                "t" => {
-                    self.open_tab(DEFAULT_URL, cx);
-                    cx.notify();
-                    return;
-                }
-                "w" => {
-                    let i = self.active_tab;
-                    self.close_tab(i, cx);
-                    cx.notify();
-                    return;
-                }
-                "[" => {
-                    #[cfg(target_os = "macos")]
-                    if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
-                        wv.go_back();
-                    }
-                    return;
-                }
-                "]" => {
-                    #[cfg(target_os = "macos")]
-                    if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
-                        wv.go_forward();
-                    }
-                    return;
-                }
-                "r" => {
-                    #[cfg(target_os = "macos")]
-                    if let Some(wv) = self.tabs.get(self.active_tab).and_then(|t| t.webview_handle.as_ref()) {
-                        wv.reload();
-                    }
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        if !self.command_bar_active {
-            return;
-        }
-
-        match key {
-            "escape" => {
-                self.command_bar_active = false;
-                self.command_bar_text.clear();
-                cx.notify();
-            }
-            "return" | "enter" => {
-                self.submit(window, cx);
-            }
-            "backspace" => {
-                self.command_bar_text.pop();
-                cx.notify();
-            }
-            key if key.chars().count() == 1
-                && key.chars().next().map_or(false, |c| !c.is_control())
-                && !mods.platform
-                && !mods.control =>
-            {
-                self.command_bar_text.push_str(key);
-                cx.notify();
-            }
-            _ => {}
-        }
-    }
-
-    fn best_tab_match(&self, query: &str) -> Option<(usize, &str)> {
-        if query.is_empty() {
-            return None;
-        }
-        let mut best_score = 0.4f32;
-        let mut best = None;
-        for (i, tab) in self.tabs.iter().enumerate() {
-            let score = fuzzy_score(query, &tab.title).max(fuzzy_score(query, &tab.url));
-            if score > best_score {
-                best_score = score;
-                best = Some((i, tab.title.as_str()));
-            }
-        }
-        best
     }
 }
 
@@ -599,166 +850,62 @@ impl BrowserWindow {
 
 impl Focusable for BrowserWindow {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.command_bar_focus.clone()
+        self.focus.clone()
     }
 }
 
 // ─── Render ───────────────────────────────────────────────────────────────────
+//
+// The browser window is a pure full-screen WebView. All chrome lives in the
+// floating transport popup (transport.rs).
 
 impl Render for BrowserWindow {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_active = self.command_bar_active;
-
-        // Root: key bindings + focus tracking always active so cmd+\ fires globally
-        let mut root = div()
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let browser_weak = cx.entity().downgrade();
+        div()
             .key_context("BrowserWindow")
-            .track_focus(&self.command_bar_focus)
-            .on_action(cx.listener(|this, _: &FocusCommandBar, window, cx| {
-                this.activate_command_bar(window, cx);
+            .track_focus(&self.focus)
+            .on_action(cx.listener(move |_this, _: &OpenTransport, _window, cx| {
+                transport::open_browser_transport(browser_weak.clone(), cx);
             }))
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                this.handle_key_down(event, window, cx);
+            .on_action(cx.listener(|this, _: &ShareCurrentUrl, _window, cx| {
+                this.execute_action_external(BrowserAction::Share, cx);
             }))
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(0x1e1e1e));
-
-        // Chrome bar only visible when cmd+\ is open
-        if is_active {
-            let bar_text = self.command_bar_text.clone();
-            let is_bar_focused = self.command_bar_focus.is_focused(window);
-
-            // Current page info for the title row
-            let active_tab = self.tabs.get(self.active_tab);
-            let page_title = active_tab.map(|t| t.title.clone()).unwrap_or_else(|| "New Tab".to_string());
-            let page_url = active_tab.map(|t| t.url.clone()).unwrap_or_default();
-            let page_domain = domain_from_url(&page_url).to_string();
-
-            // Hint: what pressing ↵ will do
-            let hint: Option<String> = if !bar_text.is_empty() {
-                if let Some((_, title)) = self.best_tab_match(&bar_text) {
-                    Some(format!("↵  switch to: {title}"))
-                } else {
-                    match parse_command(&bar_text) {
-                        BrowserAction::Navigate(url) => Some(format!("↵  navigate to {url}")),
-                        BrowserAction::NewSearch { engine_name, query } => Some(format!("↵  {engine_name} — {query}")),
-                        BrowserAction::Back => Some("↵  go back".to_string()),
-                        BrowserAction::Forward => Some("↵  go forward".to_string()),
-                        BrowserAction::Reload => Some("↵  reload".to_string()),
-                        BrowserAction::CloseTab => Some("↵  close tab".to_string()),
-                        BrowserAction::NewTab => Some("↵  new tab".to_string()),
-                        _ => None,
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                let key = event.keystroke.key.as_str();
+                let mods = &event.keystroke.modifiers;
+                if mods.platform {
+                    match key {
+                        "t" => { this.open_tab_external(DEFAULT_URL, cx); cx.notify(); }
+                        "w" => {
+                            let i = this.active_tab;
+                            this.close_tab(i, cx);
+                            cx.notify();
+                        }
+                        "[" => {
+                            #[cfg(target_os = "macos")]
+                            if let Some(wv) = this.tabs.get(this.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                                wv.go_back();
+                            }
+                        }
+                        "]" => {
+                            #[cfg(target_os = "macos")]
+                            if let Some(wv) = this.tabs.get(this.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                                wv.go_forward();
+                            }
+                        }
+                        "r" => {
+                            #[cfg(target_os = "macos")]
+                            if let Some(wv) = this.tabs.get(this.active_tab).and_then(|t| t.webview_handle.as_ref()) {
+                                wv.reload();
+                            }
+                        }
+                        _ => {}
                     }
                 }
-            } else {
-                None
-            };
-
-            // Tab pills
-            let mut tab_pills = div().flex().flex_row().items_center().gap_1();
-            for (i, tab) in self.tabs.iter().enumerate() {
-                let is_current = i == self.active_tab;
-                let dot_color = match tab.state {
-                    TabState::Active => rgb(0x28c840u32),
-                    TabState::Cached => rgb(0xffbd2eu32),
-                    TabState::Frozen => rgb(0x666666u32),
-                };
-                let short_title = if tab.title.len() > 18 {
-                    format!("{}…", &tab.title[..15])
-                } else {
-                    tab.title.clone()
-                };
-                tab_pills = tab_pills.child(
-                    div()
-                        .id(ElementId::NamedInteger("tab-pill".into(), i as u64))
-                        .flex().items_center().gap_1()
-                        .px_2().py_1().rounded_md()
-                        .bg(if is_current { rgb(0x383838u32) } else { rgb(0x252525u32) })
-                        .border_1()
-                        .border_color(if is_current { rgb(0x5588ccu32) } else { rgb(0x353535u32) })
-                        .cursor_pointer()
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.switch_tab(i, window, cx);
-                        }))
-                        .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(dot_color))
-                        .child(
-                            div()
-                                .text_color(if is_current { rgb(0xffffffu32) } else { rgb(0x888888u32) })
-                                .text_size(px(11.0))
-                                .child(SharedString::from(short_title)),
-                        ),
-                );
-            }
-
-            // Title row: page title (hover → domain) + tab pills
-            let title_row = div()
-                .flex().flex_row().items_center().gap_2()
-                .px_3().h(px(CHROME_HEIGHT))
-                .child(
-                    div()
-                        .id("page-title")
-                        .flex().flex_1().items_center()
-                        .px_2().py_1().rounded_md()
-                        .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                            this.title_hovered = *hovered;
-                            cx.notify();
-                        }))
-                        .child(
-                            div()
-                                .text_color(if self.title_hovered { rgb(0x7aabccu32) } else { rgb(0x999999u32) })
-                                .text_size(px(12.0))
-                                .child(SharedString::from(if self.title_hovered { page_domain } else { page_title })),
-                        ),
-                )
-                .child(tab_pills);
-
-            // Input row: text field with cursor
-            let input_row = div()
-                .flex().flex_row().items_center()
-                .px_3().h(px(CHROME_HEIGHT))
-                .child(
-                    div()
-                        .flex_1().px_3().py_1().rounded_md()
-                        .bg(rgb(0x1a1a1a))
-                        .border_1()
-                        .border_color(if is_bar_focused { rgb(0x5588cc) } else { rgb(0x404040) })
-                        .child(
-                            div()
-                                .text_color(rgb(0xffffff))
-                                .text_size(px(13.0))
-                                .child(SharedString::from(format!("{bar_text}▌"))),
-                        ),
-                );
-
-            // Build chrome: title row + input row + optional hint
-            let mut chrome = div()
-                .flex().flex_col().w_full()
-                .bg(rgb(0x2a2a2a))
-                .border_b_1()
-                .border_color(rgb(0x383838))
-                .child(title_row)
-                .child(input_row);
-
-            if let Some(hint_text) = hint {
-                chrome = chrome.child(
-                    div()
-                        .px_3().pb_2()
-                        .text_color(rgb(0x5588cc))
-                        .text_size(px(11.0))
-                        .child(SharedString::from(hint_text)),
-                );
-            }
-
-            root = root.child(chrome);
-        }
-
-        root.child(
-            div()
-                .flex_1()
-                .w_full()
-                .child(WebViewElement { browser: cx.entity().downgrade() }),
-        )
+            }))
+            .size_full()
+            .child(WebViewElement { browser: cx.entity().downgrade() })
     }
 }
 
@@ -841,21 +988,15 @@ impl Element for WebViewElement {
                 _ => return,
             };
 
-            let scale = window.scale_factor() as f64;
-            // viewport_size is in physical pixels; divide by scale to get logical points
-            let viewport_h = f64::from(window.viewport_size().height) / scale;
-
-            // bounds are in physical pixels, top-left origin (GPUI convention)
-            let gpui_x = f64::from(bounds.origin.x);
-            let gpui_y = f64::from(bounds.origin.y);
-            let gpui_w = f64::from(bounds.size.width);
-            let gpui_h = f64::from(bounds.size.height);
-
-            // Convert to NSView logical points with flipped Y axis (bottom-left origin)
-            let x = gpui_x / scale;
-            let width = gpui_w / scale;
-            let height = gpui_h / scale;
-            let y = viewport_h - (gpui_y / scale) - height; // flip
+            // GPUI Pixels are logical pixels = NSPoints.
+            // viewport_size() is already in logical pixels — no scale conversion needed.
+            // Only Y-axis needs flipping (NSView origin is bottom-left, GPUI is top-left).
+            let viewport_h = f64::from(window.viewport_size().height);
+            let x = f64::from(bounds.origin.x);
+            let y_top = f64::from(bounds.origin.y);
+            let width = f64::from(bounds.size.width);
+            let height = f64::from(bounds.size.height);
+            let y = viewport_h - y_top - height;
 
             if let Some(browser) = self.browser.upgrade() {
                 browser.update(cx, |bw, _cx| {
@@ -863,15 +1004,22 @@ impl Element for WebViewElement {
                         if let Some(wv) = &tab.webview_handle {
                             wv.set_frame(x, y, width, height);
                             wv.show();
-                            // Opportunistic title sync from WKWebView
                             if let Some(title) = wv.title() {
                                 if !title.is_empty() {
                                     tab.title = title;
                                 }
                             }
-                        } else if let Some(wv) = WebViewHandle::create(ns_view, x, y, width, height) {
-                            wv.navigate(&tab.url);
-                            tab.webview_handle = Some(wv);
+                        } else {
+                            let events = tab.events.clone();
+                            // Try the warm-up pool first (pre-spun process), fall back to fresh.
+                            let wv = warmup_pool::take(ns_view, x, y, width, height, events.clone())
+                                .or_else(|| WebViewHandle::create(ns_view, x, y, width, height, events));
+                            if let Some(wv) = wv {
+                                wv.navigate(&tab.url);
+                                tab.webview_handle = Some(wv);
+                                // Refill the pool in the background for next time.
+                                unsafe { warmup_pool::refill(ns_view); }
+                            }
                         }
                     }
                 });
@@ -880,20 +1028,42 @@ impl Element for WebViewElement {
     }
 }
 
-// ─── Entry point ──────────────────────────────────────────────────────────────
+// ─── Entry points ─────────────────────────────────────────────────────────────
 
-pub fn open_browser_window(cx: &mut App) {
-    open_browser_window_with_url(cx, DEFAULT_URL);
+pub fn open_browser_window(cx: &mut App, db: Option<Arc<rover_db::RoverDb>>) {
+    open_browser_window_inner(cx, DEFAULT_URL, db, None);
 }
 
-pub fn open_browser_window_with_url(cx: &mut App, url: &str) {
-    cx.bind_keys([KeyBinding::new("cmd-\\", FocusCommandBar, Some("BrowserWindow"))]);
+pub fn open_browser_window_with_url(cx: &mut App, url: &str, db: Option<Arc<rover_db::RoverDb>>) {
+    open_browser_window_inner(cx, url, db, None);
+}
+
+pub fn open_browser_window_with_semantic(
+    cx: &mut App,
+    url: &str,
+    db: Option<Arc<rover_db::RoverDb>>,
+    semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+) {
+    open_browser_window_inner(cx, url, db, semantic);
+}
+
+fn open_browser_window_inner(
+    cx: &mut App,
+    url: &str,
+    db: Option<Arc<rover_db::RoverDb>>,
+    semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+) {
+    // Cmd+\ opens the floating transport from anywhere in the browser window.
+    // Cmd+Shift+C copies the current URL directly (no transport needed).
+    cx.bind_keys([
+        KeyBinding::new("cmd-\\", OpenTransport, Some("BrowserWindow")),
+        KeyBinding::new("cmd-shift-c", ShareCurrentUrl, Some("BrowserWindow")),
+    ]);
 
     let url = url.to_string();
-    let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
     cx.open_window(
         WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            window_bounds: None, // fullscreen / maximised by OS
             titlebar: None,
             kind: WindowKind::Normal,
             focus: true,
@@ -904,7 +1074,8 @@ pub fn open_browser_window_with_url(cx: &mut App, url: &str) {
         },
         move |window, cx| {
             cx.new(|cx| {
-                let mut bw = BrowserWindow::new(window, cx);
+                let mut bw = BrowserWindow::new(window, cx, db);
+                bw.semantic_index = semantic;
                 if let Some(tab) = bw.tabs.get_mut(0) {
                     tab.url = url.clone();
                     tab.title = looks_like_url(&url)
@@ -925,6 +1096,43 @@ pub fn open_browser_window_with_url(cx: &mut App, url: &str) {
         },
     )
     .ok();
+
+    // Install option+drag window move handler
+    #[cfg(target_os = "macos")]
+    install_option_drag_handler();
+}
+
+/// Installs a local NSEvent monitor that listens for Option+leftMouseDragged
+/// and calls `performWindowDragWithEvent:` on the key window so the user can
+/// drag the browser window by holding Option and clicking anywhere.
+#[cfg(target_os = "macos")]
+fn install_option_drag_handler() {
+    use cocoa::base::{id, nil};
+    use objc::*;
+
+    unsafe {
+        // NSEventMaskLeftMouseDragged = 1 << 6 = 64
+        let mask: u64 = 1 << 6;
+        let block = block::ConcreteBlock::new(move |event: id| -> id {
+            let modifier_flags: u64 = msg_send![event, modifierFlags];
+            // NSEventModifierFlagOption = 1 << 19 = 524288
+            let option_held = modifier_flags & (1 << 19) != 0;
+            if option_held {
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let key_window: id = msg_send![app, keyWindow];
+                if key_window != nil {
+                    let _: () = msg_send![key_window, performWindowDragWithEvent: event];
+                }
+            }
+            event
+        });
+        let block = block.copy();
+        let _: id = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: mask
+            handler: &*block
+        ];
+    }
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -1013,6 +1221,31 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_command_find() {
+        match parse_command("/hello world") {
+            BrowserAction::Find(q) => assert_eq!(q, "hello world"),
+            other => panic!("Expected Find, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_command_history_search() {
+        match parse_command("h rust") {
+            BrowserAction::SearchHistory(q) => assert_eq!(q, "rust"),
+            other => panic!("Expected SearchHistory, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_command_bookmark() {
+        assert!(matches!(parse_command("bk!"), BrowserAction::AddBookmark));
+        match parse_command("bk rust") {
+            BrowserAction::SearchBookmarks(q) => assert_eq!(q, "rust"),
+            other => panic!("Expected SearchBookmarks, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_looks_like_url() {
         assert!(looks_like_url("https://example.com"));
         assert!(looks_like_url("http://example.com"));
@@ -1034,7 +1267,6 @@ mod tests {
         let url = search_url("youtube", "gpui");
         assert!(url.contains("youtube.com") && url.contains("gpui"));
 
-        // Unknown engine falls back to perplexity
         let url = search_url("nonexistent", "test");
         assert!(url.contains("perplexity.ai"));
     }

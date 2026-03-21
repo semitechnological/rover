@@ -38,6 +38,10 @@ pub struct RoverDelegate {
     ai_debounce: Option<Task<()>>,
     inline_terminal: Option<String>,
     url_result: Option<String>,
+    semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+    help_query: Option<String>,
+    help_result: Option<String>,
+    help_loading: bool,
 }
 
 struct QueryHistory {
@@ -138,10 +142,12 @@ struct RowOffsets {
     has_url: bool,
     has_calc: bool,
     has_ai: bool,
+    has_help: bool,
     terminal_ix: usize,
     url_ix: usize,
     calc_ix: usize,
     ai_ix: usize,
+    help_ix: usize,
     command_offset: usize,
 }
 
@@ -151,6 +157,7 @@ impl RoverDelegate {
         db: Arc<RoverDb>,
         ai_session: Option<Arc<rusty_foundationmodels::Session>>,
         ai_enabled: bool,
+        semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
     ) -> Self {
         let candidates: Vec<StringMatchCandidate> = commands
             .iter()
@@ -178,6 +185,10 @@ impl RoverDelegate {
             ai_debounce: None,
             inline_terminal: None,
             url_result: None,
+            semantic,
+            help_query: None,
+            help_result: None,
+            help_loading: false,
         }
     }
 
@@ -223,257 +234,216 @@ impl RoverDelegate {
         if has_calc { next += 1; }
         let ai_ix = next;
         if has_ai { next += 1; }
+        let has_help = self.help_query.is_some();
+        let help_ix = next;
+        if has_help { next += 1; }
         let command_offset = next;
-        RowOffsets { has_terminal, has_url, has_calc, has_ai, terminal_ix, url_ix, calc_ix, ai_ix, command_offset }
+        RowOffsets { has_terminal, has_url, has_calc, has_ai, has_help, terminal_ix, url_ix, calc_ix, ai_ix, help_ix, command_offset }
     }
 
-    fn render_calculator_row(
+    // ── Pill rendering helpers ──────────────────────────────────────────────
+
+    fn pill(selected: bool, colors: &rover_theme::ThemeColors) -> Div {
+        let mut p = div()
+            .px_2()
+            .py(px(4.0))
+            .rounded_full()
+            .border_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .cursor_pointer();
+        if selected {
+            p = p
+                .bg(colors.element_selected)
+                .border_color(colors.text_accent);
+        } else {
+            p = p
+                .bg(colors.surface_background)
+                .border_color(colors.border_variant);
+        }
+        p
+    }
+
+    fn state_pill(label: &str, bg_color: Rgba, text_color: Hsla, selected: bool, colors: &rover_theme::ThemeColors) -> Div {
+        let mut p = div()
+            .px_2()
+            .py(px(4.0))
+            .rounded_full()
+            .border_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .cursor_pointer();
+        if selected {
+            p = p.bg(colors.element_selected).border_color(text_color);
+        } else {
+            p = p.bg(bg_color).border_color(colors.border_variant);
+        }
+        p.child(
+            div()
+                .text_color(text_color)
+                .text_size(px(10.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .child(SharedString::from(label.to_string())),
+        )
+    }
+
+    fn render_calculator_pill(
         &self,
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
         let result = self.calculator_result.as_ref().unwrap();
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .w(px(20.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_color(colors.text_muted)
-                        .text_size(px(14.0))
-                        .child(SharedString::from("=")),
-                )
-                .child(
-                    div()
-                        .text_color(colors.text_accent)
-                        .text_size(px(14.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from(result.clone())),
-                ),
-        )
-        .into_any_element()
+        Self::pill(selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text_muted)
+                    .text_size(px(11.0))
+                    .child(SharedString::from("=")),
+            )
+            .child(
+                div()
+                    .text_color(colors.text_accent)
+                    .text_size(px(12.0))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(SharedString::from(result.clone())),
+            )
+            .into_any_element()
     }
 
-    fn render_command_row(
+    fn render_command_pill(
         &self,
         command: &Command,
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
+        let text_color = if selected { colors.text_accent } else { colors.text };
+        Self::pill(selected, colors)
+            .child(
+                div()
+                    .text_color(text_color)
+                    .text_size(px(12.0))
+                    .child(SharedString::from(command.name.clone())),
+            )
+            .when(command.has_submenu, |el| {
+                el.child(
                     div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .text_color(colors.text)
-                                .text_size(px(14.0))
-                                .child(SharedString::from(command.name.clone())),
-                        )
-                        .child(
-                            div()
-                                .text_color(colors.text_muted)
-                                .text_size(px(12.0))
-                                .child(SharedString::from(command.description.clone())),
-                        ),
+                        .text_color(colors.text_muted)
+                        .text_size(px(10.0))
+                        .child(SharedString::from(">")),
                 )
-                .when(command.has_submenu, |el: Div| {
-                    el.child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(12.0))
-                            .child(SharedString::from(">")),
-                    )
-                }),
-        )
-        .into_any_element()
+            })
+            .into_any_element()
     }
 
-    fn render_clipboard_row(
+    fn render_clipboard_pill(
         &self,
         entry: &ClipboardEntry,
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
         let preview: String = entry
             .content
             .chars()
-            .take(80)
+            .take(30)
             .collect::<String>()
-            .replace('\n', " \u{21B5} ");
-        row.child(
-            div().flex().items_center().gap_2().child(
+            .replace('\n', " ");
+        Self::pill(selected, colors)
+            .child(
                 div()
                     .text_color(colors.text)
-                    .text_size(px(13.0))
+                    .text_size(px(11.0))
                     .overflow_hidden()
                     .child(SharedString::from(preview)),
-            ),
-        )
-        .into_any_element()
+            )
+            .into_any_element()
     }
 
-    fn render_file_row(
+    fn render_file_pill(
         &self,
         file: &file_search::FileResult,
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div().flex().items_center().gap_2().child(
+        Self::pill(selected, colors)
+            .child(
                 div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .text_color(colors.text)
-                            .text_size(px(13.0))
-                            .child(SharedString::from(file.name.clone())),
-                    )
-                    .child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(11.0))
-                            .child(SharedString::from(file.path.to_string_lossy().to_string())),
-                    ),
-            ),
-        )
-        .into_any_element()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from(file.name.clone())),
+            )
+            .into_any_element()
     }
 
-    fn render_terminal_row(
+    fn render_terminal_pill(
         &self,
         command: &str,
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .px(px(5.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(colors.text_muted.opacity(0.15))
-                        .text_color(colors.text_muted)
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from("$")),
-                )
-                .child(
-                    div()
-                        .text_color(colors.text)
-                        .text_size(px(13.0))
-                        .child(SharedString::from(command.to_string())),
-                ),
-        )
-        .into_any_element()
+        Self::state_pill("$", rgba(0x88888826u32), colors.text_muted, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from(command.to_string())),
+            )
+            .into_any_element()
     }
 
-    fn render_url_row(
+    fn render_url_pill(
         &self,
         url: &str,
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .px(px(5.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(colors.text_accent.opacity(0.12))
-                        .text_color(colors.text_accent)
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from("\u{1F310}")),
-                )
-                .child(
-                    div()
-                        .text_color(colors.text)
-                        .text_size(px(13.0))
-                        .child(SharedString::from(format!("Open {url} in Rover"))),
-                ),
-        )
-        .into_any_element()
+        Self::state_pill("URL", rgba(0x5588cc26u32), colors.text_accent, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from(url.to_string())),
+            )
+            .into_any_element()
     }
 
-    fn render_ai_row(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
-        let mut row = div().mx_1().px_2().py(px(6.0)).w_full().rounded_md();
-        if selected {
-            row = row.bg(colors.element_selected);
-        }
+    fn render_ai_pill(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
         let text = if self.ai_loading {
             "...".to_string()
         } else {
             self.ai_result.clone().unwrap_or_default()
         };
-        row.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_3()
-                .child(
-                    div()
-                        .px(px(5.0))
-                        .py(px(2.0))
-                        .rounded(px(4.0))
-                        .bg(colors.text_accent.opacity(0.15))
-                        .text_color(colors.text_accent)
-                        .text_size(px(11.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(SharedString::from("AI")),
-                )
-                .child(
-                    div()
-                        .text_color(colors.text)
-                        .text_size(px(13.0))
-                        .child(SharedString::from(text)),
-                ),
-        )
-        .into_any_element()
+        Self::state_pill("AI", rgba(0x5588cc26u32), colors.text_accent, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from(text)),
+            )
+            .into_any_element()
+    }
+
+    fn render_help_pill(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
+        let text = if self.help_loading {
+            "Searching...".to_string()
+        } else if let Some(result) = &self.help_result {
+            if result.len() > 60 {
+                format!("{}...", &result[..57])
+            } else {
+                result.clone()
+            }
+        } else {
+            format!("Help: {}", self.help_query.as_deref().unwrap_or(""))
+        };
+        Self::state_pill("?", rgba(0x34c75926u32), colors.text_accent, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from(text)),
+            )
+            .into_any_element()
     }
 
     pub fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
@@ -522,13 +492,13 @@ impl PickerDelegate for RoverDelegate {
 
     fn placeholder_text(&self) -> Arc<str> {
         match self.view_mode {
-            ViewMode::Main => Arc::from("Search apps, commands, or type math..."),
+            ViewMode::Main => Arc::from("Do anything..."),
             ViewMode::ClipboardHistory => Arc::from("Search clipboard history..."),
             ViewMode::FileSearch => Arc::from("Search for files..."),
         }
     }
 
-    fn update_matches(&mut self, query: String, cx: &mut Context<Picker<Self>>) -> Task<()> {
+    fn update_matches(&mut self, query: String, _cx: &mut Context<Picker<Self>>) -> Task<()> {
         self.query = query.clone();
         self.query_history.reset_cursor();
 
@@ -551,6 +521,25 @@ impl PickerDelegate for RoverDelegate {
                     return Task::ready(());
                 }
                 self.inline_terminal = None;
+
+                // Priority 1a: help prefix (help <query>) — vector search docs
+                let help_prefix = query.starts_with("help ")
+                    || query.starts_with("Help ")
+                    || query == "help";
+                if help_prefix {
+                    let topic = query.split_once(' ').map(|(_, t)| t.trim()).unwrap_or("");
+                    self.help_query = if topic.is_empty() {
+                        Some("How to use Rover".to_string())
+                    } else {
+                        Some(topic.to_string())
+                    };
+                    self.help_result = None;
+                    self.help_loading = false;
+                } else {
+                    self.help_query = None;
+                    self.help_result = None;
+                    self.help_loading = false;
+                }
 
                 // Priority 1b: URL detection → open in Rover browser
                 if rover_browser::looks_like_url(&query) && !query.is_empty() {
@@ -580,7 +569,7 @@ impl PickerDelegate for RoverDelegate {
                 self.matches = match_strings(&self.candidates, &normalized, 50);
                 self.selected_ix = 0;
 
-                // Priority 4: AI — explicit prefix OR fallback when no good matches
+                // Priority 4: AI — show "Ask AI" hint row (don't fire until Enter)
                 let is_ai_explicit = self.ai_enabled
                     && self.ai_session.is_some()
                     && (query.starts_with("? ") || query.starts_with("ai "));
@@ -593,41 +582,11 @@ impl PickerDelegate for RoverDelegate {
                     && !has_good_matches
                     && self.calculator_result.is_none();
 
-                let ai_prompt: Option<String> = if is_ai_explicit {
-                    let prompt = if query.starts_with("? ") {
-                        query[2..].to_string()
-                    } else {
-                        query[3..].to_string()
-                    };
-                    if prompt.is_empty() { None } else { Some(prompt) }
-                } else if is_ai_fallback {
-                    Some(query.clone())
-                } else {
-                    None
-                };
-
-                if let Some(prompt) = ai_prompt {
-                    self.ai_result = None;
-                    self.ai_loading = true;
-                    let session = self.ai_session.clone().unwrap();
-                    // Debounce: cancel any pending AI request before scheduling a new one
-                    self.ai_debounce = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
-                        cx.background_executor()
-                            .timer(std::time::Duration::from_millis(500))
-                            .await;
-                        let result = session.respond(&prompt).await;
-                        let _ = cx.update(|cx| {
-                            let _ = this.update(cx, |picker, cx| {
-                                picker.delegate.ai_loading = false;
-                                picker.delegate.ai_debounce = None;
-                                picker.delegate.ai_result = Some(match result {
-                                    Ok(text) => text,
-                                    Err(e) => format!("Error: {e}"),
-                                });
-                                cx.notify();
-                            });
-                        });
-                    }));
+                if is_ai_explicit || is_ai_fallback {
+                    // Show "Ask AI" row but don't fire the request yet
+                    self.ai_result = Some("Press Enter to ask AI".to_string());
+                    self.ai_loading = false;
+                    self.ai_debounce = None;
                 } else {
                     self.ai_debounce = None;
                     self.ai_result = None;
@@ -671,9 +630,11 @@ impl PickerDelegate for RoverDelegate {
 
                 if o.has_url && self.selected_ix == o.url_ix {
                     if let Some(url) = self.url_result.clone() {
+                        let browser_db = self.db.clone();
+                        let sem = self.semantic.clone();
                         cx.spawn(async move |_this, cx: &mut AsyncApp| {
                             cx.update(|cx| {
-                                rover_browser::open_browser_window_with_url(cx, &url);
+                                rover_browser::open_browser_window_with_semantic(cx, &url, Some(browser_db), sem);
                             })
                             .ok();
                         })
@@ -690,7 +651,103 @@ impl PickerDelegate for RoverDelegate {
                 }
 
                 if o.has_ai && self.selected_ix == o.ai_ix {
+                    // If AI hasn't run yet, fire the request now
+                    if !self.ai_loading && self.ai_result.as_deref() == Some("Press Enter to ask AI") {
+                        if let Some(session) = self.ai_session.clone() {
+                            let prompt = if self.query.starts_with("? ") {
+                                self.query[2..].to_string()
+                            } else if self.query.starts_with("ai ") {
+                                self.query[3..].to_string()
+                            } else {
+                                self.query.clone()
+                            };
+                            self.ai_loading = true;
+                            self.ai_result = None;
+                            self.ai_debounce = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
+                                let result = session.respond(&prompt).await;
+                                let _ = cx.update(|cx| {
+                                    let _ = this.update(cx, |picker, cx| {
+                                        picker.delegate.ai_loading = false;
+                                        picker.delegate.ai_debounce = None;
+                                        picker.delegate.ai_result = Some(match result {
+                                            Ok(text) => text,
+                                            Err(e) => format!("Error: {e}"),
+                                        });
+                                        cx.notify();
+                                    });
+                                });
+                            }));
+                        }
+                        return false;
+                    }
+                    // If AI has a result, copy it
                     if let Some(result) = &self.ai_result {
+                        cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
+                    }
+                    return false;
+                }
+
+                if o.has_help && self.selected_ix == o.help_ix {
+                    if !self.help_loading && self.help_result.is_none() {
+                        // Do vector search then pass context to AI
+                        let topic = self.help_query.clone().unwrap_or_default();
+                        let semantic = self.semantic.clone();
+                        let session = self.ai_session.clone();
+                        self.help_loading = true;
+                        cx.spawn(async move |this, cx: &mut AsyncApp| {
+                            // Vector search for relevant docs (help docs + visited pages)
+                            let context = if let Some(sem) = &semantic {
+                                let idx = sem.lock().unwrap();
+                                // Search all collections — help docs and indexed pages
+                                idx.search(&topic, None, 6)
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .map(|r| {
+                                        if r.collection == "pages" {
+                                            let url = r.metadata.get("url")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("unknown");
+                                            format!("[From page: {url}]\n{}", r.text)
+                                        } else {
+                                            r.text
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n\n")
+                            } else {
+                                String::new()
+                            };
+
+                            let answer = if let Some(session) = session {
+                                let prompt = format!(
+                                    "The user asked for help about: {topic}\n\n\
+                                     Here is relevant documentation:\n{context}\n\n\
+                                     Give a concise, helpful answer based on the documentation above. \
+                                     Be brief (2-4 sentences max)."
+                                );
+                                match session.respond(&prompt).await {
+                                    Ok(text) => text,
+                                    Err(e) => format!("Error: {e}"),
+                                }
+                            } else if !context.is_empty() {
+                                // No AI, just show raw docs
+                                context
+                            } else {
+                                "No help available for this topic.".to_string()
+                            };
+
+                            let _ = cx.update(|cx| {
+                                let _ = this.update(cx, |picker, cx| {
+                                    picker.delegate.help_loading = false;
+                                    picker.delegate.help_result = Some(answer);
+                                    cx.notify();
+                                });
+                            });
+                        }).detach();
+                        return false;
+                    }
+                    // If we already have a result, copy it
+                    if let Some(result) = &self.help_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
@@ -719,10 +776,22 @@ impl PickerDelegate for RoverDelegate {
                                     return true;
                                 }
                                 BuiltInCommand::Snippets => return false,
+                                BuiltInCommand::Help => {
+                                    // Pre-populate help query so user sees help results
+                                    self.update_matches("help ".to_string(), cx).detach();
+                                    return false;
+                                }
                                 BuiltInCommand::Browser => {
+                                    let browser_db = self.db.clone();
+                                    let sem = self.semantic.clone();
                                     cx.spawn(async move |_this, cx: &mut AsyncApp| {
                                         cx.update(|cx| {
-                                            rover_browser::open_browser_window(cx);
+                                            rover_browser::open_browser_window_with_semantic(
+                                                cx,
+                                                rover_browser::DEFAULT_URL,
+                                                Some(browser_db),
+                                                sem,
+                                            );
                                         })
                                         .ok();
                                     })
@@ -807,6 +876,14 @@ impl PickerDelegate for RoverDelegate {
                 if o.has_ai && self.selected_ix == o.ai_ix {
                     return vec![ItemAction {
                         name: "Copy Answer".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
+                if o.has_help && self.selected_ix == o.help_ix {
+                    let name = if self.help_result.is_some() { "Copy Answer" } else { "Search Docs" };
+                    return vec![ItemAction {
+                        name: name.into(),
                         shortcut: Some("\u{21A9}".into()),
                     }];
                 }
@@ -922,6 +999,10 @@ impl PickerDelegate for RoverDelegate {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
                     return false;
+                }
+
+                if o.has_help && self.selected_ix == o.help_ix {
+                    return self.confirm(cx);
                 }
 
                 let match_ix = self.selected_ix.saturating_sub(o.command_offset);
@@ -1043,35 +1124,39 @@ impl PickerDelegate for RoverDelegate {
 
                 if o.has_terminal && ix == o.terminal_ix {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");
-                    return Some(self.render_terminal_row(cmd, selected, colors));
+                    return Some(self.render_terminal_pill(cmd, selected, colors));
                 }
 
                 if o.has_url && ix == o.url_ix {
                     let url = self.url_result.as_deref().unwrap_or("");
-                    return Some(self.render_url_row(url, selected, colors));
+                    return Some(self.render_url_pill(url, selected, colors));
                 }
 
                 if o.has_calc && ix == o.calc_ix {
-                    return Some(self.render_calculator_row(selected, colors));
+                    return Some(self.render_calculator_pill(selected, colors));
                 }
 
                 if o.has_ai && ix == o.ai_ix {
-                    return Some(self.render_ai_row(selected, colors));
+                    return Some(self.render_ai_pill(selected, colors));
+                }
+
+                if o.has_help && ix == o.help_ix {
+                    return Some(self.render_help_pill(selected, colors));
                 }
 
                 let match_ix = ix.saturating_sub(o.command_offset);
                 let string_match = self.matches.get(match_ix)?;
                 let command = self.all_commands.get(string_match.candidate_id)?;
-                Some(self.render_command_row(command, selected, colors))
+                Some(self.render_command_pill(command, selected, colors))
             }
             ViewMode::ClipboardHistory => {
                 let &entry_ix = self.clipboard_filtered.get(ix)?;
                 let entry = self.clipboard_entries.get(entry_ix)?;
-                Some(self.render_clipboard_row(entry, selected, colors))
+                Some(self.render_clipboard_pill(entry, selected, colors))
             }
             ViewMode::FileSearch => {
                 let file = self.file_results.get(ix)?;
-                Some(self.render_file_row(file, selected, colors))
+                Some(self.render_file_pill(file, selected, colors))
             }
         }
     }

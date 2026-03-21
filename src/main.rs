@@ -1,6 +1,7 @@
 mod ai;
 mod clipboard_monitor;
 mod delegate;
+mod help_docs;
 mod hotkey;
 mod settings_window;
 mod tools;
@@ -19,8 +20,15 @@ use std::sync::{
 
 actions!(rover, [Toggle, Quit, OpenSettings, ShowAbout]);
 
+/// Static holding the semantic index, set from a background thread on startup.
+static SEMANTIC_INDEX: std::sync::Mutex<Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>> =
+    std::sync::Mutex::new(None);
+
 struct DbGlobal(pub Arc<RoverDb>);
 impl Global for DbGlobal {}
+
+struct SemanticGlobal(pub Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>);
+impl Global for SemanticGlobal {}
 
 struct CommandsGlobal(Vec<rover_commands::Command>);
 impl Global for CommandsGlobal {}
@@ -185,6 +193,29 @@ fn main() {
         cx.set_global(CommandsGlobal(commands.clone()));
         cx.set_global(WindowOpenGlobal(Arc::new(AtomicBool::new(false))));
 
+        // Initialize semantic index on a background thread (model download may be slow)
+        std::thread::spawn(move || {
+            let db_path = dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                .join("rover")
+                .join("semantic.db");
+            if let Some(parent) = db_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            match rover_semantic::SemanticIndex::new(&db_path) {
+                Ok(mut index) => {
+                    help_docs::index_help_docs(&mut index);
+                    let global = SemanticGlobal(Arc::new(std::sync::Mutex::new(index)));
+                    // We can't set_global from a non-main thread, so we stash it in a static.
+                    *SEMANTIC_INDEX.lock().unwrap() = Some(global.0);
+                    log::info!("Semantic index ready");
+                }
+                Err(e) => {
+                    log::warn!("Semantic index init failed: {e}");
+                }
+            }
+        });
+
         clipboard_monitor::start(db.clone(), cx);
 
         if db
@@ -290,8 +321,7 @@ fn main() {
         .detach();
 
         match cli {
-            CliCommand::None => open_window(commands, db, cx),
-            CliCommand::Browser => {
+            CliCommand::None | CliCommand::Browser => {
                 rover_browser::open_browser_window(cx, Some(db));
             }
             CliCommand::OpenUrl(url) => {
@@ -343,8 +373,19 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                 let settings_db = db.clone();
                 let dismiss_flag = window_open_flag.clone();
                 cx.new(|cx| {
-                    let delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled);
-                    let picker = cx.new(|cx| Picker::new(delegate, cx));
+                    let semantic = SEMANTIC_INDEX.lock().unwrap().clone();
+                    let compact = settings_db
+                        .get_setting("compact_mode")
+                        .ok()
+                        .flatten()
+                        .map(|v| v == "true")
+                        .unwrap_or(false);
+                    let delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled, semantic);
+                    let picker = cx.new(|cx| {
+                        let mut p = Picker::new(delegate, cx);
+                        p.compact = compact;
+                        p
+                    });
 
                     cx.subscribe_in(
                         &picker,

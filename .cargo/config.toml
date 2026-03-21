@@ -3,3 +3,4 @@
 # the OS Swift runtime. cargo:rustc-link-arg in a dependency's build script
 # doesn't propagate rpath to the final binary, so we set it here instead.
 rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/lib/swift"]
+

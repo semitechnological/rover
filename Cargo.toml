@@ -58,3 +58,4 @@ rover_extensions.workspace = true
 rover_db.workspace = true
 rusty_foundationmodels.workspace = true
 rover_browser.workspace = true
+rover_semantic.workspace = true

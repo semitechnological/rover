@@ -17,6 +17,7 @@ pub struct SettingsView {
     ai_enabled: bool,
     ai_terminal_enabled: bool,
     picker_position: String,
+    compact_mode: bool,
     hotkey_key_name: String,
     hotkey_modifiers: u32,
     hotkey_display: String,
@@ -109,6 +110,12 @@ impl SettingsView {
             .ok()
             .flatten()
             .unwrap_or_else(|| "center".to_string());
+        let compact_mode = db
+            .get_setting("compact_mode")
+            .ok()
+            .flatten()
+            .map(|v| v == "true")
+            .unwrap_or(false);
         // Try to load a custom recorded hotkey; fall back to preset
         let (hotkey_key_name, hotkey_modifiers, hotkey_display) = {
             let stored_key = db.get_setting("hotkey_key_name").ok().flatten();
@@ -150,6 +157,7 @@ impl SettingsView {
             ai_enabled,
             ai_terminal_enabled,
             picker_position,
+            compact_mode,
             hotkey_key_name,
             hotkey_modifiers,
             hotkey_display,
@@ -483,6 +491,24 @@ impl SettingsView {
                                     }))
                             })),
                     ),
+            )
+            .child(
+                Self::setting_row(colors)
+                    .id("compact-mode")
+                    .cursor_pointer()
+                    .child(Self::setting_label(
+                        "Compact Mode",
+                        "Hide suggestions until you start typing, show as pills",
+                        colors,
+                    ))
+                    .child(Self::toggle_pill(self.compact_mode, colors))
+                    .on_click(cx.listener(|this, _e, _w, cx| {
+                        this.compact_mode = !this.compact_mode;
+                        let _ = this
+                            .db
+                            .set_setting("compact_mode", &this.compact_mode.to_string());
+                        cx.notify();
+                    })),
             )
     }
 

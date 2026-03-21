@@ -21,7 +21,7 @@ pub enum ViewMode {
 /// Browser tab context shown as pills in the picker.
 #[derive(Clone, Default)]
 pub struct BrowserContext {
-    pub tabs: Vec<(String, String)>, // (title, url)
+    pub tabs: Vec<(String, String, rover_browser::TabState, u64)>, // (title, url, state, last_active_ms_ago)
     pub active_tab: usize,
 }
 
@@ -51,8 +51,24 @@ pub struct RoverDelegate {
     help_loading: bool,
     /// Browser context — tabs open in the Rover browser
     browser_ctx: BrowserContext,
+    /// Filtered browser tab indices (matches current query)
+    browser_filtered: Vec<usize>,
+    /// Shared live browser tabs ref for passing to new browser windows
+    live_tabs: Option<rover_browser::LiveBrowserTabsRef>,
+    /// Extension runtimes for executing extension commands
+    ext_runtimes: std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
     /// Recent clipboard entries shown in compact mode when query is empty
     recent_clips: Vec<ClipboardEntry>,
+    /// "quit" or "quit AppName" — target app to close/quit
+    quit_target: Option<String>,
+    /// "close tab" / "tab close" — close the active browser tab
+    close_tab_requested: bool,
+    /// Whether clipboard section is expanded in compact mode
+    clipboard_expanded: bool,
+    /// Terminal output from inline command execution
+    terminal_output: Option<String>,
+    /// Whether an inline terminal command is currently running
+    terminal_running: bool,
 }
 
 struct QueryHistory {
@@ -153,6 +169,8 @@ struct RowOffsets {
     browser_count: usize,
     has_recent_clips: bool,
     recent_clips_count: usize,
+    has_close_tab: bool,
+    has_quit: bool,
     has_terminal: bool,
     has_url: bool,
     has_calc: bool,
@@ -160,6 +178,8 @@ struct RowOffsets {
     has_help: bool,
     browser_start: usize,
     recent_clips_start: usize,
+    close_tab_ix: usize,
+    quit_ix: usize,
     terminal_ix: usize,
     url_ix: usize,
     calc_ix: usize,
@@ -177,6 +197,9 @@ impl RoverDelegate {
         ai_session: Option<Arc<rusty_foundationmodels::Session>>,
         ai_enabled: bool,
         semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+        live_browser_ctx: Option<BrowserContext>,
+        live_tabs: Option<rover_browser::LiveBrowserTabsRef>,
+        ext_runtimes: std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
     ) -> Self {
         let candidates: Vec<StringMatchCandidate> = commands
             .iter()
@@ -184,13 +207,21 @@ impl RoverDelegate {
             .map(|(i, c)| StringMatchCandidate::new(i, &c.name))
             .collect();
         let matches = match_strings(&candidates, "", 50);
-        // Load a few recent clipboard entries for compact mode default display
-        let recent_clips = db
-            .list_clipboard_history()
-            .unwrap_or_default()
-            .into_iter()
-            .take(5)
-            .collect();
+        // Prefer live browser context from BrowserContextGlobal, fall back to saved session
+        let browser_ctx = match live_browser_ctx {
+            Some(ctx) if !ctx.tabs.is_empty() => ctx,
+            _ => match db.load_session() {
+                Ok(session) if !session.is_empty() => {
+                    let active = session.iter().position(|(_, _, a)| *a).unwrap_or(0);
+                    let tabs = session.into_iter().enumerate().map(|(i, (url, title, _))| {
+                        let state = if i == active { rover_browser::TabState::Active } else { rover_browser::TabState::Frozen };
+                        (title, url, state, 0u64)
+                    }).collect();
+                    BrowserContext { tabs, active_tab: active }
+                }
+                _ => BrowserContext::default(),
+            },
+        };
         Self {
             all_commands: commands,
             candidates,
@@ -215,14 +246,17 @@ impl RoverDelegate {
             help_query: None,
             help_result: None,
             help_loading: false,
-            browser_ctx: BrowserContext::default(),
-            recent_clips,
+            browser_filtered: (0..browser_ctx.tabs.len()).collect(),
+            browser_ctx,
+            live_tabs,
+            ext_runtimes,
+            recent_clips: Vec::new(),
+            quit_target: None,
+            close_tab_requested: false,
+            clipboard_expanded: false,
+            terminal_output: None,
+            terminal_running: false,
         }
-    }
-
-    /// Update browser context from the global state.
-    pub fn refresh_browser_context(&mut self, ctx: BrowserContext) {
-        self.browser_ctx = ctx;
     }
 
     pub fn enter_submenu(&mut self, mode: ViewMode, cx: &mut Context<Picker<Self>>) {
@@ -253,10 +287,12 @@ impl RoverDelegate {
     }
 
     fn row_offsets(&self) -> RowOffsets {
-        let has_browser = !self.browser_ctx.tabs.is_empty() && self.query.is_empty();
-        let browser_count = if has_browser { self.browser_ctx.tabs.len() } else { 0 };
-        let has_recent_clips = !self.recent_clips.is_empty() && self.query.is_empty();
+        let has_browser = !self.browser_filtered.is_empty();
+        let browser_count = if has_browser { self.browser_filtered.len() } else { 0 };
+        let has_recent_clips = self.clipboard_expanded;
         let recent_clips_count = if has_recent_clips { self.recent_clips.len() } else { 0 };
+        let has_close_tab = self.close_tab_requested;
+        let has_quit = self.quit_target.is_some();
         let has_terminal = self.inline_terminal.is_some();
         let has_url = self.url_result.is_some();
         let has_calc = self.calculator_result.is_some();
@@ -269,6 +305,10 @@ impl RoverDelegate {
         let recent_clips_start = next;
         next += recent_clips_count;
         let context_count = next; // everything up to here is "context" (pills)
+        let close_tab_ix = next;
+        if has_close_tab { next += 1; }
+        let quit_ix = next;
+        if has_quit { next += 1; }
         let terminal_ix = next;
         if has_terminal { next += 1; }
         let url_ix = next;
@@ -282,9 +322,9 @@ impl RoverDelegate {
         let command_offset = next;
         RowOffsets {
             has_browser, browser_count, has_recent_clips, recent_clips_count,
-            has_terminal, has_url, has_calc, has_ai, has_help,
-            browser_start, recent_clips_start,
-            terminal_ix, url_ix, calc_ix, ai_ix, help_ix,
+            has_close_tab, has_quit, has_terminal, has_url, has_calc, has_ai, has_help,
+            browser_start, recent_clips_start, close_tab_ix,
+            quit_ix, terminal_ix, url_ix, calc_ix, ai_ix, help_ix,
             command_offset, context_count,
         }
     }
@@ -497,34 +537,38 @@ impl RoverDelegate {
     fn render_browser_pill(
         &self,
         title: &str,
-        _url: &str,
-        is_active: bool,
+        url: &str,
+        _is_active: bool,
+        is_frozen: bool,
         selected: bool,
         colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let dot_color = if is_active { rgba(0x34c759ffu32) } else { rgba(0x8e8e93ffu32) };
         let text_color = if selected { colors.text_accent } else { colors.text };
-        let short = if title.chars().count() > 20 {
+        let short_title = if title.chars().count() > 20 {
             let end = title.char_indices().nth(18).map(|(b, _)| b).unwrap_or(title.len());
             format!("{}…", &title[..end])
         } else {
             title.to_string()
         };
-        Self::pill(selected, colors)
-            .child(
-                div()
-                    .w(px(6.0))
-                    .h(px(6.0))
-                    .rounded_full()
-                    .bg(dot_color),
-            )
+        let mut pill = Self::pill(selected, colors)
+            .when(is_frozen && !selected, |el| el.opacity(0.5))
             .child(
                 div()
                     .text_color(text_color)
                     .text_size(px(11.0))
-                    .child(SharedString::from(short)),
-            )
-            .into_any_element()
+                    .child(SharedString::from(short_title)),
+            );
+        // Show URL domain when selected
+        if selected {
+            let domain = rover_browser::domain_from_url(url).to_string();
+            pill = pill.child(
+                div()
+                    .text_color(colors.text_muted)
+                    .text_size(px(9.0))
+                    .child(SharedString::from(domain)),
+            );
+        }
+        pill.into_any_element()
     }
 
     fn render_recent_clip_pill(
@@ -589,6 +633,42 @@ impl RoverDelegate {
                         .child(SharedString::from("›")),
                 )
             })
+            .into_any_element()
+    }
+
+    fn render_close_tab_pill(
+        &self,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        Self::state_pill("✕", rgba(0xff444426u32), colors.text_accent, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from("Close browser tab")),
+            )
+            .into_any_element()
+    }
+
+    fn render_quit_pill(
+        &self,
+        target: &str,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        let label = if target.is_empty() {
+            "Close frontmost window".to_string()
+        } else {
+            format!("Quit {target}")
+        };
+        Self::state_pill("✕", rgba(0xff444426u32), colors.text_accent, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from(label)),
+            )
             .into_any_element()
     }
 
@@ -662,11 +742,81 @@ impl PickerDelegate for RoverDelegate {
                     self.ai_result = None;
                     self.ai_loading = false;
                     self.ai_debounce = None;
+                    self.browser_filtered.clear();
                     self.matches = vec![];
                     self.selected_ix = 0;
                     return Task::ready(());
                 }
                 self.inline_terminal = None;
+
+                // Filter browser tabs by query (title or URL), sort by recency
+                if self.browser_ctx.tabs.is_empty() {
+                    self.browser_filtered.clear();
+                } else if query.is_empty() {
+                    self.browser_filtered = (0..self.browser_ctx.tabs.len()).collect();
+                } else {
+                    let q = query.to_lowercase();
+                    self.browser_filtered = self.browser_ctx.tabs.iter().enumerate()
+                        .filter(|(_, (title, url, _, _))| {
+                            title.to_lowercase().contains(&q) || url.to_lowercase().contains(&q)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+                // Sort: active tab first, then by most recently used (smallest ms_ago first)
+                if !self.browser_filtered.is_empty() {
+                    let active = self.browser_ctx.active_tab;
+                    self.browser_filtered.sort_by(|&a, &b| {
+                        let a_active = a == active;
+                        let b_active = b == active;
+                        if a_active != b_active {
+                            return b_active.cmp(&a_active);
+                        }
+                        let a_ms = self.browser_ctx.tabs[a].3;
+                        let b_ms = self.browser_ctx.tabs[b].3;
+                        a_ms.cmp(&b_ms) // smaller ms_ago = more recent
+                    });
+                }
+
+                // Load recent clips if expanded (WU-10)
+                if self.clipboard_expanded && query.is_empty() {
+                    self.recent_clips = self.db.list_clipboard_history()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .take(5)
+                        .collect();
+                } else if !self.clipboard_expanded {
+                    self.recent_clips.clear();
+                }
+
+                // Close tab detection — before quit/close so "close tab" doesn't trigger quit
+                let lower = query.to_lowercase();
+                let tab_close_patterns = [
+                    "close tab", "tab close", "close current tab", "close this tab",
+                ];
+                self.close_tab_requested = tab_close_patterns.iter().any(|p| lower == *p)
+                    && !self.browser_ctx.tabs.is_empty();
+
+                // Quit / close detection — skip when target word is "tab"/"tabs"
+                if !self.close_tab_requested {
+                    if lower == "quit" || lower == "close" || lower == "exit" {
+                        self.quit_target = Some(String::new()); // close frontmost window
+                    } else if lower.starts_with("quit ") || lower.starts_with("close ") || lower.starts_with("exit ") {
+                        let app = query.split_once(' ').map(|(_, a)| a.trim()).unwrap_or("");
+                        let app_lower = app.to_lowercase();
+                        if app_lower == "tab" || app_lower == "tabs" {
+                            self.quit_target = None;
+                        } else if !app.is_empty() {
+                            self.quit_target = Some(app.to_string());
+                        } else {
+                            self.quit_target = Some(String::new());
+                        }
+                    } else {
+                        self.quit_target = None;
+                    }
+                } else {
+                    self.quit_target = None;
+                }
 
                 // Priority 1a: help prefix (help <query>) — vector search docs
                 let help_prefix = query.starts_with("help ")
@@ -767,9 +917,22 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let o = self.row_offsets();
 
-                // Browser context — switch to that tab in the browser
+                // Browser context — navigate to tab URL in existing browser
                 if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
-                    // Just dismiss — the browser tab is already open
+                    let filtered_ix = self.selected_ix - o.browser_start;
+                    let tab_ix = self.browser_filtered[filtered_ix];
+                    let (_, url, _, _) = &self.browser_ctx.tabs[tab_ix];
+                    let url = url.clone();
+                    let browser_db = self.db.clone();
+                    let sem = self.semantic.clone();
+                    let lt = self.live_tabs.clone();
+                    cx.spawn(async move |_this, cx: &mut AsyncApp| {
+                        cx.update(|cx| {
+                            rover_browser::navigate_or_open(cx, &url, Some(browser_db), sem, lt);
+                        })
+                        .ok();
+                    })
+                    .detach();
                     return true;
                 }
 
@@ -782,20 +945,104 @@ impl PickerDelegate for RoverDelegate {
                     return true;
                 }
 
-                if o.has_terminal && self.selected_ix == o.terminal_ix {
-                    if let Some(cmd) = &self.inline_terminal {
-                        let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
+                // Close browser tab
+                if o.has_close_tab && self.selected_ix == o.close_tab_ix {
+                    let active = self.browser_ctx.active_tab;
+                    if let Some(lt) = &self.live_tabs {
+                        if let Ok(mut live) = lt.lock() {
+                            live.close_inbox.push(active);
+                        }
+                    }
+                    // Remove from local state
+                    if active < self.browser_ctx.tabs.len() {
+                        self.browser_ctx.tabs.remove(active);
+                        self.browser_filtered.retain(|&i| i != active);
+                        for i in self.browser_filtered.iter_mut() {
+                            if *i > active { *i -= 1; }
+                        }
+                        if self.browser_ctx.active_tab >= self.browser_ctx.tabs.len() && self.browser_ctx.active_tab > 0 {
+                            self.browser_ctx.active_tab -= 1;
+                        }
                     }
                     return true;
+                }
+
+                // Quit command
+                if o.has_quit && self.selected_ix == o.quit_ix {
+                    if let Some(target) = &self.quit_target {
+                        if target.is_empty() {
+                            // Close frontmost window via Cmd+W keystroke (no assistive access needed)
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(400));
+                                let _ = std::process::Command::new("osascript")
+                                    .arg("-e")
+                                    .arg(r#"tell application "System Events" to keystroke "w" using command down"#)
+                                    .status();
+                            });
+                        } else {
+                            // Quit the named app
+                            let target = target.clone();
+                            std::thread::spawn(move || {
+                                std::thread::sleep(std::time::Duration::from_millis(400));
+                                let _ = std::process::Command::new("osascript")
+                                    .arg("-e")
+                                    .arg(format!(r#"tell application "{target}" to quit"#))
+                                    .status();
+                            });
+                        }
+                    }
+                    return true;
+                }
+
+                if o.has_terminal && self.selected_ix == o.terminal_ix {
+                    if let Some(cmd) = &self.inline_terminal {
+                        let cmd = cmd.clone();
+                        self.terminal_running = true;
+                        self.terminal_output = Some(String::new());
+                        cx.spawn({
+                            let cmd = cmd.clone();
+                            async move |this, cx: &mut AsyncApp| {
+                                let output = std::process::Command::new("sh")
+                                    .arg("-c")
+                                    .arg(&cmd)
+                                    .stdout(std::process::Stdio::piped())
+                                    .stderr(std::process::Stdio::piped())
+                                    .output();
+                                let _ = cx.update(|cx| {
+                                    let _ = this.update(cx, |picker, cx| {
+                                        picker.delegate.terminal_running = false;
+                                        match output {
+                                            Ok(out) => {
+                                                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                                                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                                                let combined = if stderr.is_empty() {
+                                                    stdout
+                                                } else {
+                                                    format!("{stdout}\n{stderr}")
+                                                };
+                                                picker.delegate.terminal_output = Some(combined);
+                                            }
+                                            Err(e) => {
+                                                picker.delegate.terminal_output = Some(format!("Error: {e}"));
+                                            }
+                                        }
+                                        cx.notify();
+                                    });
+                                });
+                            }
+                        }).detach();
+                    }
+                    return false; // Don't dismiss — show output inline
                 }
 
                 if o.has_url && self.selected_ix == o.url_ix {
                     if let Some(url) = self.url_result.clone() {
                         let browser_db = self.db.clone();
                         let sem = self.semantic.clone();
+                        let lt = self.live_tabs.clone();
                         cx.spawn(async move |_this, cx: &mut AsyncApp| {
                             cx.update(|cx| {
-                                rover_browser::open_browser_window_with_semantic(cx, &url, Some(browser_db), sem);
+                                rover_browser::navigate_or_open(cx, &url, Some(browser_db), sem, lt);
                             })
                             .ok();
                         })
@@ -945,13 +1192,15 @@ impl PickerDelegate for RoverDelegate {
                                 BuiltInCommand::Browser => {
                                     let browser_db = self.db.clone();
                                     let sem = self.semantic.clone();
+                                    let lt = self.live_tabs.clone();
                                     cx.spawn(async move |_this, cx: &mut AsyncApp| {
                                         cx.update(|cx| {
-                                            rover_browser::open_browser_window_with_semantic(
+                                            rover_browser::navigate_or_open(
                                                 cx,
                                                 rover_browser::DEFAULT_URL,
                                                 Some(browser_db),
                                                 sem,
+                                                lt,
                                             );
                                         })
                                         .ok();
@@ -961,17 +1210,33 @@ impl PickerDelegate for RoverDelegate {
                                 }
                                 BuiltInCommand::CloseWindow => {
                                     // Dismiss picker first, then close the frontmost window
-                                    // after a delay so the previous app regains focus.
+                                    // via Cmd+W keystroke (no assistive access needed).
                                     std::thread::spawn(|| {
                                         std::thread::sleep(std::time::Duration::from_millis(400));
                                         let _ = std::process::Command::new("osascript")
                                             .arg("-e")
-                                            .arg(r#"tell application "System Events" to tell (first application process whose frontmost is true) to click menu item "Close Window" of menu "File" of menu bar 1"#)
+                                            .arg(r#"tell application "System Events" to keystroke "w" using command down"#)
                                             .status();
                                     });
                                     return true;
                                 }
                             }
+                        }
+
+                        // Handle extension commands
+                        if let CommandKind::Extension { ext_id, command: cmd_name } = &command.kind {
+                            if let Some(runtime) = self.ext_runtimes.get(ext_id) {
+                                let rt = runtime.clone();
+                                let cmd = cmd_name.clone();
+                                let query = self.query.clone();
+                                std::thread::spawn(move || {
+                                    match rt.run_command(&cmd, &query) {
+                                        Ok(output) => log::info!("[ext] {}: {}", cmd, output.text),
+                                        Err(e) => log::warn!("[ext] {} failed: {}", cmd, e),
+                                    }
+                                });
+                            }
+                            return true;
                         }
 
                         if !self.query.is_empty() {
@@ -1006,6 +1271,54 @@ impl PickerDelegate for RoverDelegate {
         }
     }
 
+    fn shift_confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
+        match self.view_mode {
+            ViewMode::Main => {
+                let o = self.row_offsets();
+
+                // Shift+Enter on browser tab → open URL in new browser window
+                if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
+                    let filtered_ix = self.selected_ix - o.browser_start;
+                    let tab_ix = self.browser_filtered[filtered_ix];
+                    let (_, url, _, _) = &self.browser_ctx.tabs[tab_ix];
+                    let url = url.clone();
+                    let browser_db = self.db.clone();
+                    let sem = self.semantic.clone();
+                    let lt = self.live_tabs.clone();
+                    cx.spawn(async move |_this, cx: &mut AsyncApp| {
+                        cx.update(|cx| {
+                            rover_browser::open_browser_window_with_live_tabs(cx, &url, Some(browser_db), sem, lt);
+                        })
+                        .ok();
+                    })
+                    .detach();
+                    return true;
+                }
+
+                // Shift+Enter on URL → open in new browser window
+                if o.has_url && self.selected_ix == o.url_ix {
+                    if let Some(url) = self.url_result.clone() {
+                        let browser_db = self.db.clone();
+                        let sem = self.semantic.clone();
+                        let lt = self.live_tabs.clone();
+                        cx.spawn(async move |_this, cx: &mut AsyncApp| {
+                            cx.update(|cx| {
+                                rover_browser::open_browser_window_with_live_tabs(cx, &url, Some(browser_db), sem, lt);
+                            })
+                            .ok();
+                        })
+                        .detach();
+                    }
+                    return true;
+                }
+
+                // Everything else: same as regular confirm
+                self.confirm(cx)
+            }
+            _ => self.confirm(cx),
+        }
+    }
+
     fn dismissed(&mut self, _cx: &mut Context<Picker<Self>>) {}
 
     fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
@@ -1020,6 +1333,24 @@ impl PickerDelegate for RoverDelegate {
         RoverDelegate::exit_submenu(self, cx);
     }
 
+    fn ai_widget_content(&self) -> Option<&str> {
+        if self.ai_loading {
+            return None;
+        }
+        match &self.ai_result {
+            Some(text) if text != "Press Enter to ask AI" => Some(text.as_str()),
+            _ => None,
+        }
+    }
+
+    fn terminal_output(&self) -> Option<&str> {
+        self.terminal_output.as_deref()
+    }
+
+    fn terminal_running(&self) -> bool {
+        self.terminal_running
+    }
+
     fn actions_for_selected(&self) -> Vec<ItemAction> {
         match self.view_mode {
             ViewMode::Main => {
@@ -1027,16 +1358,35 @@ impl PickerDelegate for RoverDelegate {
 
                 // Browser context pills
                 if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
-                    return vec![ItemAction {
-                        name: "Switch to Tab".into(),
-                        shortcut: Some("\u{21A9}".into()),
-                    }];
+                    return vec![
+                        ItemAction {
+                            name: "Switch to Tab".into(),
+                            shortcut: Some("\u{21A9}".into()),
+                        },
+                        ItemAction {
+                            name: "Close Tab".into(),
+                            shortcut: None,
+                        },
+                    ];
                 }
 
                 // Recent clips
                 if o.has_recent_clips && self.selected_ix >= o.recent_clips_start && self.selected_ix < o.recent_clips_start + o.recent_clips_count {
                     return vec![ItemAction {
                         name: "Copy to Clipboard".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
+                // Quit
+                if o.has_quit && self.selected_ix == o.quit_ix {
+                    let name = if self.quit_target.as_ref().map(|t| t.is_empty()).unwrap_or(true) {
+                        "Close Frontmost Window"
+                    } else {
+                        "Quit Application"
+                    };
+                    return vec![ItemAction {
+                        name: name.into(),
                         shortcut: Some("\u{21A9}".into()),
                     }];
                 }
@@ -1166,10 +1516,46 @@ impl PickerDelegate for RoverDelegate {
                 let o = self.row_offsets();
 
                 if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
-                    return self.confirm(cx);
+                    match action_ix {
+                        0 => return self.confirm(cx), // Switch to tab
+                        1 => {
+                            // Close tab
+                            let filtered_ix = self.selected_ix - o.browser_start;
+                            let tab_ix = self.browser_filtered[filtered_ix];
+                            if let Some(lt) = &self.live_tabs {
+                                if let Ok(mut live) = lt.lock() {
+                                    live.close_inbox.push(tab_ix);
+                                }
+                            }
+                            // Remove from local state
+                            self.browser_ctx.tabs.remove(tab_ix);
+                            // Rebuild filtered indices
+                            self.browser_filtered.retain(|&i| i != tab_ix);
+                            for i in self.browser_filtered.iter_mut() {
+                                if *i > tab_ix { *i -= 1; }
+                            }
+                            if self.browser_ctx.active_tab >= self.browser_ctx.tabs.len() && self.browser_ctx.active_tab > 0 {
+                                self.browser_ctx.active_tab -= 1;
+                            }
+                            if self.selected_ix >= self.browser_filtered.len() && self.selected_ix > 0 {
+                                self.selected_ix -= 1;
+                            }
+                            cx.notify();
+                            return false;
+                        }
+                        _ => return false,
+                    }
                 }
 
                 if o.has_recent_clips && self.selected_ix >= o.recent_clips_start && self.selected_ix < o.recent_clips_start + o.recent_clips_count {
+                    return self.confirm(cx);
+                }
+
+                if o.has_close_tab && self.selected_ix == o.close_tab_ix {
+                    return self.confirm(cx);
+                }
+
+                if o.has_quit && self.selected_ix == o.quit_ix {
                     return self.confirm(cx);
                 }
 
@@ -1326,10 +1712,12 @@ impl PickerDelegate for RoverDelegate {
 
                 // Browser context pills
                 if o.has_browser && ix >= o.browser_start && ix < o.browser_start + o.browser_count {
-                    let tab_ix = ix - o.browser_start;
-                    let (title, url) = &self.browser_ctx.tabs[tab_ix];
+                    let filtered_ix = ix - o.browser_start;
+                    let tab_ix = self.browser_filtered[filtered_ix];
+                    let (title, url, state, _) = &self.browser_ctx.tabs[tab_ix];
                     let is_active = tab_ix == self.browser_ctx.active_tab;
-                    return Some(self.render_browser_pill(title, url, is_active, selected, colors));
+                    let is_frozen = *state == rover_browser::TabState::Frozen;
+                    return Some(self.render_browser_pill(title, url, is_active, is_frozen, selected, colors));
                 }
 
                 // Recent clipboard pills
@@ -1337,6 +1725,17 @@ impl PickerDelegate for RoverDelegate {
                     let clip_ix = ix - o.recent_clips_start;
                     let entry = &self.recent_clips[clip_ix];
                     return Some(self.render_recent_clip_pill(entry, selected, colors));
+                }
+
+                // Close tab pill
+                if o.has_close_tab && ix == o.close_tab_ix {
+                    return Some(self.render_close_tab_pill(selected, colors));
+                }
+
+                // Quit command
+                if o.has_quit && ix == o.quit_ix {
+                    let target = self.quit_target.as_deref().unwrap_or("");
+                    return Some(self.render_quit_pill(target, selected, colors));
                 }
 
                 if o.has_terminal && ix == o.terminal_ix {
@@ -1392,6 +1791,13 @@ impl PickerDelegate for RoverDelegate {
                 let o = self.row_offsets();
 
                 // Non-context items rendered as list rows
+                if o.has_close_tab && ix == o.close_tab_ix {
+                    return Some(self.render_close_tab_pill(selected, colors));
+                }
+                if o.has_quit && ix == o.quit_ix {
+                    let target = self.quit_target.as_deref().unwrap_or("");
+                    return Some(self.render_quit_pill(target, selected, colors));
+                }
                 if o.has_terminal && ix == o.terminal_ix {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");
                     return Some(self.render_terminal_pill(cmd, selected, colors));

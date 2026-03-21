@@ -33,20 +33,20 @@ impl Global for SemanticGlobal {}
 struct CommandsGlobal(Vec<rover_commands::Command>);
 impl Global for CommandsGlobal {}
 
+struct ExtensionRuntimesGlobal(
+    std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
+);
+impl Global for ExtensionRuntimesGlobal {}
+
 struct WindowOpenGlobal(Arc<AtomicBool>);
 impl Global for WindowOpenGlobal {}
 
-/// Shared browser state so the picker can show context about open browser tabs.
-pub struct BrowserContextGlobal {
-    pub tabs: Vec<(String, String)>, // (title, url)
-    pub active_tab: usize,
-}
-impl Global for BrowserContextGlobal {}
-impl Default for BrowserContextGlobal {
-    fn default() -> Self {
-        Self { tabs: Vec::new(), active_tab: 0 }
-    }
-}
+struct WindowHandleGlobal(Option<WindowHandle<RoverWindow>>);
+impl Global for WindowHandleGlobal {}
+
+/// Shared live browser tabs — wrapped in a Global for GPUI access.
+struct LiveBrowserTabsGlobal(rover_browser::LiveBrowserTabsRef);
+impl Global for LiveBrowserTabsGlobal {}
 
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
@@ -188,22 +188,50 @@ fn main() {
     Application::new().run(|cx| {
         rover_theme::init(cx);
 
-        if let Ok(extensions) = load_extensions() {
+        let loaded_extensions = load_extensions().unwrap_or_default();
+        {
             let registry = cx.global_mut::<ThemeRegistry>();
-            register_extension_themes(&extensions, registry);
+            register_extension_themes(&loaded_extensions, registry);
         }
 
         let mut cmd_registry = CommandRegistry::new();
         register_builtins(&mut cmd_registry);
         register_browser(&mut cmd_registry);
         register_apps(&mut cmd_registry);
+
+        // Load WASM extension runtimes and register their commands
+        let ext_runtimes = rover_extensions::runtime::load_extension_runtimes(&loaded_extensions);
+        for (ext_id, _runtime, commands) in &ext_runtimes {
+            for cmd_info in commands {
+                cmd_registry.register(rover_commands::Command {
+                    name: cmd_info.name.clone(),
+                    description: cmd_info.description.clone(),
+                    icon: None,
+                    kind: rover_commands::CommandKind::Extension {
+                        ext_id: ext_id.clone(),
+                        command: cmd_info.name.clone(),
+                    },
+                    has_submenu: false,
+                });
+            }
+        }
+
         let commands: Vec<_> = cmd_registry.commands().to_vec();
+
+        // Store extension runtimes as a global for command execution
+        let runtime_map: std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef> =
+            ext_runtimes.into_iter().map(|(id, rt, _)| (id, rt)).collect();
+        cx.set_global(ExtensionRuntimesGlobal(runtime_map));
 
         let db = Arc::new(RoverDb::open().expect("Failed to open database"));
 
         cx.set_global(DbGlobal(db.clone()));
         cx.set_global(CommandsGlobal(commands.clone()));
         cx.set_global(WindowOpenGlobal(Arc::new(AtomicBool::new(false))));
+        cx.set_global(WindowHandleGlobal(None));
+        let live_browser_tabs: rover_browser::LiveBrowserTabsRef =
+            std::sync::Arc::new(std::sync::Mutex::new(rover_browser::LiveBrowserTabs::default()));
+        cx.set_global(LiveBrowserTabsGlobal(live_browser_tabs.clone()));
 
         // Initialize semantic index on a background thread (model download may be slow)
         std::thread::spawn(move || {
@@ -262,7 +290,16 @@ fn main() {
 
         cx.on_action::<Toggle>(|_, cx| {
             let window_open = cx.global::<WindowOpenGlobal>().0.load(Ordering::Relaxed);
-            if !window_open {
+            if window_open {
+                // Dismiss the existing window
+                cx.global::<WindowOpenGlobal>().0.store(false, Ordering::Relaxed);
+                if let Some(handle) = cx.global::<WindowHandleGlobal>().0 {
+                    let _ = handle.update(cx, |_, window, _cx| {
+                        window.remove_window();
+                    });
+                }
+                cx.global_mut::<WindowHandleGlobal>().0 = None;
+            } else {
                 let commands = cx.global::<CommandsGlobal>().0.clone();
                 let db = cx.global::<DbGlobal>().0.clone();
                 open_window(commands, db, cx);
@@ -321,7 +358,16 @@ fn main() {
                     let _ = cx.update(|cx: &mut App| {
                         let window_open =
                             cx.global::<WindowOpenGlobal>().0.load(Ordering::Relaxed);
-                        if !window_open {
+                        if window_open {
+                            // Dismiss the existing window
+                            cx.global::<WindowOpenGlobal>().0.store(false, Ordering::Relaxed);
+                            if let Some(handle) = cx.global::<WindowHandleGlobal>().0 {
+                                let _ = handle.update(cx, |_, window, _cx| {
+                                    window.remove_window();
+                                });
+                            }
+                            cx.global_mut::<WindowHandleGlobal>().0 = None;
+                        } else {
                             let commands = cx.global::<CommandsGlobal>().0.clone();
                             let db = cx.global::<DbGlobal>().0.clone();
                             open_window(commands, db, cx);
@@ -340,15 +386,21 @@ fn main() {
                 open_window(commands, db_clone, cx);
             }
             CliCommand::Browser => {
-                rover_browser::open_browser_window(cx, Some(db));
+                rover_browser::open_browser_window_with_live_tabs(
+                    cx, rover_browser::DEFAULT_URL, Some(db), None, Some(live_browser_tabs.clone()),
+                );
             }
             CliCommand::OpenUrl(url) => {
-                rover_browser::open_browser_window_with_url(cx, &url, Some(db));
+                rover_browser::open_browser_window_with_live_tabs(
+                    cx, &url, Some(db), None, Some(live_browser_tabs.clone()),
+                );
             }
             CliCommand::Search(query) => {
                 let encoded = urlencoding::encode(&query);
                 let url = format!("https://www.perplexity.ai/search?q={encoded}");
-                rover_browser::open_browser_window_with_url(cx, &url, Some(db));
+                rover_browser::open_browser_window_with_live_tabs(
+                    cx, &url, Some(db), None, Some(live_browser_tabs.clone()),
+                );
             }
         }
     });
@@ -381,6 +433,8 @@ fn cursor_position() -> (f32, f32) {
 }
 
 /// Make the NSPanel truly borderless — no shadow, clear background, non-opaque.
+/// The window is already transparent via WindowBackgroundAppearance::Transparent;
+/// semi-transparent GPUI elements (pills, input bar) float over the desktop.
 #[cfg(target_os = "macos")]
 fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) {
     use objc::{class, msg_send, sel, sel_impl};
@@ -389,7 +443,6 @@ fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) 
     let _ = window.update(cx, |_, window, _cx| {
         if let Ok(handle) = window.window_handle() {
             if let raw_window_handle::RawWindowHandle::AppKit(appkit) = handle.as_ref() {
-                // ns_view → walk up to the NSWindow via the view's window property
                 let ns_view = appkit.ns_view.as_ptr() as *mut objc::runtime::Object;
                 unsafe {
                     let ns_window: *mut objc::runtime::Object = msg_send![ns_view, window];
@@ -410,20 +463,54 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
 
-    // Position near cursor — bar at bottom of window, pills float above
-    let w = 680.0f32;
-    let h = 320.0f32;
+    let w = 440.0f32;
+    let h = 300.0f32;
+
+    let picker_position = db
+        .get_setting("picker_position")
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "center".to_string());
 
     #[cfg(target_os = "macos")]
     let bounds = {
-        let (cx_pos, cy_pos) = cursor_position();
         let (sw, sh) = screen_size();
-        // Center horizontally on cursor, bar appears near cursor vertically
-        let x = (cx_pos - w / 2.0).max(8.0).min(sw - w - 8.0);
-        let y = (cy_pos - h + 20.0).max(8.0).min(sh - h - 8.0);
-        Bounds {
-            origin: point(px(x), px(y)),
-            size: size(px(w), px(h)),
+        match picker_position.as_str() {
+            "cursor" => {
+                let (cx_pos, cy_pos) = cursor_position();
+                // Position window so the input bar (at bottom) sits just above the cursor,
+                // offset slightly to the right so the cursor isn't hidden.
+                let x = (cx_pos - w * 0.35).max(8.0).min(sw - w - 8.0);
+                let y = (cy_pos - h - 8.0).max(8.0).min(sh - h - 8.0);
+                Bounds {
+                    origin: point(px(x), px(y)),
+                    size: size(px(w), px(h)),
+                }
+            }
+            "top" => {
+                let x = (sw - w) / 2.0;
+                Bounds {
+                    origin: point(px(x), px(40.0)),
+                    size: size(px(w), px(h)),
+                }
+            }
+            "bottom" => {
+                let x = (sw - w) / 2.0;
+                let y = sh - h - 40.0;
+                Bounds {
+                    origin: point(px(x), px(y)),
+                    size: size(px(w), px(h)),
+                }
+            }
+            _ => {
+                // "center" (default)
+                let x = (sw - w) / 2.0;
+                let y = (sh - h) / 2.0;
+                Bounds {
+                    origin: point(px(x), px(y)),
+                    size: size(px(w), px(h)),
+                }
+            }
         }
     };
     #[cfg(not(target_os = "macos"))]
@@ -443,6 +530,21 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
         None
     };
     let ai_enabled = ai_session.is_some();
+
+    let ext_runtimes = cx.global::<ExtensionRuntimesGlobal>().0.clone();
+    // Read live browser context (populated by browser window when open)
+    let live_tabs_ref = cx.global::<LiveBrowserTabsGlobal>().0.clone();
+    let live_browser_ctx = {
+        let lt = live_tabs_ref.lock().unwrap();
+        if lt.tabs.is_empty() {
+            None
+        } else {
+            Some(delegate::BrowserContext {
+                tabs: lt.tabs.iter().map(|(t, u, s, la)| (t.clone(), u.clone(), s.clone(), *la)).collect(),
+                active_tab: lt.active_tab,
+            })
+        }
+    };
 
     let window = cx
         .open_window(
@@ -467,7 +569,7 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                         .flatten()
                         .map(|v| v == "true")
                         .unwrap_or(false);
-                    let delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled, semantic);
+                    let delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled, semantic, live_browser_ctx, Some(live_tabs_ref), ext_runtimes);
                     let picker = cx.new(|cx| {
                         let mut p = Picker::new(delegate, cx);
                         p.compact = compact;
@@ -517,6 +619,8 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
         )
         .unwrap();
 
+    cx.global_mut::<WindowHandleGlobal>().0 = Some(window);
+
     window
         .update(cx, |view, window, cx| {
             let input_focus = view.picker.read(cx).text_input.focus_handle(cx);
@@ -529,31 +633,25 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
     #[cfg(target_os = "macos")]
     configure_borderless_panel(&window, cx);
 
-    // Auto-dismiss when the window loses focus (debounced — 3 consecutive inactive polls)
+    // Auto-dismiss on first inactive poll (fast dismiss)
     let dismiss_flag = window_open_flag;
     cx.spawn(async move |cx: &mut AsyncApp| {
         cx.background_executor()
-            .timer(std::time::Duration::from_millis(300))
+            .timer(std::time::Duration::from_millis(100))
             .await;
-        let mut inactive_count = 0u32;
         loop {
             cx.background_executor()
-                .timer(std::time::Duration::from_millis(100))
+                .timer(std::time::Duration::from_millis(50))
                 .await;
             let active = window
                 .update(cx, |_, window, _cx| window.is_window_active())
                 .unwrap_or(false);
             if !active {
-                inactive_count += 1;
-                if inactive_count >= 3 {
-                    dismiss_flag.store(false, Ordering::Relaxed);
-                    let _ = window.update(cx, |_, window, _cx| {
-                        window.remove_window();
-                    });
-                    break;
-                }
-            } else {
-                inactive_count = 0;
+                dismiss_flag.store(false, Ordering::Relaxed);
+                let _ = window.update(cx, |_, window, _cx| {
+                    window.remove_window();
+                });
+                break;
             }
         }
     })

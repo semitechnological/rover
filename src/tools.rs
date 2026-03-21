@@ -69,6 +69,11 @@ pub fn build_os_tools() -> Vec<ToolDefinition> {
         get_keychain_secret_tool(),
         // Window management
         close_window_tool(),
+        quit_app_tool(),
+        // Browser tab management
+        close_browser_tab_tool(),
+        // Inline command execution
+        run_inline_command_tool(),
     ]
 }
 
@@ -841,19 +846,82 @@ fn close_window_tool() -> ToolDefinition {
          Use when the user asks to close, quit, or dismiss the current window.",
         Schema::new("CloseWindowArgs"),
         |_args| {
-            let script = r#"tell application "System Events"
-    set frontApp to first application process whose frontmost is true
-    set appName to name of frontApp
-    tell frontApp
-        if (count of windows) > 0 then
-            click menu item "Close Window" of menu "File" of menu bar 1
-            return "Closed frontmost window of " & appName
-        else
-            return "No windows open in " & appName
-        end if
-    end tell
-end tell"#;
-            run_osascript(script)
+            // Use Cmd+W keystroke instead of menu clicking (no assistive access needed)
+            let script = r#"tell application "System Events" to keystroke "w" using command down"#;
+            match run_osascript(script) {
+                Ok(_) => Ok("Closed frontmost window".to_string()),
+                Err(e) => Err(e),
+            }
+        },
+    )
+}
+
+fn quit_app_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "quit_app",
+        "Quit (close) a running macOS application by name. \
+         Use when the user asks to quit, exit, or kill an application.",
+        Schema::new("QuitAppArgs")
+            .property(SchemaProperty::new("app_name", SchemaPropertyType::String).description("The name of the application to quit (e.g. 'Safari', 'Slack')")),
+        |args| {
+            let app = args["app_name"].as_str().unwrap_or("");
+            if app.is_empty() {
+                return Err("app_name is required".to_string());
+            }
+            let safe: String = app.chars().filter(|c| !c.is_control() && *c != '"').collect();
+            let script = format!(r#"tell application "{safe}" to quit"#);
+            match run_osascript(&script) {
+                Ok(_) => Ok(format!("Quit {safe}")),
+                Err(e) => Err(e),
+            }
+        },
+    )
+}
+
+// ─── Keychain ─────────────────────────────────────────────────────────────────
+
+// ─── Browser Tab Management ───────────────────────────────────────────────────
+
+fn close_browser_tab_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "close_browser_tab",
+        "Close the active tab in the Rover browser. Use when the user asks to close the current \
+         browser tab, close a tab, or close the current page.",
+        Schema::new("CloseBrowserTabArgs"),
+        |_args| {
+            // Send Cmd+W to close the frontmost browser tab
+            let script = r#"tell application "System Events" to keystroke "w" using command down"#;
+            match run_osascript(script) {
+                Ok(_) => Ok("Closed browser tab".to_string()),
+                Err(e) => Err(e),
+            }
+        },
+    )
+}
+
+// ─── Inline Command Execution ─────────────────────────────────────────────────
+
+fn run_inline_command_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "run_inline_command",
+        "Run a shell command and return its output inline. Use when the user asks to run a command \
+         and see the output without opening a terminal window.",
+        Schema::new("RunInlineCommandArgs")
+            .property(SchemaProperty::new("command", SchemaPropertyType::String).description("Shell command to execute")),
+        |args| {
+            let command = args["command"].as_str().unwrap_or("").to_string();
+            let output = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&command)
+                .output()
+                .map_err(|e| e.to_string())?;
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            if output.status.success() {
+                Ok(stdout)
+            } else {
+                Ok(format!("stdout: {stdout}\nstderr: {stderr}"))
+            }
         },
     )
 }

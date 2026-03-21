@@ -6,17 +6,21 @@ use gpui::prelude::*;
 use gpui::*;
 use rover_theme::theme;
 use std::sync::Arc;
+use std::time::Duration;
 
 actions!(
     rover_picker,
-    [SelectNext, SelectPrev, Confirm, Cancel, ShowActions]
+    [SelectNext, SelectPrev, SelectLeft, SelectRight, Confirm, ShiftConfirm, Cancel, ShowActions]
 );
 
 pub fn bind_picker_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("up", SelectPrev, Some("Picker")),
         KeyBinding::new("down", SelectNext, Some("Picker")),
+        KeyBinding::new("left", SelectLeft, Some("Picker")),
+        KeyBinding::new("right", SelectRight, Some("Picker")),
         KeyBinding::new("enter", Confirm, Some("Picker")),
+        KeyBinding::new("shift-enter", ShiftConfirm, Some("Picker")),
         KeyBinding::new("escape", Cancel, Some("Picker")),
         KeyBinding::new("cmd-k", ShowActions, Some("Picker")),
     ]);
@@ -45,6 +49,11 @@ pub trait PickerDelegate: Sized + 'static {
     fn update_matches(&mut self, query: String, cx: &mut Context<Picker<Self>>) -> Task<()>;
     /// Returns true if the picker should be dismissed after confirm.
     fn confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool;
+    /// Shift+Enter confirm — e.g. open in new window instead of existing tab.
+    /// Default falls back to regular confirm.
+    fn shift_confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
+        self.confirm(cx)
+    }
     fn dismissed(&mut self, cx: &mut Context<Picker<Self>>);
 
     fn render_match(
@@ -85,6 +94,23 @@ pub trait PickerDelegate: Sized + 'static {
     /// Exit the current sub-view
     fn exit_submenu(&mut self, _cx: &mut Context<Picker<Self>>) {}
 
+    /// Return AI widget content if an AI response should be displayed as a card.
+    fn ai_widget_content(&self) -> Option<&str> {
+        None
+    }
+
+    /// Return terminal output if inline command output should be displayed.
+    fn terminal_output(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether an inline terminal command is currently running.
+    fn terminal_running(&self) -> bool {
+        false
+    }
+
+
+
     /// Return sub-actions for the currently selected item (shown on Cmd+K)
     fn actions_for_selected(&self) -> Vec<ItemAction> {
         Vec::new()
@@ -109,6 +135,7 @@ pub struct Picker<D: PickerDelegate> {
     focus_handle: FocusHandle,
     show_actions: bool,
     action_selected_ix: usize,
+    compact_scroll_offset: usize,
 }
 
 impl<D: PickerDelegate> EventEmitter<PickerEvent> for Picker<D> {}
@@ -136,6 +163,7 @@ impl<D: PickerDelegate> Picker<D> {
             focus_handle: cx.focus_handle(),
             show_actions: false,
             action_selected_ix: 0,
+            compact_scroll_offset: 0,
         };
         picker.delegate.update_matches(String::new(), cx).detach();
         picker
@@ -225,6 +253,18 @@ impl<D: PickerDelegate> Picker<D> {
         }
     }
 
+    fn handle_shift_confirm(&mut self, _: &ShiftConfirm, _window: &mut Window, cx: &mut Context<Self>) {
+        let should_dismiss = self.delegate.shift_confirm(cx);
+        if should_dismiss {
+            self.clear_and_reset(cx);
+            cx.emit(PickerEvent::Dismiss);
+        } else {
+            self.refresh_placeholder(cx);
+            self.text_input.update(cx, |input, cx| input.clear(cx));
+            cx.notify();
+        }
+    }
+
     fn handle_cancel(&mut self, _: &Cancel, _window: &mut Window, cx: &mut Context<Self>) {
         if self.show_actions {
             self.show_actions = false;
@@ -246,6 +286,61 @@ impl<D: PickerDelegate> Picker<D> {
         } else {
             self.delegate.dismissed(cx);
             cx.emit(PickerEvent::Dismiss);
+        }
+    }
+
+    fn handle_select_left(&mut self, _: &SelectLeft, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.compact {
+            // In compact mode, left = prev
+            if self.delegate.match_count() == 0 { return; }
+            let ix = self.delegate.selected_index().saturating_sub(1);
+            self.delegate.set_selected_index(ix, cx);
+            self.adjust_compact_scroll();
+            cx.notify();
+        } else {
+            // In non-compact, navigate within context pills only
+            let ctx = self.delegate.context_item_count();
+            if ctx == 0 { return; }
+            let ix = self.delegate.selected_index();
+            if ix < ctx && ix > 0 {
+                self.delegate.set_selected_index(ix - 1, cx);
+                cx.notify();
+            } else if ix >= ctx {
+                // Jump to last context pill
+                self.delegate.set_selected_index(ctx.saturating_sub(1), cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn handle_select_right(&mut self, _: &SelectRight, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.compact {
+            // In compact mode, right = next
+            let count = self.delegate.match_count();
+            if count == 0 { return; }
+            let ix = (self.delegate.selected_index() + 1).min(count - 1);
+            self.delegate.set_selected_index(ix, cx);
+            self.adjust_compact_scroll();
+            cx.notify();
+        } else {
+            // In non-compact, navigate within context pills only
+            let ctx = self.delegate.context_item_count();
+            if ctx == 0 { return; }
+            let ix = self.delegate.selected_index();
+            if ix < ctx.saturating_sub(1) {
+                self.delegate.set_selected_index(ix + 1, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn adjust_compact_scroll(&mut self) {
+        let ix = self.delegate.selected_index();
+        let visible = 8usize;
+        if ix < self.compact_scroll_offset {
+            self.compact_scroll_offset = ix;
+        } else if ix >= self.compact_scroll_offset + visible {
+            self.compact_scroll_offset = ix.saturating_sub(visible - 1);
         }
     }
 
@@ -282,13 +377,13 @@ impl<D: PickerDelegate> Render for Picker<D> {
             t.colors.clone()
         };
         let match_count = self.delegate.match_count();
-        let query_is_empty = self.text_input.read(cx).text().is_empty();
+        let _query_is_empty = self.text_input.read(cx).text().is_empty();
         let bg = colors.surface_background;
+        let elevated_bg = colors.elevated_surface_background;
         let text_muted = colors.text_muted;
 
         let in_submenu = self.delegate.in_submenu();
         let context_count = self.delegate.context_item_count();
-
         // Always show items when there are any (compact shows context/clipboard by default)
         let show_items = match_count > 0;
 
@@ -304,56 +399,133 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .justify_end()
             .on_action(cx.listener(Self::handle_select_next))
             .on_action(cx.listener(Self::handle_select_prev))
+            .on_action(cx.listener(Self::handle_select_left))
+            .on_action(cx.listener(Self::handle_select_right))
             .on_action(cx.listener(Self::handle_confirm))
+            .on_action(cx.listener(Self::handle_shift_confirm))
             .on_action(cx.listener(Self::handle_cancel))
             .on_action(cx.listener(Self::handle_show_actions));
 
         if show_items {
             if self.compact {
-                // ── Compact mode: everything as floating pills, no container bg ──
+                // ── Compact mode: everything as floating pills, single scrollable row ──
                 let mut pills_div = div()
                     .flex()
                     .flex_row()
-                    .flex_wrap()
                     .gap(px(4.0))
                     .px_2()
                     .py(px(6.0))
-                    .mb(px(6.0));
+                    .mb(px(6.0))
+                    .overflow_x_hidden()
+                    .flex_shrink_0();
 
-                for ix in 0..match_count {
+                let visible_count = 8usize;
+                let end = (self.compact_scroll_offset + visible_count).min(match_count);
+
+                // Show left overflow indicator
+                if self.compact_scroll_offset > 0 {
+                    pills_div = pills_div.child(
+                        div()
+                            .text_color(text_muted)
+                            .text_size(px(10.0))
+                            .child(SharedString::from("‹")),
+                    );
+                }
+
+                for ix in self.compact_scroll_offset..end {
                     let selected = ix == self.delegate.selected_index();
                     if let Some(el) = self.delegate.render_match(ix, selected, cx) {
-                        pills_div = pills_div.child(el);
+                        // WU-5: Wrap in clickable div
+                        pills_div = pills_div.child(
+                            div()
+                                .id(ElementId::Name(SharedString::from(format!("pill-{ix}"))))
+                                .child(el)
+                                .on_click(cx.listener(move |this, _event, _window, cx| {
+                                    this.delegate.set_selected_index(ix, cx);
+                                    let should_dismiss = this.delegate.confirm(cx);
+                                    if should_dismiss {
+                                        this.clear_and_reset(cx);
+                                        cx.emit(PickerEvent::Dismiss);
+                                    } else {
+                                        this.refresh_placeholder(cx);
+                                        this.text_input.update(cx, |input, cx| input.clear(cx));
+                                        cx.notify();
+                                    }
+                                }))
+,
+                        );
                     }
                 }
-                root = root.child(pills_div);
+
+                // Show right overflow indicator
+                if end < match_count {
+                    pills_div = pills_div.child(
+                        div()
+                            .text_color(text_muted)
+                            .text_size(px(10.0))
+                            .child(SharedString::from("›")),
+                    );
+                }
+
+                root = root.child(
+                    pills_div.with_animation(
+                        "compact-pills-fade",
+                        Animation::new(Duration::from_millis(120)).with_easing(ease_in_out),
+                        |el, delta| el.opacity(delta),
+                    ),
+                );
             } else {
                 // ── Non-compact mode: context items as pills, rest as list rows ──
 
-                // Context pills (browser tabs, etc.) — floating, no container bg
+                // Context pills (browser tabs, etc.) — single scrollable row
                 if context_count > 0 {
                     let mut ctx_pills = div()
                         .flex()
                         .flex_row()
-                        .flex_wrap()
                         .gap(px(4.0))
                         .px_2()
                         .py(px(4.0))
-                        .mb(px(4.0));
+                        .mb(px(4.0))
+                        .overflow_x_hidden()
+                        .flex_shrink_0();
 
                     for ix in 0..context_count.min(match_count) {
                         let selected = ix == self.delegate.selected_index();
                         if let Some(el) = self.delegate.render_match(ix, selected, cx) {
-                            ctx_pills = ctx_pills.child(el);
+                            // WU-5: Wrap in clickable div with hover tracking
+                            ctx_pills = ctx_pills.child(
+                                div()
+                                    .id(ElementId::Name(SharedString::from(format!("pill-{ix}"))))
+                                    .child(el)
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.delegate.set_selected_index(ix, cx);
+                                        let should_dismiss = this.delegate.confirm(cx);
+                                        if should_dismiss {
+                                            this.clear_and_reset(cx);
+                                            cx.emit(PickerEvent::Dismiss);
+                                        } else {
+                                            this.refresh_placeholder(cx);
+                                            this.text_input.update(cx, |input, cx| input.clear(cx));
+                                            cx.notify();
+                                        }
+                                    })),
+                            );
                         }
                     }
-                    root = root.child(ctx_pills);
+                    root = root.child(
+                        ctx_pills.with_animation(
+                            "ctx-pills-fade",
+                            Animation::new(Duration::from_millis(120)).with_easing(ease_in_out),
+                            |el, delta| el.opacity(delta),
+                        ),
+                    );
                 }
 
                 // List rows — vertical list with bg
                 let list_start = context_count;
                 if list_start < match_count {
                     let mut list_div = div()
+                        .id("picker-list")
                         .flex()
                         .flex_col()
                         .gap(px(1.0))
@@ -364,17 +536,140 @@ impl<D: PickerDelegate> Render for Picker<D> {
                         .rounded_lg()
                         .shadow_md()
                         .max_h(px(240.0))
-                        .overflow_y_hidden();
+                        .overflow_y_scroll();
 
                     for ix in list_start..match_count {
                         let selected = ix == self.delegate.selected_index();
                         if let Some(el) = self.delegate.render_row(ix, selected, cx) {
-                            list_div = list_div.child(el);
+                            // WU-5: Wrap list rows in clickable divs
+                            list_div = list_div.child(
+                                div()
+                                    .id(ElementId::Name(SharedString::from(format!("row-{ix}"))))
+                                    .child(el)
+                                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                                        this.delegate.set_selected_index(ix, cx);
+                                        let should_dismiss = this.delegate.confirm(cx);
+                                        if should_dismiss {
+                                            this.clear_and_reset(cx);
+                                            cx.emit(PickerEvent::Dismiss);
+                                        } else {
+                                            this.refresh_placeholder(cx);
+                                            this.text_input.update(cx, |input, cx| input.clear(cx));
+                                            cx.notify();
+                                        }
+                                    })),
+                            );
                         }
                     }
-                    root = root.child(list_div);
+                    root = root.child(
+                        list_div.with_animation(
+                            "list-fade",
+                            Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
+                            |el, delta| el.opacity(delta),
+                        ),
+                    );
                 }
             }
+        }
+
+        // WU-9: AI response widget — full-width card above the action bar
+        if let Some(ai_text) = self.delegate.ai_widget_content() {
+            let ai_text = ai_text.to_string();
+            let ai_widget = div()
+                .id("ai-widget")
+                .w_full()
+                .px_3()
+                .py_2()
+                .mb(px(6.0))
+                .bg(elevated_bg)
+                .rounded_lg()
+                .shadow_md()
+                .max_h(px(200.0))
+                .overflow_y_scroll()
+                .on_click(cx.listener(move |_this, _event, _window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(ai_text.clone()));
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_color(colors.text_accent)
+                                .text_size(px(10.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(SharedString::from("AI")),
+                        )
+                        .child(
+                            div()
+                                .text_color(colors.text)
+                                .text_size(px(12.0))
+                                .child(SharedString::from(self.delegate.ai_widget_content().unwrap_or("").to_string())),
+                        )
+                        .child(
+                            div()
+                                .text_color(text_muted)
+                                .text_size(px(9.0))
+                                .child(SharedString::from("Click to copy")),
+                        ),
+                );
+            root = root.child(
+                ai_widget.with_animation(
+                    "ai-widget-fade",
+                    Animation::new(Duration::from_millis(200)).with_easing(ease_in_out),
+                    |el, delta| el.opacity(delta),
+                ),
+            );
+        }
+
+        // WU-11: Inline terminal output widget
+        if let Some(term_output) = self.delegate.terminal_output() {
+            let term_widget = div()
+                .id("terminal-output")
+                .w_full()
+                .px_3()
+                .py_2()
+                .mb(px(6.0))
+                .bg(rgba(0x0a0a0aFFu32))
+                .rounded_lg()
+                .shadow_md()
+                .max_h(px(160.0))
+                .overflow_y_scroll()
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .child(
+                                    div()
+                                        .text_color(colors.text_accent)
+                                        .text_size(px(10.0))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .child(SharedString::from(
+                                            if self.delegate.terminal_running() { "$ running..." } else { "$" }
+                                        )),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_color(colors.text)
+                                .text_size(px(11.0))
+                                .child(SharedString::from(term_output.to_string())),
+                        ),
+                );
+            root = root.child(
+                term_widget.with_animation(
+                    "terminal-fade",
+                    Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
+                    |el, delta| el.opacity(delta),
+                ),
+            );
         }
 
         // Action bar (floating between items and input bar)
@@ -428,20 +723,21 @@ impl<D: PickerDelegate> Render for Picker<D> {
         }
 
         // Input bar — always at the bottom, the main visual element. No border.
+        // Compact, copilot-style bar.
         let mut input_bar = div()
-            .px_3()
-            .py_2()
+            .px(px(12.0))
+            .py(px(7.0))
             .bg(bg)
-            .rounded_xl()
+            .rounded_full()
             .shadow_lg()
             .flex()
             .items_center()
-            .gap_2()
+            .gap(px(6.0))
             .when(in_submenu, |el| {
                 el.child(
                     div()
                         .text_color(colors.text_muted)
-                        .text_size(px(14.0))
+                        .text_size(px(12.0))
                         .child(SharedString::from("‹ ")),
                 )
             })
@@ -449,8 +745,8 @@ impl<D: PickerDelegate> Render for Picker<D> {
                 div()
                     .flex_grow()
                     .text_color(colors.text)
-                    .text_size(px(16.0))
-                    .line_height(px(24.0))
+                    .text_size(px(13.0))
+                    .line_height(px(20.0))
                     .child(self.text_input.clone()),
             );
 
@@ -459,7 +755,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
             input_bar = input_bar.child(
                 div()
                     .text_color(text_muted)
-                    .text_size(px(10.0))
+                    .text_size(px(9.0))
                     .child(SharedString::from(format!("{match_count}"))),
             );
         }

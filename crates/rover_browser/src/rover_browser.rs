@@ -44,6 +44,25 @@ const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 actions!(rover_browser, [OpenTransport, ShareCurrentUrl]);
 
+/// Shared live browser tab state so the picker can show context about open tabs.
+/// Also contains a URL inbox for navigation requests from the picker.
+pub struct LiveBrowserTabs {
+    pub tabs: Vec<(String, String, TabState, u64)>, // (title, url, state, last_active_epoch_ms)
+    pub active_tab: usize,
+    /// URLs pushed by the picker for the browser to open as new tabs.
+    pub url_inbox: Vec<String>,
+    /// Tab indices to close (pushed by picker, consumed by browser).
+    pub close_inbox: Vec<usize>,
+}
+impl Default for LiveBrowserTabs {
+    fn default() -> Self {
+        Self { tabs: Vec::new(), active_tab: 0, url_inbox: Vec::new(), close_inbox: Vec::new() }
+    }
+}
+
+/// Thread-safe shared reference to live browser tab state.
+pub type LiveBrowserTabsRef = Arc<std::sync::Mutex<LiveBrowserTabs>>;
+
 // ─── Search engines ───────────────────────────────────────────────────────────
 
 pub struct SearchEngine {
@@ -321,6 +340,7 @@ pub struct BrowserWindow {
     pub bookmark_manager: Option<BookmarkManager>,
     pub semantic_index: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
     db: Option<Arc<rover_db::RoverDb>>,
+    pub live_tabs: Option<LiveBrowserTabsRef>,
     focus: FocusHandle,
     _lifecycle_task: Task<()>,
     _event_task: Task<()>,
@@ -401,6 +421,7 @@ impl BrowserWindow {
             history_manager,
             bookmark_manager,
             db: db.clone(),
+            live_tabs: None,
             focus,
             _lifecycle_task: lifecycle_task,
             _event_task: event_task,
@@ -604,7 +625,7 @@ impl BrowserWindow {
 
     // ── Internal helpers ───────────────────────────────────────────────────────
 
-    fn open_tab_external(&mut self, url: &str, _cx: &mut Context<Self>) {
+    pub fn open_tab_external(&mut self, url: &str, _cx: &mut Context<Self>) {
         #[cfg(target_os = "macos")]
         if let Some(tab) = self.tabs.get_mut(self.active_tab) {
             if let Some(wv) = &tab.webview_handle {
@@ -666,6 +687,39 @@ impl BrowserWindow {
     }
 
     fn drain_events(&mut self, cx: &mut Context<Self>) {
+        // Check URL inbox for navigation requests from the picker
+        if let Some(ref live) = self.live_tabs {
+            let (urls, close_indices) = {
+                let mut lock = live.lock().unwrap();
+                (
+                    std::mem::take(&mut lock.url_inbox),
+                    std::mem::take(&mut lock.close_inbox),
+                )
+            };
+            if !urls.is_empty() {
+                for url in urls {
+                    self.open_tab_external(&url, cx);
+                }
+                self.save_session();
+                self.update_live_tabs();
+                cx.notify();
+            }
+            if !close_indices.is_empty() {
+                // Close tabs by index (sorted descending to avoid index shift issues)
+                let mut indices = close_indices;
+                indices.sort_unstable();
+                indices.dedup();
+                for &ix in indices.iter().rev() {
+                    if ix < self.tabs.len() {
+                        self.close_tab(ix, cx);
+                    }
+                }
+                self.save_session();
+                self.update_live_tabs();
+                cx.notify();
+            }
+        }
+
         let mut changed = false;
 
         for (i, tab) in self.tabs.iter_mut().enumerate() {
@@ -779,7 +833,25 @@ impl BrowserWindow {
         }
 
         if changed {
+            self.save_session();
+            self.update_live_tabs();
             cx.notify();
+        }
+    }
+
+    /// Push current tab state to the shared LiveBrowserTabs so the picker can show it.
+    fn update_live_tabs(&self) {
+        if let Some(ref live) = self.live_tabs {
+            if let Ok(mut lt) = live.lock() {
+                lt.tabs = self.tabs.iter()
+                    .map(|t| {
+                        let epoch_ms = t.last_active.elapsed().as_millis() as u64;
+                        // Store as "millis ago" so larger = older. The picker can sort ascending.
+                        (t.title.clone(), t.url.clone(), t.state.clone(), epoch_ms)
+                    })
+                    .collect();
+                lt.active_tab = self.active_tab;
+            }
         }
     }
 
@@ -1031,11 +1103,11 @@ impl Element for WebViewElement {
 // ─── Entry points ─────────────────────────────────────────────────────────────
 
 pub fn open_browser_window(cx: &mut App, db: Option<Arc<rover_db::RoverDb>>) {
-    open_browser_window_inner(cx, DEFAULT_URL, db, None);
+    open_browser_window_inner(cx, DEFAULT_URL, db, None, None);
 }
 
 pub fn open_browser_window_with_url(cx: &mut App, url: &str, db: Option<Arc<rover_db::RoverDb>>) {
-    open_browser_window_inner(cx, url, db, None);
+    open_browser_window_inner(cx, url, db, None, None);
 }
 
 pub fn open_browser_window_with_semantic(
@@ -1044,7 +1116,41 @@ pub fn open_browser_window_with_semantic(
     db: Option<Arc<rover_db::RoverDb>>,
     semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
 ) {
-    open_browser_window_inner(cx, url, db, semantic);
+    open_browser_window_inner(cx, url, db, semantic, None);
+}
+
+pub fn open_browser_window_with_live_tabs(
+    cx: &mut App,
+    url: &str,
+    db: Option<Arc<rover_db::RoverDb>>,
+    semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+    live_tabs: Option<LiveBrowserTabsRef>,
+) {
+    open_browser_window_inner(cx, url, db, semantic, live_tabs);
+}
+
+/// Navigate to a URL in the existing browser window (new tab) if one exists,
+/// otherwise open a new browser window.
+pub fn navigate_or_open(
+    cx: &mut App,
+    url: &str,
+    db: Option<Arc<rover_db::RoverDb>>,
+    semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+    live_tabs: Option<LiveBrowserTabsRef>,
+) {
+    // Try to push URL to existing browser window's inbox
+    if let Some(ref lt) = live_tabs {
+        let has_window = {
+            let lock = lt.lock().unwrap();
+            !lock.tabs.is_empty()
+        };
+        if has_window {
+            lt.lock().unwrap().url_inbox.push(url.to_string());
+            return;
+        }
+    }
+    // No existing window — open a new one
+    open_browser_window_inner(cx, url, db, semantic, live_tabs);
 }
 
 fn open_browser_window_inner(
@@ -1052,7 +1158,9 @@ fn open_browser_window_inner(
     url: &str,
     db: Option<Arc<rover_db::RoverDb>>,
     semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+    live_tabs: Option<LiveBrowserTabsRef>,
 ) {
+
     // Cmd+\ opens the floating transport from anywhere in the browser window.
     // Cmd+Shift+C copies the current URL directly (no transport needed).
     cx.bind_keys([
@@ -1061,7 +1169,7 @@ fn open_browser_window_inner(
     ]);
 
     let url = url.to_string();
-    cx.open_window(
+    let window_handle = cx.open_window(
         WindowOptions {
             window_bounds: None, // fullscreen / maximised by OS
             titlebar: None,
@@ -1076,6 +1184,7 @@ fn open_browser_window_inner(
             cx.new(|cx| {
                 let mut bw = BrowserWindow::new(window, cx, db);
                 bw.semantic_index = semantic;
+                bw.live_tabs = live_tabs;
                 if let Some(tab) = bw.tabs.get_mut(0) {
                     tab.url = url.clone();
                     tab.title = looks_like_url(&url)

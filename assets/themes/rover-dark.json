@@ -47,6 +47,98 @@
         "scrollbar.thumb": "#ccd0da",
         "scrollbar.track": "#eff1f5"
       }
+    },
+    {
+      "name": "Sepia",
+      "appearance": "light",
+      "style": {
+        "background": "#f5f0e8",
+        "surface.background": "#ebe4d8",
+        "elevated_surface.background": "#e0d7c8",
+        "text": "#5b4636",
+        "text.muted": "#7a6552",
+        "text.placeholder": "#a8937e",
+        "text.accent": "#946b4a",
+        "border": "#d4c8b4",
+        "border.variant": "#e0d7c8",
+        "border.focused": "#946b4a",
+        "element.background": "#e0d7c8",
+        "element.hover": "#d4c8b4",
+        "element.selected": "#c8b9a4",
+        "icon": "#5b4636",
+        "icon.muted": "#a8937e",
+        "scrollbar.thumb": "#d4c8b4",
+        "scrollbar.track": "#f5f0e8"
+      }
+    },
+    {
+      "name": "Nord",
+      "appearance": "dark",
+      "style": {
+        "background": "#2e3440",
+        "surface.background": "#3b4252",
+        "elevated_surface.background": "#434c5e",
+        "text": "#d8dee9",
+        "text.muted": "#a3be8c",
+        "text.placeholder": "#4c566a",
+        "text.accent": "#88c0d0",
+        "border": "#4c566a",
+        "border.variant": "#434c5e",
+        "border.focused": "#88c0d0",
+        "element.background": "#434c5e",
+        "element.hover": "#4c566a",
+        "element.selected": "#5e6779",
+        "icon": "#d8dee9",
+        "icon.muted": "#4c566a",
+        "scrollbar.thumb": "#4c566a",
+        "scrollbar.track": "#2e3440"
+      }
+    },
+    {
+      "name": "Liquid Glass",
+      "appearance": "dark",
+      "style": {
+        "background": "#00000000",
+        "surface.background": "#18182540",
+        "elevated_surface.background": "#31324460",
+        "text": "#cdd6f4",
+        "text.muted": "#a6adc8",
+        "text.placeholder": "#6c7086",
+        "text.accent": "#89b4fa",
+        "border": "#45475a40",
+        "border.variant": "#31324430",
+        "border.focused": "#89b4faCC",
+        "element.background": "#31324440",
+        "element.hover": "#45475a60",
+        "element.selected": "#585b7080",
+        "icon": "#cdd6f4",
+        "icon.muted": "#6c7086",
+        "scrollbar.thumb": "#45475a40",
+        "scrollbar.track": "#00000000"
+      }
+    },
+    {
+      "name": "OLED",
+      "appearance": "dark",
+      "style": {
+        "background": "#000000",
+        "surface.background": "#000000",
+        "elevated_surface.background": "#0a0a0a",
+        "text": "#ffffff",
+        "text.muted": "#999999",
+        "text.placeholder": "#555555",
+        "text.accent": "#4da6ff",
+        "border": "#1a1a1a",
+        "border.variant": "#111111",
+        "border.focused": "#4da6ff",
+        "element.background": "#0a0a0a",
+        "element.hover": "#1a1a1a",
+        "element.selected": "#222222",
+        "icon": "#ffffff",
+        "icon.muted": "#555555",
+        "scrollbar.thumb": "#1a1a1a",
+        "scrollbar.track": "#000000"
+      }
     }
   ]
 }

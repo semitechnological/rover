@@ -63,12 +63,16 @@ pub struct RoverDelegate {
     quit_target: Option<String>,
     /// "close tab" / "tab close" — close the active browser tab
     close_tab_requested: bool,
+    /// "close all tabs" — close all browser tabs
+    close_all_tabs_requested: bool,
     /// Whether clipboard section is expanded in compact mode
     clipboard_expanded: bool,
     /// Terminal output from inline command execution
     terminal_output: Option<String>,
     /// Whether an inline terminal command is currently running
     terminal_running: bool,
+    /// The frontmost app before Rover activated (for quit/close commands)
+    pub previous_frontmost_app: Option<String>,
 }
 
 struct QueryHistory {
@@ -170,6 +174,7 @@ struct RowOffsets {
     has_recent_clips: bool,
     recent_clips_count: usize,
     has_close_tab: bool,
+    has_close_all_tabs: bool,
     has_quit: bool,
     has_terminal: bool,
     has_url: bool,
@@ -179,6 +184,7 @@ struct RowOffsets {
     browser_start: usize,
     recent_clips_start: usize,
     close_tab_ix: usize,
+    close_all_tabs_ix: usize,
     quit_ix: usize,
     terminal_ix: usize,
     url_ix: usize,
@@ -253,10 +259,71 @@ impl RoverDelegate {
             recent_clips: Vec::new(),
             quit_target: None,
             close_tab_requested: false,
+            close_all_tabs_requested: false,
             clipboard_expanded: false,
             terminal_output: None,
             terminal_running: false,
+            previous_frontmost_app: Self::detect_frontmost_app(),
         }
+    }
+
+    /// Detect the frontmost app BEFORE Rover activates (for quit/close commands)
+    pub fn detect_frontmost_app() -> Option<String> {
+        let output = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(r#"tell application "System Events" to get name of first application process whose frontmost is true"#)
+            .output()
+            .ok()?;
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() && name != "rover" && name != "Rover" {
+                Some(name)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Resolve bang syntax (!g query → Google search URL, !amzn shoes → Amazon search, etc.)
+    fn resolve_bang(query: &str) -> Option<String> {
+        let without_bang = query.strip_prefix('!')?;
+        let (prefix, search_query) = match without_bang.split_once(' ') {
+            Some((p, q)) => (p, q.trim()),
+            None => return None, // no query yet, just the prefix
+        };
+        if search_query.is_empty() {
+            return None;
+        }
+        let prefix_lower = prefix.to_lowercase();
+        // Match against search engine prefixes (short and long) plus extra aliases
+        for engine in rover_browser::SEARCH_ENGINES {
+            if engine.long_prefix == prefix_lower
+                || engine.short_prefix.map(|s| s == prefix_lower).unwrap_or(false)
+            {
+                let encoded = urlencoding::encode(search_query);
+                return Some(engine.url_template.replace("{query}", &encoded));
+            }
+        }
+        // Extra aliases not in SEARCH_ENGINES
+        let extra: &[(&str, &str)] = &[
+            ("amzn", "https://www.amazon.com/s?k={query}"),
+            ("y", "https://search.yahoo.com/search?p={query}"),
+            ("yahoo", "https://search.yahoo.com/search?p={query}"),
+            ("bing", "https://www.bing.com/search?q={query}"),
+            ("b", "https://www.bing.com/search?q={query}"),
+            ("npm", "https://www.npmjs.com/search?q={query}"),
+            ("crates", "https://crates.io/search?q={query}"),
+            ("mdn", "https://developer.mozilla.org/en-US/search?q={query}"),
+        ];
+        for (alias, template) in extra {
+            if prefix_lower == *alias {
+                let encoded = urlencoding::encode(search_query);
+                return Some(template.replace("{query}", &encoded));
+            }
+        }
+        None
     }
 
     pub fn enter_submenu(&mut self, mode: ViewMode, cx: &mut Context<Picker<Self>>) {
@@ -292,6 +359,7 @@ impl RoverDelegate {
         let has_recent_clips = self.clipboard_expanded;
         let recent_clips_count = if has_recent_clips { self.recent_clips.len() } else { 0 };
         let has_close_tab = self.close_tab_requested;
+        let has_close_all_tabs = self.close_all_tabs_requested;
         let has_quit = self.quit_target.is_some();
         let has_terminal = self.inline_terminal.is_some();
         let has_url = self.url_result.is_some();
@@ -307,6 +375,8 @@ impl RoverDelegate {
         let context_count = next; // everything up to here is "context" (pills)
         let close_tab_ix = next;
         if has_close_tab { next += 1; }
+        let close_all_tabs_ix = next;
+        if has_close_all_tabs { next += 1; }
         let quit_ix = next;
         if has_quit { next += 1; }
         let terminal_ix = next;
@@ -322,8 +392,8 @@ impl RoverDelegate {
         let command_offset = next;
         RowOffsets {
             has_browser, browser_count, has_recent_clips, recent_clips_count,
-            has_close_tab, has_quit, has_terminal, has_url, has_calc, has_ai, has_help,
-            browser_start, recent_clips_start, close_tab_ix,
+            has_close_tab, has_close_all_tabs, has_quit, has_terminal, has_url, has_calc, has_ai, has_help,
+            browser_start, recent_clips_start, close_tab_ix, close_all_tabs_ix,
             quit_ix, terminal_ix, url_ix, calc_ix, ai_ix, help_ix,
             command_offset, context_count,
         }
@@ -651,6 +721,21 @@ impl RoverDelegate {
             .into_any_element()
     }
 
+    fn render_close_all_tabs_pill(
+        &self,
+        selected: bool,
+        colors: &rover_theme::ThemeColors,
+    ) -> AnyElement {
+        Self::state_pill("✕", rgba(0xff444426u32), colors.text_accent, selected, colors)
+            .child(
+                div()
+                    .text_color(colors.text)
+                    .text_size(px(11.0))
+                    .child(SharedString::from("Close all browser tabs")),
+            )
+            .into_any_element()
+    }
+
     fn render_quit_pill(
         &self,
         target: &str,
@@ -732,6 +817,22 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let normalized = normalize_query(&query);
 
+                // Priority 0: bang syntax (!g query, !amzn query, etc.) — search engine shortcut
+                if query.starts_with('!') && !query.starts_with("! ") {
+                    if let Some(url) = Self::resolve_bang(&query) {
+                        self.url_result = Some(url);
+                        self.inline_terminal = None;
+                        self.calculator_result = None;
+                        self.ai_result = None;
+                        self.ai_loading = false;
+                        self.ai_debounce = None;
+                        self.browser_filtered.clear();
+                        self.matches = vec![];
+                        self.selected_ix = 0;
+                        return Task::ready(());
+                    }
+                }
+
                 // Priority 1: explicit terminal prefix (> cmd or ! cmd) — exclusive mode
                 let terminal_prefix = query.starts_with("> ") || query.starts_with("! ");
                 if terminal_prefix {
@@ -791,14 +892,20 @@ impl PickerDelegate for RoverDelegate {
 
                 // Close tab detection — before quit/close so "close tab" doesn't trigger quit
                 let lower = query.to_lowercase();
+                let all_tab_close_patterns = [
+                    "close all tabs", "close all browser tabs",
+                ];
+                self.close_all_tabs_requested = all_tab_close_patterns.iter().any(|p| lower == *p)
+                    && !self.browser_ctx.tabs.is_empty();
                 let tab_close_patterns = [
                     "close tab", "tab close", "close current tab", "close this tab",
                 ];
-                self.close_tab_requested = tab_close_patterns.iter().any(|p| lower == *p)
+                self.close_tab_requested = !self.close_all_tabs_requested
+                    && tab_close_patterns.iter().any(|p| lower == *p)
                     && !self.browser_ctx.tabs.is_empty();
 
-                // Quit / close detection — skip when target word is "tab"/"tabs"
-                if !self.close_tab_requested {
+                // Quit / close detection — skip when close tab or close all tabs is active
+                if !self.close_tab_requested && !self.close_all_tabs_requested {
                     if lower == "quit" || lower == "close" || lower == "exit" {
                         self.quit_target = Some(String::new()); // close frontmost window
                     } else if lower.starts_with("quit ") || lower.starts_with("close ") || lower.starts_with("exit ") {
@@ -936,12 +1043,34 @@ impl PickerDelegate for RoverDelegate {
                     return true;
                 }
 
-                // Recent clipboard — paste to clipboard
+                // Recent clipboard — paste to clipboard and into frontmost app
                 if o.has_recent_clips && self.selected_ix >= o.recent_clips_start && self.selected_ix < o.recent_clips_start + o.recent_clips_count {
                     let clip_ix = self.selected_ix - o.recent_clips_start;
                     if let Some(entry) = self.recent_clips.get(clip_ix) {
                         cx.write_to_clipboard(ClipboardItem::new_string(entry.content.clone()));
+                        std::thread::spawn(|| {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            let _ = std::process::Command::new("osascript")
+                                .arg("-e")
+                                .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
+                                .output();
+                        });
                     }
+                    return true;
+                }
+
+                // Close all browser tabs
+                if o.has_close_all_tabs && self.selected_ix == o.close_all_tabs_ix {
+                    if let Some(lt) = &self.live_tabs {
+                        if let Ok(mut live) = lt.lock() {
+                            for i in 0..self.browser_ctx.tabs.len() {
+                                live.close_inbox.push(i);
+                            }
+                        }
+                    }
+                    self.browser_ctx.tabs.clear();
+                    self.browser_filtered.clear();
+                    self.browser_ctx.active_tab = 0;
                     return true;
                 }
 
@@ -971,19 +1100,22 @@ impl PickerDelegate for RoverDelegate {
                 if o.has_quit && self.selected_ix == o.quit_ix {
                     if let Some(target) = &self.quit_target {
                         if target.is_empty() {
-                            // Close frontmost window via Cmd+W keystroke (no assistive access needed)
-                            std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(400));
-                                let _ = std::process::Command::new("osascript")
-                                    .arg("-e")
-                                    .arg(r#"tell application "System Events" to keystroke "w" using command down"#)
-                                    .status();
-                            });
+                            // Close frontmost window — use the app that was active BEFORE Rover opened
+                            let front_app = self.previous_frontmost_app.clone();
+                            if let Some(app) = front_app {
+                                std::thread::spawn(move || {
+                                    std::thread::sleep(std::time::Duration::from_millis(200));
+                                    let _ = std::process::Command::new("osascript")
+                                        .arg("-e")
+                                        .arg(format!(r#"tell application "{app}" to close window 1"#))
+                                        .status();
+                                });
+                            }
                         } else {
                             // Quit the named app
                             let target = target.clone();
                             std::thread::spawn(move || {
-                                std::thread::sleep(std::time::Duration::from_millis(400));
+                                std::thread::sleep(std::time::Duration::from_millis(200));
                                 let _ = std::process::Command::new("osascript")
                                     .arg("-e")
                                     .arg(format!(r#"tell application "{target}" to quit"#))
@@ -995,44 +1127,9 @@ impl PickerDelegate for RoverDelegate {
                 }
 
                 if o.has_terminal && self.selected_ix == o.terminal_ix {
-                    if let Some(cmd) = &self.inline_terminal {
-                        let cmd = cmd.clone();
-                        self.terminal_running = true;
-                        self.terminal_output = Some(String::new());
-                        cx.spawn({
-                            let cmd = cmd.clone();
-                            async move |this, cx: &mut AsyncApp| {
-                                let output = std::process::Command::new("sh")
-                                    .arg("-c")
-                                    .arg(&cmd)
-                                    .stdout(std::process::Stdio::piped())
-                                    .stderr(std::process::Stdio::piped())
-                                    .output();
-                                let _ = cx.update(|cx| {
-                                    let _ = this.update(cx, |picker, cx| {
-                                        picker.delegate.terminal_running = false;
-                                        match output {
-                                            Ok(out) => {
-                                                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                                                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                                                let combined = if stderr.is_empty() {
-                                                    stdout
-                                                } else {
-                                                    format!("{stdout}\n{stderr}")
-                                                };
-                                                picker.delegate.terminal_output = Some(combined);
-                                            }
-                                            Err(e) => {
-                                                picker.delegate.terminal_output = Some(format!("Error: {e}"));
-                                            }
-                                        }
-                                        cx.notify();
-                                    });
-                                });
-                            }
-                        }).detach();
-                    }
-                    return false; // Don't dismiss — show output inline
+                    let cmd = self.inline_terminal.clone();
+                    cx.emit(rover_picker::PickerEvent::OpenTerminal { cmd });
+                    return true;
                 }
 
                 if o.has_url && self.selected_ix == o.url_ix {
@@ -1180,7 +1277,7 @@ impl PickerDelegate for RoverDelegate {
                                     return false;
                                 }
                                 BuiltInCommand::OpenTerminal => {
-                                    cx.emit(rover_picker::PickerEvent::OpenTerminal);
+                                    cx.emit(rover_picker::PickerEvent::OpenTerminal { cmd: None });
                                     return true;
                                 }
                                 BuiltInCommand::Snippets => return false,
@@ -1256,6 +1353,14 @@ impl PickerDelegate for RoverDelegate {
                     if let Some(entry) = self.clipboard_entries.get(idx) {
                         cx.write_to_clipboard(ClipboardItem::new_string(entry.content.clone()));
                         self.exit_submenu(cx);
+                        // Paste into the frontmost app after a brief delay for window focus
+                        std::thread::spawn(|| {
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            let _ = std::process::Command::new("osascript")
+                                .arg("-e")
+                                .arg(r#"tell application "System Events" to keystroke "v" using command down"#)
+                                .output();
+                        });
                         return true;
                     }
                 }
@@ -1555,6 +1660,10 @@ impl PickerDelegate for RoverDelegate {
                     return self.confirm(cx);
                 }
 
+                if o.has_close_all_tabs && self.selected_ix == o.close_all_tabs_ix {
+                    return self.confirm(cx);
+                }
+
                 if o.has_quit && self.selected_ix == o.quit_ix {
                     return self.confirm(cx);
                 }
@@ -1732,6 +1841,11 @@ impl PickerDelegate for RoverDelegate {
                     return Some(self.render_close_tab_pill(selected, colors));
                 }
 
+                // Close all tabs pill
+                if o.has_close_all_tabs && ix == o.close_all_tabs_ix {
+                    return Some(self.render_close_all_tabs_pill(selected, colors));
+                }
+
                 // Quit command
                 if o.has_quit && ix == o.quit_ix {
                     let target = self.quit_target.as_deref().unwrap_or("");
@@ -1793,6 +1907,9 @@ impl PickerDelegate for RoverDelegate {
                 // Non-context items rendered as list rows
                 if o.has_close_tab && ix == o.close_tab_ix {
                     return Some(self.render_close_tab_pill(selected, colors));
+                }
+                if o.has_close_all_tabs && ix == o.close_all_tabs_ix {
+                    return Some(self.render_close_all_tabs_pill(selected, colors));
                 }
                 if o.has_quit && ix == o.quit_ix {
                     let target = self.quit_target.as_deref().unwrap_or("");

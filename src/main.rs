@@ -4,6 +4,7 @@ mod delegate;
 mod help_docs;
 mod hotkey;
 mod settings_window;
+mod terminal;
 mod tools;
 
 use delegate::RoverDelegate;
@@ -408,7 +409,7 @@ fn main() {
 
 /// Get screen dimensions (width, height) from macOS.
 #[cfg(target_os = "macos")]
-fn screen_size() -> (f32, f32) {
+pub(crate) fn screen_size() -> (f32, f32) {
     use objc::{class, msg_send, sel, sel_impl};
     use cocoa::foundation::NSRect;
     unsafe {
@@ -460,6 +461,9 @@ fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) 
 }
 
 fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mut App) {
+    // Capture frontmost app BEFORE Rover's window takes focus
+    let previous_app = delegate::RoverDelegate::detect_frontmost_app();
+
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
 
@@ -569,7 +573,8 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                         .flatten()
                         .map(|v| v == "true")
                         .unwrap_or(false);
-                    let delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled, semantic, live_browser_ctx, Some(live_tabs_ref), ext_runtimes);
+                    let mut delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled, semantic, live_browser_ctx, Some(live_tabs_ref), ext_runtimes);
+                    delegate.previous_frontmost_app = previous_app.clone();
                     let picker = cx.new(|cx| {
                         let mut p = Picker::new(delegate, cx);
                         p.compact = compact;
@@ -600,13 +605,10 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                                     .detach();
                                 }
                                 PickerEvent::ToggleActions => {}
-                                PickerEvent::OpenTerminal => {
+                                PickerEvent::OpenTerminal { cmd } => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
                                     window.remove_window();
-                                    let _ = std::process::Command::new("osascript")
-                                        .arg("-e")
-                                        .arg(r#"tell application "Terminal" to activate"#)
-                                        .spawn();
+                                    terminal::open_ghostty(cmd.as_deref(), cx);
                                 }
                             }
                         },

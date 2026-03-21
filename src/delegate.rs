@@ -73,6 +73,12 @@ pub struct RoverDelegate {
     terminal_running: bool,
     /// The frontmost app before Rover activated (for quit/close commands)
     pub previous_frontmost_app: Option<String>,
+    /// Whether the browser was the focused app when Rover opened
+    pub browser_was_focused: bool,
+    /// Whether the terminal (Ghostty) was the focused app when Rover opened
+    pub terminal_was_focused: bool,
+    /// Address bar mode — active tab pill expanded to input
+    address_bar_active: bool,
 }
 
 struct QueryHistory {
@@ -264,6 +270,9 @@ impl RoverDelegate {
             terminal_output: None,
             terminal_running: false,
             previous_frontmost_app: Self::detect_frontmost_app(),
+            browser_was_focused: false,
+            terminal_was_focused: false,
+            address_bar_active: false,
         }
     }
 
@@ -354,7 +363,7 @@ impl RoverDelegate {
     }
 
     fn row_offsets(&self) -> RowOffsets {
-        let has_browser = !self.browser_filtered.is_empty();
+        let has_browser = self.browser_was_focused && !self.browser_filtered.is_empty();
         let browser_count = if has_browser { self.browser_filtered.len() } else { 0 };
         let has_recent_clips = self.clipboard_expanded;
         let recent_clips_count = if has_recent_clips { self.recent_clips.len() } else { 0 };
@@ -608,18 +617,36 @@ impl RoverDelegate {
         &self,
         title: &str,
         url: &str,
-        _is_active: bool,
+        is_active: bool,
         is_frozen: bool,
         selected: bool,
+        tab_ix: usize,
         colors: &rover_theme::ThemeColors,
+        cx: &mut Context<Picker<Self>>,
     ) -> AnyElement {
         let text_color = if selected { colors.text_accent } else { colors.text };
+
+        // Active tab + address bar mode → show URL as editable-looking input
+        if is_active && self.address_bar_active {
+            return Self::pill(true, colors)
+                .min_w(px(200.0))
+                .child(
+                    div()
+                        .text_color(colors.text_accent)
+                        .text_size(px(11.0))
+                        .child(SharedString::from(url.to_string())),
+                )
+                .into_any_element();
+        }
+
         let short_title = if title.chars().count() > 20 {
             let end = title.char_indices().nth(18).map(|(b, _)| b).unwrap_or(title.len());
             format!("{}…", &title[..end])
         } else {
             title.to_string()
         };
+
+        let close_color = colors.text_muted;
         let mut pill = Self::pill(selected, colors)
             .when(is_frozen && !selected, |el| el.opacity(0.5))
             .child(
@@ -627,7 +654,36 @@ impl RoverDelegate {
                     .text_color(text_color)
                     .text_size(px(11.0))
                     .child(SharedString::from(short_title)),
-            );
+            )
+            // Close button — visible on hover
+            .child({
+                let live_tabs = self.live_tabs.clone();
+                div()
+                    .id(ElementId::Name(SharedString::from(format!("close-tab-{tab_ix}"))))
+                    .ml(px(4.0))
+                    .px(px(3.0))
+                    .rounded(px(3.0))
+                    .text_size(px(9.0))
+                    .text_color(close_color)
+                    .cursor_pointer()
+                    .opacity(0.0)
+                    .hover(move |s| s.opacity(1.0).bg(rgba(0xff444433u32)))
+                    .on_click(cx.listener(move |picker, _ev: &ClickEvent, _window, cx| {
+                        if let Some(ref lt) = live_tabs {
+                            lt.lock().unwrap().close_inbox.push(tab_ix);
+                        }
+                        // Remove from local browser context
+                        if tab_ix < picker.delegate.browser_ctx.tabs.len() {
+                            picker.delegate.browser_ctx.tabs.remove(tab_ix);
+                            if picker.delegate.browser_ctx.active_tab >= picker.delegate.browser_ctx.tabs.len() && picker.delegate.browser_ctx.active_tab > 0 {
+                                picker.delegate.browser_ctx.active_tab -= 1;
+                            }
+                        }
+                        cx.notify();
+                    }))
+                    .child(SharedString::from("✕"))
+            });
+
         // Show URL domain when selected
         if selected {
             let domain = rover_browser::domain_from_url(url).to_string();
@@ -848,7 +904,12 @@ impl PickerDelegate for RoverDelegate {
                     self.selected_ix = 0;
                     return Task::ready(());
                 }
-                self.inline_terminal = None;
+                // When terminal (Ghostty) was focused, auto-suggest as terminal command
+                if self.terminal_was_focused && !query.is_empty() && !query.starts_with('!') {
+                    self.inline_terminal = Some(query.clone());
+                } else {
+                    self.inline_terminal = None;
+                }
 
                 // Filter browser tabs by query (title or URL), sort by recency
                 if self.browser_ctx.tabs.is_empty() {
@@ -952,6 +1013,23 @@ impl PickerDelegate for RoverDelegate {
                         format!("https://{query}")
                     };
                     self.url_result = Some(url);
+                } else if self.browser_was_focused
+                    && !query.is_empty()
+                    && query.len() >= 2
+                    && !help_prefix
+                    && !self.close_tab_requested
+                    && !self.close_all_tabs_requested
+                    && self.quit_target.is_none()
+                {
+                    // Auto-websearch when browser was focused
+                    let default_engine = self.db.get_setting("default_search_engine")
+                        .ok().flatten().unwrap_or_else(|| "google".to_string());
+                    let template = rover_browser::SEARCH_ENGINES.iter()
+                        .find(|e| e.name == default_engine || e.short_prefix == Some(&default_engine))
+                        .map(|e| e.url_template)
+                        .unwrap_or("https://www.google.com/search?q={query}");
+                    let encoded = urlencoding::encode(&query);
+                    self.url_result = Some(template.replace("{query}", &encoded));
                 } else {
                     self.url_result = None;
                 }
@@ -1024,10 +1102,52 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let o = self.row_offsets();
 
-                // Browser context — navigate to tab URL in existing browser
+                // Address bar mode — query is a URL or search, navigate in browser
+                if self.address_bar_active && !self.query.is_empty() {
+                    let url = if let Some(u) = &self.url_result {
+                        u.clone()
+                    } else if rover_browser::looks_like_url(&self.query) {
+                        if self.query.starts_with("http") {
+                            self.query.clone()
+                        } else {
+                            format!("https://{}", self.query)
+                        }
+                    } else {
+                        // Search with default engine
+                        let default_engine = self.db.get_setting("default_search_engine")
+                            .ok().flatten().unwrap_or_else(|| "google".to_string());
+                        let template = rover_browser::SEARCH_ENGINES.iter()
+                            .find(|e| e.name == default_engine)
+                            .map(|e| e.url_template)
+                            .unwrap_or("https://www.google.com/search?q={query}");
+                        let encoded = urlencoding::encode(&self.query);
+                        template.replace("{query}", &encoded)
+                    };
+                    self.address_bar_active = false;
+                    let browser_db = self.db.clone();
+                    let sem = self.semantic.clone();
+                    let lt = self.live_tabs.clone();
+                    cx.spawn(async move |_this, cx: &mut AsyncApp| {
+                        cx.update(|cx| {
+                            rover_browser::navigate_or_open(cx, &url, Some(browser_db), sem, lt);
+                        }).ok();
+                    }).detach();
+                    return true;
+                }
+
+                // Browser context — click on tab pill
                 if o.has_browser && self.selected_ix >= o.browser_start && self.selected_ix < o.browser_start + o.browser_count {
                     let filtered_ix = self.selected_ix - o.browser_start;
                     let tab_ix = self.browser_filtered[filtered_ix];
+
+                    // Clicking the active tab toggles address bar mode (don't navigate)
+                    if tab_ix == self.browser_ctx.active_tab {
+                        self.address_bar_active = !self.address_bar_active;
+                        cx.notify();
+                        return false;
+                    }
+
+                    // Non-active tab — switch to it
                     let (_, url, _, _) = &self.browser_ctx.tabs[tab_ix];
                     let url = url.clone();
                     let browser_db = self.db.clone();
@@ -1813,7 +1933,7 @@ impl PickerDelegate for RoverDelegate {
         cx: &mut Context<Picker<Self>>,
     ) -> Option<Self::ListItem> {
         let theme = theme(cx);
-        let colors = &theme.colors;
+        let colors = theme.colors.clone();
 
         match self.view_mode {
             ViewMode::Main => {
@@ -1826,67 +1946,67 @@ impl PickerDelegate for RoverDelegate {
                     let (title, url, state, _) = &self.browser_ctx.tabs[tab_ix];
                     let is_active = tab_ix == self.browser_ctx.active_tab;
                     let is_frozen = *state == rover_browser::TabState::Frozen;
-                    return Some(self.render_browser_pill(title, url, is_active, is_frozen, selected, colors));
+                    return Some(self.render_browser_pill(title, url, is_active, is_frozen, selected, tab_ix, &colors, cx));
                 }
 
                 // Recent clipboard pills
                 if o.has_recent_clips && ix >= o.recent_clips_start && ix < o.recent_clips_start + o.recent_clips_count {
                     let clip_ix = ix - o.recent_clips_start;
                     let entry = &self.recent_clips[clip_ix];
-                    return Some(self.render_recent_clip_pill(entry, selected, colors));
+                    return Some(self.render_recent_clip_pill(entry, selected, &colors));
                 }
 
                 // Close tab pill
                 if o.has_close_tab && ix == o.close_tab_ix {
-                    return Some(self.render_close_tab_pill(selected, colors));
+                    return Some(self.render_close_tab_pill(selected, &colors));
                 }
 
                 // Close all tabs pill
                 if o.has_close_all_tabs && ix == o.close_all_tabs_ix {
-                    return Some(self.render_close_all_tabs_pill(selected, colors));
+                    return Some(self.render_close_all_tabs_pill(selected, &colors));
                 }
 
                 // Quit command
                 if o.has_quit && ix == o.quit_ix {
                     let target = self.quit_target.as_deref().unwrap_or("");
-                    return Some(self.render_quit_pill(target, selected, colors));
+                    return Some(self.render_quit_pill(target, selected, &colors));
                 }
 
                 if o.has_terminal && ix == o.terminal_ix {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");
-                    return Some(self.render_terminal_pill(cmd, selected, colors));
+                    return Some(self.render_terminal_pill(cmd, selected, &colors));
                 }
 
                 if o.has_url && ix == o.url_ix {
                     let url = self.url_result.as_deref().unwrap_or("");
-                    return Some(self.render_url_pill(url, selected, colors));
+                    return Some(self.render_url_pill(url, selected, &colors));
                 }
 
                 if o.has_calc && ix == o.calc_ix {
-                    return Some(self.render_calculator_pill(selected, colors));
+                    return Some(self.render_calculator_pill(selected, &colors));
                 }
 
                 if o.has_ai && ix == o.ai_ix {
-                    return Some(self.render_ai_pill(selected, colors));
+                    return Some(self.render_ai_pill(selected, &colors));
                 }
 
                 if o.has_help && ix == o.help_ix {
-                    return Some(self.render_help_pill(selected, colors));
+                    return Some(self.render_help_pill(selected, &colors));
                 }
 
                 let match_ix = ix.saturating_sub(o.command_offset);
                 let string_match = self.matches.get(match_ix)?;
                 let command = self.all_commands.get(string_match.candidate_id)?;
-                Some(self.render_command_pill(command, selected, colors))
+                Some(self.render_command_pill(command, selected, &colors))
             }
             ViewMode::ClipboardHistory => {
                 let &entry_ix = self.clipboard_filtered.get(ix)?;
                 let entry = self.clipboard_entries.get(entry_ix)?;
-                Some(self.render_clipboard_pill(entry, selected, colors))
+                Some(self.render_clipboard_pill(entry, selected, &colors))
             }
             ViewMode::FileSearch => {
                 let file = self.file_results.get(ix)?;
-                Some(self.render_file_pill(file, selected, colors))
+                Some(self.render_file_pill(file, selected, &colors))
             }
         }
     }

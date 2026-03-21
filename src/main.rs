@@ -19,7 +19,7 @@ use std::sync::{
     Arc,
 };
 
-actions!(rover, [Toggle, Quit, OpenSettings, ShowAbout]);
+actions!(rover, [Toggle, Quit, OpenSettings, ShowAbout, BrowserNewTab, BrowserCloseTab, BrowserReload, BrowserBack, BrowserForward]);
 
 /// Static holding the semantic index, set from a background thread on startup.
 static SEMANTIC_INDEX: std::sync::Mutex<Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>> =
@@ -44,6 +44,11 @@ impl Global for WindowOpenGlobal {}
 
 struct WindowHandleGlobal(Option<WindowHandle<RoverWindow>>);
 impl Global for WindowHandleGlobal {}
+
+/// Continuously tracked last non-Rover frontmost app name.
+/// Updated on a background poll so it's always ready when the hotkey fires.
+struct LastFrontmostAppGlobal(Arc<std::sync::Mutex<Option<String>>>);
+impl Global for LastFrontmostAppGlobal {}
 
 /// Shared live browser tabs — wrapped in a Global for GPUI access.
 struct LiveBrowserTabsGlobal(rover_browser::LiveBrowserTabsRef);
@@ -230,6 +235,10 @@ fn main() {
         cx.set_global(CommandsGlobal(commands.clone()));
         cx.set_global(WindowOpenGlobal(Arc::new(AtomicBool::new(false))));
         cx.set_global(WindowHandleGlobal(None));
+        let last_frontmost = Arc::new(std::sync::Mutex::new(
+            delegate::RoverDelegate::detect_frontmost_app(),
+        ));
+        cx.set_global(LastFrontmostAppGlobal(last_frontmost.clone()));
         let live_browser_tabs: rover_browser::LiveBrowserTabsRef =
             std::sync::Arc::new(std::sync::Mutex::new(rover_browser::LiveBrowserTabs::default()));
         cx.set_global(LiveBrowserTabsGlobal(live_browser_tabs.clone()));
@@ -273,6 +282,11 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("cmd-q", Quit, None),
             KeyBinding::new("cmd-,", OpenSettings, None),
+            KeyBinding::new("cmd-t", BrowserNewTab, Some("Browser")),
+            KeyBinding::new("cmd-w", BrowserCloseTab, Some("Browser")),
+            KeyBinding::new("cmd-r", BrowserReload, Some("Browser")),
+            KeyBinding::new("cmd-[", BrowserBack, Some("Browser")),
+            KeyBinding::new("cmd-]", BrowserForward, Some("Browser")),
         ]);
 
         cx.set_menus(vec![Menu {
@@ -301,9 +315,10 @@ fn main() {
                 }
                 cx.global_mut::<WindowHandleGlobal>().0 = None;
             } else {
+                let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
                 let commands = cx.global::<CommandsGlobal>().0.clone();
                 let db = cx.global::<DbGlobal>().0.clone();
-                open_window(commands, db, cx);
+                open_window(commands, db, prev_app, cx);
             }
         });
 
@@ -315,6 +330,33 @@ fn main() {
         cx.on_action::<ShowAbout>(|_, cx| {
             let db = cx.global::<DbGlobal>().0.clone();
             settings_window::open_settings_window_on_about(db, cx);
+        });
+
+        // Browser keybinding actions — push to live_tabs action inbox
+        cx.on_action::<BrowserNewTab>(|_, cx| {
+            if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
+                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::NewTab);
+            }
+        });
+        cx.on_action::<BrowserCloseTab>(|_, cx| {
+            if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
+                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::CloseTab);
+            }
+        });
+        cx.on_action::<BrowserReload>(|_, cx| {
+            if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
+                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Reload);
+            }
+        });
+        cx.on_action::<BrowserBack>(|_, cx| {
+            if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
+                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Back);
+            }
+        });
+        cx.on_action::<BrowserForward>(|_, cx| {
+            if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
+                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Forward);
+            }
         });
 
         // Load hotkey: prefer custom recorded combo, fall back to preset
@@ -348,6 +390,24 @@ fn main() {
         };
         hotkey::register_global_hotkey(hk_code, hk_mods);
 
+        // Poll frontmost app continuously so we always know the last non-Rover app
+        {
+            let tracker = last_frontmost.clone();
+            cx.spawn(async move |cx: &mut AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(std::time::Duration::from_millis(500))
+                        .await;
+                    if let Some(app) = delegate::RoverDelegate::detect_frontmost_app() {
+                        if let Ok(mut lock) = tracker.lock() {
+                            *lock = Some(app);
+                        }
+                    }
+                }
+            })
+            .detach();
+        }
+
         // Poll for hotkey presses from the Carbon event handler and open the window
         cx.spawn(async move |cx: &mut AsyncApp| {
             loop {
@@ -369,9 +429,11 @@ fn main() {
                             }
                             cx.global_mut::<WindowHandleGlobal>().0 = None;
                         } else {
+                            // Use the continuously tracked last non-Rover frontmost app
+                            let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
                             let commands = cx.global::<CommandsGlobal>().0.clone();
                             let db = cx.global::<DbGlobal>().0.clone();
-                            open_window(commands, db, cx);
+                            open_window(commands, db, prev_app, cx);
                         }
                     });
                 }
@@ -384,7 +446,8 @@ fn main() {
                 // Just start the menubar app — picker opens via hotkey
                 let commands = cx.global::<CommandsGlobal>().0.clone();
                 let db_clone = cx.global::<DbGlobal>().0.clone();
-                open_window(commands, db_clone, cx);
+                let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
+                open_window(commands, db_clone, prev_app, cx);
             }
             CliCommand::Browser => {
                 rover_browser::open_browser_window_with_live_tabs(
@@ -434,8 +497,8 @@ fn cursor_position() -> (f32, f32) {
 }
 
 /// Make the NSPanel truly borderless — no shadow, clear background, non-opaque.
-/// The window is already transparent via WindowBackgroundAppearance::Transparent;
-/// semi-transparent GPUI elements (pills, input bar) float over the desktop.
+/// Also configures it as an overlay panel (like Raycast) so Rover doesn't become
+/// the frontmost app — the previous app remains active in the system.
 #[cfg(target_os = "macos")]
 fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) {
     use objc::{class, msg_send, sel, sel_impl};
@@ -453,6 +516,16 @@ fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) 
                         let clear: *mut objc::runtime::Object =
                             msg_send![class!(NSColor), clearColor];
                         let _: () = msg_send![ns_window, setBackgroundColor: clear];
+                        // Float above other windows without activating the app
+                        // NSFloatingWindowLevel = 3 (CGWindowLevelForKey(kCGFloatingWindowLevelKey))
+                        let _: () = msg_send![ns_window, setLevel: 3i64];
+                        // NSNonactivatingPanelMask = 1 << 7 = 128
+                        let style: u64 = msg_send![ns_window, styleMask];
+                        let _: () = msg_send![ns_window, setStyleMask: style | 128u64];
+                        // Allow the panel to become key (receive keyboard) without activating the app
+                        let _: () = msg_send![ns_window, setFloatingPanel: true];
+                        let _: () = msg_send![ns_window, setWorksWhenModal: true];
+                        let _: () = msg_send![ns_window, setHidesOnDeactivate: false];
                     }
                 }
             }
@@ -460,9 +533,7 @@ fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) 
     });
 }
 
-fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mut App) {
-    // Capture frontmost app BEFORE Rover's window takes focus
-    let previous_app = delegate::RoverDelegate::detect_frontmost_app();
+fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
 
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
@@ -573,8 +644,13 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
                         .flatten()
                         .map(|v| v == "true")
                         .unwrap_or(false);
+                    // Browser tabs only show if the browser window is actually open (live tabs exist)
+                    let browser_focused = live_browser_ctx.as_ref().map(|c| !c.tabs.is_empty()).unwrap_or(false);
+                    let terminal_focused = previous_app.as_ref().map(|a| a == "Ghostty").unwrap_or(false);
                     let mut delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled, semantic, live_browser_ctx, Some(live_tabs_ref), ext_runtimes);
                     delegate.previous_frontmost_app = previous_app.clone();
+                    delegate.browser_was_focused = browser_focused;
+                    delegate.terminal_was_focused = terminal_focused;
                     let picker = cx.new(|cx| {
                         let mut p = Picker::new(delegate, cx);
                         p.compact = compact;
@@ -623,32 +699,38 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
 
     cx.global_mut::<WindowHandleGlobal>().0 = Some(window);
 
+    // Make the NSPanel truly borderless and overlay (no macOS window shadow/frame)
+    // Must happen BEFORE focusing so the panel is already configured as non-activating
+    #[cfg(target_os = "macos")]
+    configure_borderless_panel(&window, cx);
+
     window
         .update(cx, |view, window, cx| {
             let input_focus = view.picker.read(cx).text_input.focus_handle(cx);
             window.focus(&input_focus);
-            cx.activate(true);
+            // Don't call cx.activate(true) — the panel is configured as a floating
+            // overlay that receives keyboard input without activating Rover as the
+            // frontmost app. This keeps the previous app as "frontmost" in System Events.
         })
         .unwrap();
 
-    // Make the NSPanel truly borderless (no macOS window shadow/frame)
-    #[cfg(target_os = "macos")]
-    configure_borderless_panel(&window, cx);
-
-    // Auto-dismiss on first inactive poll (fast dismiss)
+    // Auto-dismiss when the panel loses key status (user clicked elsewhere or switched apps)
     let dismiss_flag = window_open_flag;
     cx.spawn(async move |cx: &mut AsyncApp| {
         cx.background_executor()
-            .timer(std::time::Duration::from_millis(100))
+            .timer(std::time::Duration::from_millis(200))
             .await;
         loop {
             cx.background_executor()
                 .timer(std::time::Duration::from_millis(50))
                 .await;
-            let active = window
-                .update(cx, |_, window, _cx| window.is_window_active())
+            let is_key = window
+                .update(cx, |_, window, _cx| {
+                    // Check if this window is still the key window (receives keyboard input)
+                    window.is_window_active()
+                })
                 .unwrap_or(false);
-            if !active {
+            if !is_key {
                 dismiss_flag.store(false, Ordering::Relaxed);
                 let _ = window.update(cx, |_, window, _cx| {
                     window.remove_window();

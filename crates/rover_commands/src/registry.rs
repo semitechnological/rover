@@ -37,6 +37,7 @@ pub enum BuiltInCommand {
     OpenTerminal,
     Browser,
     Help,
+    CloseWindow,
 }
 
 pub struct CommandRegistry {
@@ -133,6 +134,15 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         icon: None,
         kind: CommandKind::BuiltIn {
             id: BuiltInCommand::Help,
+        },
+        has_submenu: false,
+    });
+    registry.register(Command {
+        name: "Close Window".into(),
+        description: "Close the frontmost window".into(),
+        icon: None,
+        kind: CommandKind::BuiltIn {
+            id: BuiltInCommand::CloseWindow,
         },
         has_submenu: false,
     });

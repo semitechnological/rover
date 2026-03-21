@@ -67,6 +67,8 @@ pub fn build_os_tools() -> Vec<ToolDefinition> {
         list_bluetooth_devices_tool(),
         // Keychain (read-only)
         get_keychain_secret_tool(),
+        // Window management
+        close_window_tool(),
     ]
 }
 
@@ -826,6 +828,32 @@ fn list_bluetooth_devices_tool() -> ToolDefinition {
             } else {
                 Ok(lines.join("\n"))
             }
+        },
+    )
+}
+
+// ─── Window management ────────────────────────────────────────────────────────
+
+fn close_window_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "close_window",
+        "Close the frontmost window of the currently focused application. \
+         Use when the user asks to close, quit, or dismiss the current window.",
+        Schema::new("CloseWindowArgs"),
+        |_args| {
+            let script = r#"tell application "System Events"
+    set frontApp to first application process whose frontmost is true
+    set appName to name of frontApp
+    tell frontApp
+        if (count of windows) > 0 then
+            click menu item "Close Window" of menu "File" of menu bar 1
+            return "Closed frontmost window of " & appName
+        else
+            return "No windows open in " & appName
+        end if
+    end tell
+end tell"#;
+            run_osascript(script)
         },
     )
 }

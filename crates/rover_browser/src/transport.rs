@@ -1,78 +1,43 @@
-//! Floating transport window — context-aware command bar that positions itself
-//! adjacent to the cursor, biased top-right.
+//! Floating transport bar — shows tab pills + URL/command input at the top
+//! center of the screen, like a browser address bar.
 //!
 //! In browser context: shows tab pills + URL/command input.
 //! Triggered by Cmd+\ from the browser window.
 //! Closes automatically when focus leaves (click outside or switch apps).
 
 use crate::{BrowserAction, BrowserWindow, TabState, domain_from_url, parse_command, looks_like_url};
+use gpui::prelude::*;
 use gpui::*;
 use std::time::Duration;
 
 // ─── Layout constants ─────────────────────────────────────────────────────────
 
-const TRANSPORT_W: f32 = 280.0;
-const PILL_ROW_H: f32 = 26.0;
-const INPUT_ROW_H: f32 = 30.0;
-const HINT_ROW_H: f32 = 18.0;
-/// Gap between the cursor and the nearest edge of the transport window.
-const CURSOR_OFFSET: f32 = 14.0;
-/// Minimum distance the transport must stay from any screen edge.
-const EDGE_INSET: f32 = 8.0;
+const TRANSPORT_W: f32 = 640.0;
+const PILL_ROW_H: f32 = 30.0;
+const INPUT_ROW_H: f32 = 32.0;
+const HINT_ROW_H: f32 = 20.0;
+/// Distance from the top of the screen.
+const TOP_OFFSET: f32 = 8.0;
 
-// ─── Platform: position near cursor, biased top-right ─────────────────────────
-//
-// Preferred order: top-right → top-left → bottom-right → bottom-left.
-// A candidate is rejected if the window would overlap a screen edge.
+// ─── Platform: position top-center of screen ─────────────────────────────────
 
 #[cfg(target_os = "macos")]
 fn transport_bounds(transport_h: f32) -> Bounds<Pixels> {
     use objc::{class, msg_send, sel, sel_impl};
-    use cocoa::foundation::{NSPoint, NSRect};
+    use cocoa::foundation::NSRect;
 
-    let (cx, cy_macos, sw, sh): (f32, f32, f32, f32) = unsafe {
-        let loc: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+    let (sw, _sh): (f32, f32) = unsafe {
         let main: *mut objc::runtime::Object = msg_send![class!(NSScreen), mainScreen];
         let frame: NSRect = msg_send![main, frame];
-        (
-            loc.x as f32,
-            loc.y as f32,
-            frame.size.width as f32,
-            frame.size.height as f32,
-        )
+        (frame.size.width as f32, frame.size.height as f32)
     };
-
-    // Convert macOS bottom-left y → GPUI top-left y
-    let cy = sh - cy_macos;
 
     let w = TRANSPORT_W;
     let h = transport_h;
-    let off = CURSOR_OFFSET;
-    let inset = EDGE_INSET;
+    let x = (sw - w) / 2.0;
 
-    // Four candidate positions (x, y) relative to cursor in GPUI coords
-    // Positive offsets = away from cursor in that direction
-    let candidates = [
-        (cx + off,         cy - h - off), // top-right of cursor  ← preferred
-        (cx - w - off,     cy - h - off), // top-left
-        (cx + off,         cy + off),     // bottom-right
-        (cx - w - off,     cy + off),     // bottom-left
-    ];
-
-    for (x, y) in candidates {
-        if x >= inset && y >= inset && x + w <= sw - inset && y + h <= sh - inset {
-            return Bounds {
-                origin: point(px(x), px(y)),
-                size: size(px(w), px(h)),
-            };
-        }
-    }
-
-    // Fallback: clamp to screen
-    let x = (cx + off).min(sw - w - inset).max(inset);
-    let y = (cy - h - off).min(sh - h - inset).max(inset);
     Bounds {
-        origin: point(px(x), px(y)),
+        origin: point(px(x), px(TOP_OFFSET)),
         size: size(px(w), px(h)),
     }
 }
@@ -80,7 +45,7 @@ fn transport_bounds(transport_h: f32) -> Bounds<Pixels> {
 #[cfg(not(target_os = "macos"))]
 fn transport_bounds(transport_h: f32) -> Bounds<Pixels> {
     Bounds {
-        origin: point(px(200.0), px(200.0)),
+        origin: point(px(200.0), px(TOP_OFFSET)),
         size: size(px(TRANSPORT_W), px(transport_h)),
     }
 }
@@ -191,23 +156,23 @@ impl Render for BrowserTransport {
 
         let text = self.text.clone();
         let hint = Self::hint_for(&text).or(overlay_hint);
-        let has_hint = hint.is_some();
 
-        // ── Tab pills row ──────────────────────────────────────────────────────
+        // ── Tab pills row (floating above the input bar) ───────────────────────
         let mut pills_row = div()
             .flex()
             .flex_row()
             .items_center()
-            .gap_1()
-            .px(px(10.0))
-            .h(px(PILL_ROW_H));
+            .gap(px(6.0))
+            .px(px(12.0))
+            .h(px(PILL_ROW_H))
+            .overflow_x_hidden();
 
         for (i, (title, state)) in tab_infos.iter().enumerate() {
             let is_active = i == active_tab;
-            let short = if title.chars().count() > 16 {
+            let short = if title.chars().count() > 24 {
                 let end = title
                     .char_indices()
-                    .nth(14)
+                    .nth(22)
                     .map(|(b, _)| b)
                     .unwrap_or(title.len());
                 format!("{}…", &title[..end])
@@ -219,8 +184,8 @@ impl Render for BrowserTransport {
                 TabState::Cached => rgb(0xffbd2eu32),
                 TabState::Frozen => rgb(0x555555u32),
             };
-            let pill_bg = if is_active { rgb(0x3a3a3cu32) } else { rgb(0x1c1c1eu32) };
-            let pill_border = if is_active { rgb(0x5588ccu32) } else { rgb(0x2c2c2eu32) };
+            let pill_bg = if is_active { rgb(0x2a2a2cu32) } else { rgb(0x1c1c1eu32) };
+            let pill_border = if is_active { rgb(0x5588ccu32) } else { rgb(0x333335u32) };
             let text_color = if is_active { rgb(0xffffffu32) } else { rgb(0x8e8e93u32) };
 
             pills_row = pills_row.child(
@@ -228,10 +193,10 @@ impl Render for BrowserTransport {
                     .id(ElementId::NamedInteger("tp".into(), i as u64))
                     .flex()
                     .items_center()
-                    .gap_1()
-                    .px_2()
-                    .py(px(3.0))
-                    .rounded_full()
+                    .gap(px(5.0))
+                    .px(px(8.0))
+                    .py(px(4.0))
+                    .rounded_lg()
                     .bg(pill_bg)
                     .border_1()
                     .border_color(pill_border)
@@ -246,15 +211,15 @@ impl Render for BrowserTransport {
                     }))
                     .child(
                         div()
-                            .w(px(5.0))
-                            .h(px(5.0))
+                            .w(px(6.0))
+                            .h(px(6.0))
                             .rounded_full()
                             .bg(dot_color),
                     )
                     .child(
                         div()
                             .text_color(text_color)
-                            .text_size(px(10.0))
+                            .text_size(px(11.0))
                             .child(SharedString::from(short)),
                     ),
             );
@@ -264,12 +229,12 @@ impl Render for BrowserTransport {
         pills_row = pills_row.child(
             div()
                 .id("new-tab-btn")
-                .px_2()
-                .py(px(3.0))
-                .rounded_full()
+                .px(px(8.0))
+                .py(px(4.0))
+                .rounded_lg()
                 .bg(rgb(0x1c1c1eu32))
                 .border_1()
-                .border_color(rgb(0x2c2c2eu32))
+                .border_color(rgb(0x333335u32))
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _window, cx| {
                     if let Some(browser) = this.browser.upgrade() {
@@ -282,13 +247,13 @@ impl Render for BrowserTransport {
                 .child(
                     div()
                         .text_color(rgb(0x8e8e93u32))
-                        .text_size(px(11.0))
+                        .text_size(px(12.0))
                         .child(SharedString::from("+")),
                 ),
         );
 
         // ── Address / input row ────────────────────────────────────────────────
-        // Show typed text or current URL as placeholder
+        let full_url = active_url.clone();
         let display_url = domain_from_url(&active_url).to_string();
         let input_content = if text.is_empty() {
             format!("{display_url}▌")
@@ -305,33 +270,44 @@ impl Render for BrowserTransport {
             .flex()
             .flex_row()
             .items_center()
-            .px(px(10.0))
+            .px(px(12.0))
             .h(px(INPUT_ROW_H))
             .gap_2()
             .child(
                 div()
                     .text_color(rgb(0x636366u32))
-                    .text_size(px(11.0))
+                    .text_size(px(12.0))
                     .child(SharedString::from("→")),
             )
             .child(
                 div()
                     .flex_1()
-                    .px_2()
-                    .py_1()
+                    .px(px(8.0))
+                    .py(px(4.0))
                     .rounded_md()
                     .bg(rgb(0x111111u32))
                     .border_1()
-                    .border_color(rgb(0x3a3a3cu32))
+                    .border_color(rgb(0x333335u32))
                     .child(
                         div()
                             .text_color(input_color)
-                            .text_size(px(11.0))
+                            .text_size(px(12.0))
                             .child(SharedString::from(input_content)),
                     ),
-            );
+            )
+            // Show full URL on the right when not typing
+            .when(text.is_empty() && !full_url.is_empty(), |el| {
+                el.child(
+                    div()
+                        .text_color(rgb(0x48484au32))
+                        .text_size(px(10.0))
+                        .max_w(px(200.0))
+                        .overflow_hidden()
+                        .child(SharedString::from(full_url)),
+                )
+            });
 
-        // ── Root container ─────────────────────────────────────────────────────
+        // ── Root container — horizontal bar ─────────────────────────────────────
         let mut root = div()
             .key_context("BrowserTransport")
             .track_focus(&self.focus)
@@ -368,6 +344,7 @@ impl Render for BrowserTransport {
             .bg(rgb(0x19191bu32))
             .border_1()
             .border_color(rgb(0x2c2c2eu32))
+            .shadow_lg()
             .child(pills_row)
             .child(input_row);
 
@@ -376,7 +353,7 @@ impl Render for BrowserTransport {
             root = root.child(
                 div()
                     .px(px(14.0))
-                    .pb(px(8.0))
+                    .pb(px(6.0))
                     .text_color(rgb(0x5588ccu32))
                     .text_size(px(10.0))
                     .child(SharedString::from(hint_text)),

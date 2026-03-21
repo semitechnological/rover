@@ -798,6 +798,14 @@ impl PickerDelegate for RoverDelegate {
                                     .detach();
                                     return true;
                                 }
+                                BuiltInCommand::CloseWindow => {
+                                    // Close the frontmost window via AppleScript
+                                    let _ = std::process::Command::new("osascript")
+                                        .arg("-e")
+                                        .arg("tell application \"System Events\" to tell (first application process whose frontmost is true) to click menu item \"Close Window\" of menu \"File\" of menu bar 1")
+                                        .spawn();
+                                    return true;
+                                }
                             }
                         }
 

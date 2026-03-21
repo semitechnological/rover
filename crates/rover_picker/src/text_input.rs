@@ -51,6 +51,8 @@ pub struct TextInput {
 
 pub enum TextInputEvent {
     Changed { text: String },
+    NavigateLeft,
+    NavigateRight,
 }
 
 impl EventEmitter<TextInputEvent> for TextInput {}
@@ -96,6 +98,10 @@ impl TextInput {
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
+        if self.content.is_empty() {
+            cx.emit(TextInputEvent::NavigateLeft);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.move_to(self.previous_boundary(self.cursor_offset()), cx);
         } else {
@@ -104,6 +110,10 @@ impl TextInput {
     }
 
     fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
+        if self.content.is_empty() {
+            cx.emit(TextInputEvent::NavigateRight);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.move_to(self.next_boundary(self.selected_range.end), cx);
         } else {

@@ -31,7 +31,7 @@ pub enum PickerEvent {
     Dismiss,
     OpenSettings,
     ToggleActions,
-    OpenTerminal,
+    OpenTerminal { cmd: Option<String> },
 }
 
 pub trait PickerDelegate: Sized + 'static {
@@ -136,6 +136,7 @@ pub struct Picker<D: PickerDelegate> {
     show_actions: bool,
     action_selected_ix: usize,
     compact_scroll_offset: usize,
+    list_scroll_handle: ScrollHandle,
 }
 
 impl<D: PickerDelegate> EventEmitter<PickerEvent> for Picker<D> {}
@@ -152,6 +153,42 @@ impl<D: PickerDelegate> Picker<D> {
                     picker.delegate.update_matches(text.clone(), cx).detach();
                     cx.notify();
                 }
+                TextInputEvent::NavigateLeft => {
+                    let count = picker.delegate.match_count();
+                    if count == 0 { return; }
+                    if picker.compact {
+                        let ix = picker.delegate.selected_index().saturating_sub(1);
+                        picker.delegate.set_selected_index(ix, cx);
+                        picker.adjust_compact_scroll();
+                    } else {
+                        let ctx = picker.delegate.context_item_count();
+                        let ix = picker.delegate.selected_index();
+                        if ix > 0 && (ctx == 0 || ix < ctx) {
+                            picker.delegate.set_selected_index(ix - 1, cx);
+                        } else if ix >= ctx && ctx > 0 {
+                            picker.delegate.set_selected_index(ctx.saturating_sub(1), cx);
+                        }
+                    }
+                    cx.notify();
+                }
+                TextInputEvent::NavigateRight => {
+                    let count = picker.delegate.match_count();
+                    if count == 0 { return; }
+                    if picker.compact {
+                        let ix = (picker.delegate.selected_index() + 1).min(count - 1);
+                        picker.delegate.set_selected_index(ix, cx);
+                        picker.adjust_compact_scroll();
+                    } else {
+                        let ctx = picker.delegate.context_item_count();
+                        let ix = picker.delegate.selected_index();
+                        if ix < ctx.saturating_sub(1) {
+                            picker.delegate.set_selected_index(ix + 1, cx);
+                        } else if ix >= ctx && ix < count - 1 {
+                            picker.delegate.set_selected_index(ix + 1, cx);
+                        }
+                    }
+                    cx.notify();
+                }
             },
         )
         .detach();
@@ -164,6 +201,7 @@ impl<D: PickerDelegate> Picker<D> {
             show_actions: false,
             action_selected_ix: 0,
             compact_scroll_offset: 0,
+            list_scroll_handle: ScrollHandle::new(),
         };
         picker.delegate.update_matches(String::new(), cx).detach();
         picker
@@ -207,6 +245,7 @@ impl<D: PickerDelegate> Picker<D> {
         }
         let ix = (self.delegate.selected_index() + 1).min(count - 1);
         self.delegate.set_selected_index(ix, cx);
+        self.scroll_to_selected();
         cx.notify();
     }
 
@@ -226,6 +265,7 @@ impl<D: PickerDelegate> Picker<D> {
         }
         let ix = self.delegate.selected_index().saturating_sub(1);
         self.delegate.set_selected_index(ix, cx);
+        self.scroll_to_selected();
         cx.notify();
     }
 
@@ -344,6 +384,17 @@ impl<D: PickerDelegate> Picker<D> {
         }
     }
 
+    fn scroll_to_selected(&self) {
+        if !self.compact {
+            let ctx = self.delegate.context_item_count();
+            let ix = self.delegate.selected_index();
+            if ix >= ctx {
+                // Scroll to the list row (index relative to list start)
+                self.list_scroll_handle.scroll_to_item(ix - ctx);
+            }
+        }
+    }
+
     fn handle_show_actions(
         &mut self,
         _: &ShowActions,
@@ -410,35 +461,25 @@ impl<D: PickerDelegate> Render for Picker<D> {
             if self.compact {
                 // ── Compact mode: everything as floating pills, single scrollable row ──
                 let mut pills_div = div()
+                    .id("compact-pills")
                     .flex()
                     .flex_row()
                     .gap(px(4.0))
                     .px_2()
                     .py(px(6.0))
                     .mb(px(6.0))
-                    .overflow_x_hidden()
+                    .overflow_x_scroll()
                     .flex_shrink_0();
 
-                let visible_count = 8usize;
-                let end = (self.compact_scroll_offset + visible_count).min(match_count);
-
-                // Show left overflow indicator
-                if self.compact_scroll_offset > 0 {
-                    pills_div = pills_div.child(
-                        div()
-                            .text_color(text_muted)
-                            .text_size(px(10.0))
-                            .child(SharedString::from("‹")),
-                    );
-                }
-
-                for ix in self.compact_scroll_offset..end {
+                let hover_bg = colors.element_hover;
+                for ix in 0..match_count {
                     let selected = ix == self.delegate.selected_index();
                     if let Some(el) = self.delegate.render_match(ix, selected, cx) {
-                        // WU-5: Wrap in clickable div
                         pills_div = pills_div.child(
                             div()
                                 .id(ElementId::Name(SharedString::from(format!("pill-{ix}"))))
+                                .rounded_full()
+                                .hover(move |s| s.bg(hover_bg))
                                 .child(el)
                                 .on_click(cx.listener(move |this, _event, _window, cx| {
                                     this.delegate.set_selected_index(ix, cx);
@@ -451,20 +492,9 @@ impl<D: PickerDelegate> Render for Picker<D> {
                                         this.text_input.update(cx, |input, cx| input.clear(cx));
                                         cx.notify();
                                     }
-                                }))
-,
+                                })),
                         );
                     }
-                }
-
-                // Show right overflow indicator
-                if end < match_count {
-                    pills_div = pills_div.child(
-                        div()
-                            .text_color(text_muted)
-                            .text_size(px(10.0))
-                            .child(SharedString::from("›")),
-                    );
                 }
 
                 root = root.child(
@@ -489,13 +519,15 @@ impl<D: PickerDelegate> Render for Picker<D> {
                         .overflow_x_hidden()
                         .flex_shrink_0();
 
+                    let hover_bg = colors.element_hover;
                     for ix in 0..context_count.min(match_count) {
                         let selected = ix == self.delegate.selected_index();
                         if let Some(el) = self.delegate.render_match(ix, selected, cx) {
-                            // WU-5: Wrap in clickable div with hover tracking
                             ctx_pills = ctx_pills.child(
                                 div()
                                     .id(ElementId::Name(SharedString::from(format!("pill-{ix}"))))
+                                    .rounded_full()
+                                    .hover(move |s| s.bg(hover_bg))
                                     .child(el)
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.delegate.set_selected_index(ix, cx);
@@ -524,6 +556,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
                 // List rows — vertical list with bg
                 let list_start = context_count;
                 if list_start < match_count {
+                    let hover_bg = colors.element_hover;
                     let mut list_div = div()
                         .id("picker-list")
                         .flex()
@@ -536,15 +569,18 @@ impl<D: PickerDelegate> Render for Picker<D> {
                         .rounded_lg()
                         .shadow_md()
                         .max_h(px(240.0))
-                        .overflow_y_scroll();
+                        .overflow_y_scroll()
+                        .track_scroll(&self.list_scroll_handle);
 
                     for ix in list_start..match_count {
                         let selected = ix == self.delegate.selected_index();
                         if let Some(el) = self.delegate.render_row(ix, selected, cx) {
-                            // WU-5: Wrap list rows in clickable divs
                             list_div = list_div.child(
                                 div()
                                     .id(ElementId::Name(SharedString::from(format!("row-{ix}"))))
+                                    .rounded_md()
+                                    .cursor_pointer()
+                                    .hover(move |s| s.bg(hover_bg))
                                     .child(el)
                                     .on_click(cx.listener(move |this, _event, _window, cx| {
                                         this.delegate.set_selected_index(ix, cx);

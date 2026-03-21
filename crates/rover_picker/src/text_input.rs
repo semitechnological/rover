@@ -98,7 +98,7 @@ impl TextInput {
     }
 
     fn left(&mut self, _: &Left, _: &mut Window, cx: &mut Context<Self>) {
-        if self.content.is_empty() {
+        if self.content.is_empty() || self.cursor_offset() == 0 {
             cx.emit(TextInputEvent::NavigateLeft);
             return;
         }
@@ -110,7 +110,7 @@ impl TextInput {
     }
 
     fn right(&mut self, _: &Right, _: &mut Window, cx: &mut Context<Self>) {
-        if self.content.is_empty() {
+        if self.content.is_empty() || self.cursor_offset() == self.content.len() {
             cx.emit(TextInputEvent::NavigateRight);
             return;
         }

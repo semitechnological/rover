@@ -27,6 +27,10 @@ wasmtime = "29"
 libloading = "0.8"
 fuzzy-matcher = "0.3"
 unicode-segmentation = "1"
+aes-gcm = "0.10"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
 rusty_foundationmodels = { path = "crates/rusty_foundationmodels" }
 
 rover_fuzzy = { path = "crates/rover_fuzzy" }

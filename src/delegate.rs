@@ -1225,9 +1225,10 @@ impl PickerDelegate for RoverDelegate {
                             if let Some(app) = front_app {
                                 std::thread::spawn(move || {
                                     std::thread::sleep(std::time::Duration::from_millis(200));
+                                    let safe = crate::tools::escape_applescript(&app);
                                     let _ = std::process::Command::new("osascript")
                                         .arg("-e")
-                                        .arg(format!(r#"tell application "{app}" to close window 1"#))
+                                        .arg(format!(r#"tell application "{safe}" to close window 1"#))
                                         .status();
                                 });
                             }
@@ -1236,9 +1237,10 @@ impl PickerDelegate for RoverDelegate {
                             let target = target.clone();
                             std::thread::spawn(move || {
                                 std::thread::sleep(std::time::Duration::from_millis(200));
+                                let safe = crate::tools::escape_applescript(&target);
                                 let _ = std::process::Command::new("osascript")
                                     .arg("-e")
-                                    .arg(format!(r#"tell application "{target}" to quit"#))
+                                    .arg(format!(r#"tell application "{safe}" to quit"#))
                                     .status();
                             });
                         }

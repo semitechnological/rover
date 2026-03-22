@@ -1,11 +1,18 @@
 use rusty_foundationmodels::{Schema, SchemaProperty, SchemaPropertyType, ToolDefinition};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static YOLO_MODE: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn set_yolo_mode(enabled: bool) {
+    YOLO_MODE.store(enabled, Ordering::Relaxed);
+}
 
 /// Escapes a string for safe embedding inside an AppleScript double-quoted string literal.
 ///
 /// AppleScript has no backslash escape sequences; double-quotes are represented using
 /// the built-in `quote` constant via string concatenation. Control characters (newlines,
 /// carriage returns, etc.) are replaced with spaces to prevent statement injection.
-fn escape_applescript(s: &str) -> String {
+pub(crate) fn escape_applescript(s: &str) -> String {
     let sanitized: String = s
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
@@ -25,6 +32,50 @@ fn run_osascript(script: &str) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
         Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+/// When Yolo Mode is off, shows a native macOS confirmation dialog before executing
+/// a sensitive AI tool action. Returns Err if the user denies or dismisses.
+fn require_permission(action: &str) -> Result<(), String> {
+    if YOLO_MODE.load(Ordering::Relaxed) {
+        return Ok(());
+    }
+    let safe = escape_applescript(action);
+    let script = format!(
+        r#"display dialog "{safe}" with title "Rover" buttons {{"Deny", "Allow"}} default button "Allow" cancel button "Deny""#
+    );
+    match run_osascript(&script) {
+        Ok(_) => Ok(()),
+        Err(_) => Err(
+            "Permission denied. Enable Yolo Mode in Settings \u{2192} AI to allow AI tool access without prompts.".to_string()
+        ),
+    }
+}
+
+/// Shared shell execution with 64 KB output truncation.
+const SHELL_OUTPUT_LIMIT: usize = 65_536;
+
+fn run_shell_command(command: &str) -> Result<String, String> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let mut stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if stdout.len() > SHELL_OUTPUT_LIMIT {
+        stdout.truncate(SHELL_OUTPUT_LIMIT);
+        stdout.push_str("\n[output truncated]");
+    }
+    if stderr.len() > SHELL_OUTPUT_LIMIT {
+        stderr.truncate(SHELL_OUTPUT_LIMIT);
+        stderr.push_str("\n[output truncated]");
+    }
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Ok(format!("stdout: {stdout}\nstderr: {stderr}"))
     }
 }
 
@@ -85,6 +136,8 @@ fn applescript_tool() -> ToolDefinition {
             .property(SchemaProperty::new("script", SchemaPropertyType::String).description("The AppleScript source to execute")),
         |args| {
             let script = args["script"].as_str().unwrap_or("");
+            let preview = script.chars().take(80).collect::<String>();
+            require_permission(&format!("Run AppleScript: {preview}"))?;
             run_osascript(script)
         },
     )
@@ -144,18 +197,8 @@ fn shell_tool() -> ToolDefinition {
             .property(SchemaProperty::new("command", SchemaPropertyType::String).description("Shell command to execute")),
         |args| {
             let command = args["command"].as_str().unwrap_or("").to_string();
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .output()
-                .map_err(|e| e.to_string())?;
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if output.status.success() {
-                Ok(stdout)
-            } else {
-                Ok(format!("stdout: {stdout}\nstderr: {stderr}"))
-            }
+            require_permission(&format!("Run shell command: {command}"))?;
+            run_shell_command(&command)
         },
     )
 }
@@ -291,6 +334,7 @@ fn add_reminder_tool() -> ToolDefinition {
         |args| {
             let name = escape_applescript(args["name"].as_str().unwrap_or(""));
             let list = escape_applescript(args["list_name"].as_str().unwrap_or("Reminders"));
+            require_permission(&format!("Add reminder: {name}"))?;
             let script = format!(
                 r#"tell application "Reminders"
     tell list "{list}"
@@ -388,6 +432,7 @@ fn create_note_tool() -> ToolDefinition {
         |args| {
             let title = escape_applescript(args["title"].as_str().unwrap_or("New Note"));
             let body  = escape_applescript(args["body"].as_str().unwrap_or(""));
+            require_permission(&format!("Create note: {title}"))?;
             let script = format!(r#"tell application "Notes"
     tell account "iCloud"
         make new note with properties {{name:"{title}", body:"{body}"}}
@@ -523,6 +568,8 @@ fn set_clipboard_tool() -> ToolDefinition {
             .property(SchemaProperty::new("text", SchemaPropertyType::String).description("Text to put on the clipboard")),
         |args| {
             let text = args["text"].as_str().unwrap_or("").to_string();
+            let preview = text.chars().take(50).collect::<String>();
+            require_permission(&format!("Write to clipboard: {preview}"))?;
             use std::io::Write;
             let mut child = std::process::Command::new("pbcopy")
                 .stdin(std::process::Stdio::piped())
@@ -625,6 +672,7 @@ fn take_screenshot_tool() -> ToolDefinition {
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
             let path = format!("{home}/Desktop/{safe_name}.png");
 
+            require_permission(&format!("Take a screenshot and save to {path}"))?;
             let interactive = args["interactive"].as_bool().unwrap_or(false);
             let mut cmd = std::process::Command::new("screencapture");
             cmd.arg("-x"); // no camera click
@@ -695,6 +743,7 @@ fn send_imessage_tool() -> ToolDefinition {
         |args| {
             let recipient = escape_applescript(args["recipient"].as_str().unwrap_or(""));
             let message   = escape_applescript(args["message"].as_str().unwrap_or(""));
+            require_permission(&format!("Send iMessage to {recipient}"))?;
             let script = format!(
                 r#"tell application "Messages"
     set targetService to 1st service whose service type = iMessage
@@ -724,6 +773,7 @@ fn send_email_tool() -> ToolDefinition {
             let subject = escape_applescript(args["subject"].as_str().unwrap_or(""));
             let body    = escape_applescript(args["body"].as_str().unwrap_or(""));
             let cc      = args["cc"].as_str().unwrap_or("");
+            require_permission(&format!("Send email to {to}: {subject}"))?;
 
             let cc_clause = if cc.is_empty() {
                 String::new()
@@ -846,6 +896,7 @@ fn close_window_tool() -> ToolDefinition {
          Use when the user asks to close, quit, or dismiss the current window.",
         Schema::new("CloseWindowArgs"),
         |_args| {
+            require_permission("Close frontmost window")?;
             let script = r#"tell application "System Events"
     set frontApp to name of first application process whose frontmost is true
 end tell
@@ -870,7 +921,8 @@ fn quit_app_tool() -> ToolDefinition {
             if app.is_empty() {
                 return Err("app_name is required".to_string());
             }
-            let safe: String = app.chars().filter(|c| !c.is_control() && *c != '"').collect();
+            let safe = escape_applescript(app);
+            require_permission(&format!("Quit {safe}"))?;
             let script = format!(r#"tell application "{safe}" to quit"#);
             match run_osascript(&script) {
                 Ok(_) => Ok(format!("Quit {safe}")),
@@ -918,18 +970,8 @@ fn run_inline_command_tool() -> ToolDefinition {
             .property(SchemaProperty::new("command", SchemaPropertyType::String).description("Shell command to execute")),
         |args| {
             let command = args["command"].as_str().unwrap_or("").to_string();
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .output()
-                .map_err(|e| e.to_string())?;
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if output.status.success() {
-                Ok(stdout)
-            } else {
-                Ok(format!("stdout: {stdout}\nstderr: {stderr}"))
-            }
+            require_permission(&format!("Run inline command: {command}"))?;
+            run_shell_command(&command)
         },
     )
 }
@@ -948,6 +990,7 @@ fn get_keychain_secret_tool() -> ToolDefinition {
         |args| {
             let service = args["service"].as_str().unwrap_or("").to_string();
             let account = args["account"].as_str().unwrap_or("").to_string();
+            require_permission(&format!("Access Keychain for service: {service}"))?;
 
             // Sanitize: only allow safe chars in service/account to prevent shell injection
             let safe_service: String = service.chars()

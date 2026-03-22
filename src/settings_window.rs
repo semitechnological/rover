@@ -16,6 +16,7 @@ pub struct SettingsView {
     launch_at_login: bool,
     ai_enabled: bool,
     ai_terminal_enabled: bool,
+    yolo_mode: bool,
     picker_position: String,
     compact_mode: bool,
     hotkey_key_name: String,
@@ -105,6 +106,12 @@ impl SettingsView {
             .flatten()
             .map(|v| v == "true")
             .unwrap_or(false);
+        let yolo_mode = db
+            .get_setting("yolo_mode")
+            .ok()
+            .flatten()
+            .map(|v| v == "true")
+            .unwrap_or(false);
         let picker_position = db
             .get_setting("picker_position")
             .ok()
@@ -156,6 +163,7 @@ impl SettingsView {
             launch_at_login,
             ai_enabled,
             ai_terminal_enabled,
+            yolo_mode,
             picker_position,
             compact_mode,
             hotkey_key_name,
@@ -768,6 +776,23 @@ impl SettingsView {
                             "ai_terminal_enabled",
                             &this.ai_terminal_enabled.to_string(),
                         );
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Self::setting_row(colors)
+                    .id("yolo-mode")
+                    .cursor_pointer()
+                    .child(Self::setting_label(
+                        "Yolo Mode",
+                        "Allow AI tools to run without asking for permission each time",
+                        colors,
+                    ))
+                    .child(Self::toggle_pill(self.yolo_mode, colors))
+                    .on_click(cx.listener(|this, _e, _w, cx| {
+                        this.yolo_mode = !this.yolo_mode;
+                        let _ = this.db.set_setting("yolo_mode", &this.yolo_mode.to_string());
+                        crate::tools::set_yolo_mode(this.yolo_mode);
                         cx.notify();
                     })),
             )

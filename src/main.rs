@@ -231,6 +231,15 @@ fn main() {
 
         let db = Arc::new(RoverDb::open().expect("Failed to open database"));
 
+        // Apply persisted yolo mode before any AI tools can be called
+        let yolo = db
+            .get_setting("yolo_mode")
+            .ok()
+            .flatten()
+            .map(|v| v == "true")
+            .unwrap_or(false);
+        tools::set_yolo_mode(yolo);
+
         cx.set_global(DbGlobal(db.clone()));
         cx.set_global(CommandsGlobal(commands.clone()));
         cx.set_global(WindowOpenGlobal(Arc::new(AtomicBool::new(false))));

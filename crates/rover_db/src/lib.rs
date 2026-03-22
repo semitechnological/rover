@@ -1,10 +1,18 @@
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Key, Nonce,
+};
 use anyhow::Result;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use rand::RngCore;
 use rusqlite::Connection;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 pub struct RoverDb {
     conn: Arc<Mutex<Connection>>,
+    cipher_key: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -38,10 +46,15 @@ impl RoverDb {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(&path)?;
+        let cipher_key = Self::load_or_create_db_key().ok();
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
+            cipher_key,
         };
         db.migrate()?;
+        if db.cipher_key.is_some() {
+            db.migrate_encrypt_existing()?;
+        }
         Ok(db)
     }
 
@@ -50,6 +63,7 @@ impl RoverDb {
         let conn = Connection::open_in_memory()?;
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
+            cipher_key: None,
         };
         db.migrate()?;
         Ok(db)
@@ -59,6 +73,104 @@ impl RoverDb {
         let config = dirs::config_dir().ok_or_else(|| anyhow::anyhow!("no config dir"))?;
         Ok(config.join("rover").join("rover.db"))
     }
+
+    // ── Keychain-backed encryption key ────────────────────────────────────────
+
+    fn load_or_create_db_key() -> Result<[u8; 32]> {
+        let result = std::process::Command::new("security")
+            .args(["find-generic-password", "-s", "rover.db.key", "-w"])
+            .output();
+
+        if let Ok(out) = result {
+            if out.status.success() {
+                let hex = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if hex.len() == 64 {
+                    let bytes: std::result::Result<Vec<u8>, _> = (0..64)
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16))
+                        .collect();
+                    if let Ok(b) = bytes {
+                        if b.len() == 32 {
+                            let mut key = [0u8; 32];
+                            key.copy_from_slice(&b);
+                            return Ok(key);
+                        }
+                    }
+                }
+            }
+        }
+
+        // No key found — generate one and store in Keychain
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        let hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
+        let _ = std::process::Command::new("security")
+            .args([
+                "add-generic-password",
+                "-s",
+                "rover.db.key",
+                "-a",
+                "rover",
+                "-w",
+                &hex,
+            ])
+            .status();
+        Ok(key)
+    }
+
+    // ── Encryption helpers ────────────────────────────────────────────────────
+
+    fn encrypt(&self, plaintext: &str) -> String {
+        let key = match &self.cipher_key {
+            Some(k) => k,
+            None => return plaintext.to_string(),
+        };
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        let mut nonce_bytes = [0u8; 12];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        match cipher.encrypt(nonce, plaintext.as_bytes()) {
+            Ok(ciphertext) => {
+                let mut combined = nonce_bytes.to_vec();
+                combined.extend(ciphertext);
+                BASE64.encode(&combined)
+            }
+            Err(_) => plaintext.to_string(),
+        }
+    }
+
+    fn decrypt(&self, stored: &str) -> String {
+        let key = match &self.cipher_key {
+            Some(k) => k,
+            None => return stored.to_string(),
+        };
+        let decoded = match BASE64.decode(stored) {
+            Ok(d) if d.len() > 12 => d,
+            _ => return stored.to_string(), // legacy plaintext fallback
+        };
+        let (nonce_bytes, ciphertext) = decoded.split_at(12);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        let nonce = Nonce::from_slice(nonce_bytes);
+        match cipher.decrypt(nonce, ciphertext) {
+            Ok(plaintext) => String::from_utf8_lossy(&plaintext).into_owned(),
+            Err(_) => stored.to_string(), // legacy plaintext fallback
+        }
+    }
+
+    /// Stable deduplication identifier: SHA-256(key || plaintext).
+    /// When no key is present (tests/fallback), returns the plaintext itself.
+    fn content_hash(&self, plaintext: &str) -> String {
+        let key = match &self.cipher_key {
+            Some(k) => k,
+            None => return plaintext.to_string(),
+        };
+        let mut h = Sha256::new();
+        h.update(key);
+        h.update(plaintext.as_bytes());
+        h.finalize().iter().map(|b| format!("{:02x}", b)).collect()
+    }
+
+    // ── Schema migrations ─────────────────────────────────────────────────────
 
     fn migrate(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
@@ -73,6 +185,7 @@ impl RoverDb {
             CREATE TABLE IF NOT EXISTS clipboard_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 content TEXT NOT NULL,
+                content_hash TEXT NOT NULL DEFAULT '',
                 timestamp INTEGER NOT NULL DEFAULT (unixepoch())
             );
 
@@ -121,6 +234,58 @@ impl RoverDb {
             );
             ",
         )?;
+        // Add content_hash column to existing databases that pre-date this schema
+        let _ = conn.execute(
+            "ALTER TABLE clipboard_history ADD COLUMN content_hash TEXT NOT NULL DEFAULT ''",
+            [],
+        );
+        Ok(())
+    }
+
+    /// One-time migration: encrypt any legacy plaintext clipboard rows.
+    /// Rows with an empty content_hash are pre-encryption and need upgrading.
+    fn migrate_encrypt_existing(&self) -> Result<()> {
+        let already = {
+            let conn = self.conn.lock().unwrap();
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = 'clipboard_encrypted_v1'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap_or_default()
+                == "true"
+        };
+        if already {
+            return Ok(());
+        }
+
+        let rows: Vec<(i64, String)> = {
+            let conn = self.conn.lock().unwrap();
+            let mut stmt = conn.prepare(
+                "SELECT id, content FROM clipboard_history WHERE content_hash = ''",
+            )?;
+            let r: std::result::Result<Vec<(i64, String)>, rusqlite::Error> =
+                stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect();
+            r?
+        };
+
+        for (id, content) in rows {
+            let encrypted = self.encrypt(&content);
+            let hash = self.content_hash(&content);
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "UPDATE clipboard_history SET content = ?1, content_hash = ?2 WHERE id = ?3",
+                rusqlite::params![encrypted, hash, id],
+            )?;
+        }
+
+        {
+            let conn = self.conn.lock().unwrap();
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('clipboard_encrypted_v1', 'true')",
+                [],
+            )?;
+        }
         Ok(())
     }
 
@@ -169,17 +334,17 @@ impl RoverDb {
         if content.trim().is_empty() {
             return Ok(());
         }
+        let encrypted = self.encrypt(content);
+        let hash = self.content_hash(content);
         let conn = self.conn.lock().unwrap();
-        // Deduplicate: remove existing identical entry
         conn.execute(
-            "DELETE FROM clipboard_history WHERE content = ?1",
-            rusqlite::params![content],
+            "DELETE FROM clipboard_history WHERE content_hash = ?1",
+            rusqlite::params![hash],
         )?;
         conn.execute(
-            "INSERT INTO clipboard_history (content) VALUES (?1)",
-            rusqlite::params![content],
+            "INSERT INTO clipboard_history (content, content_hash) VALUES (?1, ?2)",
+            rusqlite::params![encrypted, hash],
         )?;
-        // Keep max 500 entries
         conn.execute(
             "DELETE FROM clipboard_history WHERE id NOT IN (
                 SELECT id FROM clipboard_history ORDER BY timestamp DESC LIMIT 500
@@ -194,16 +359,19 @@ impl RoverDb {
         let mut stmt = conn.prepare(
             "SELECT id, content, timestamp FROM clipboard_history ORDER BY timestamp DESC, id DESC",
         )?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(ClipboardEntry {
-                    id: row.get(0)?,
-                    content: row.get(1)?,
-                    timestamp: row.get(2)?,
-                })
-            })?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        Ok(rows)
+        let raw: std::result::Result<Vec<(i64, String, i64)>, rusqlite::Error> =
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?.collect();
+        let raw = raw?;
+        drop(stmt);
+        drop(conn);
+        Ok(raw
+            .into_iter()
+            .map(|(id, content, timestamp)| ClipboardEntry {
+                id,
+                content: self.decrypt(&content),
+                timestamp,
+            })
+            .collect())
     }
 
     pub fn delete_clipboard_entry(&self, id: i64) -> Result<()> {
@@ -228,6 +396,12 @@ impl RoverDb {
         conn.execute(
             "INSERT INTO command_usage (command_name) VALUES (?1)",
             rusqlite::params![command_name],
+        )?;
+        conn.execute(
+            "DELETE FROM command_usage WHERE id NOT IN (
+                SELECT id FROM command_usage ORDER BY timestamp DESC LIMIT 1000
+            )",
+            [],
         )?;
         Ok(())
     }
@@ -269,6 +443,12 @@ impl RoverDb {
                visited_at = excluded.visited_at,
                visit_count = visit_count + 1",
             rusqlite::params![url, title],
+        )?;
+        conn.execute(
+            "DELETE FROM browser_history WHERE id NOT IN (
+                SELECT id FROM browser_history ORDER BY visited_at DESC LIMIT 5000
+            )",
+            [],
         )?;
         Ok(())
     }
@@ -428,8 +608,7 @@ impl RoverDb {
     /// Returns the bookmark id for the given URL if it exists, or None.
     pub fn find_bookmark_by_url(&self, url: &str) -> Result<Option<i64>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt =
-            conn.prepare("SELECT id FROM bookmarks WHERE url = ?1")?;
+        let mut stmt = conn.prepare("SELECT id FROM bookmarks WHERE url = ?1")?;
         let mut rows = stmt.query_map(rusqlite::params![url], |row| row.get(0))?;
         match rows.next() {
             Some(Ok(id)) => Ok(Some(id)),
@@ -626,5 +805,31 @@ mod tests {
         db.add_bookmark("", "Empty").unwrap();
         db.add_bookmark("  ", "Spaces").unwrap();
         assert!(db.list_bookmarks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_command_usage_cap() {
+        let db = RoverDb::open_in_memory().unwrap();
+        for i in 0..1005 {
+            db.record_command_usage(&format!("cmd_{i}")).unwrap();
+        }
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM command_usage", [], |r| r.get(0))
+            .unwrap();
+        assert!(count <= 1000);
+    }
+
+    #[test]
+    fn test_browser_history_cap() {
+        let db = RoverDb::open_in_memory().unwrap();
+        for i in 0..5005 {
+            db.add_history(&format!("https://example.com/{i}"), "title").unwrap();
+        }
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM browser_history", [], |r| r.get(0))
+            .unwrap();
+        assert!(count <= 5000);
     }
 }

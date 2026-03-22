@@ -57,15 +57,20 @@ mod macos {
     /// Non-blocking: the completion handler stores the result when the run loop
     /// next processes it.  Safe to call from any main-thread context.
     pub fn prewarm() {
+        log::info!("content_blocker: prewarm called");
         if COMPILE_STARTED
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
             .is_ok()
         {
+            log::info!("content_blocker: starting async compile");
             unsafe { start_async_compile() };
+        } else {
+            log::info!("content_blocker: compile already started, skipping");
         }
     }
 
     unsafe fn start_async_compile() {
+        log::info!("content_blocker: start_async_compile");
         let store: id = msg_send![class!(WKContentRuleListStore), defaultStore];
         if store == nil {
             log::warn!("content_blocker: WKContentRuleListStore unavailable");
@@ -98,6 +103,7 @@ mod macos {
         });
         let completion = completion.copy();
 
+        log::info!("content_blocker: firing compileContentRuleListForIdentifier (fire-and-forget)");
         // Fire-and-forget: WKContentRuleListStore retains the completion block.
         let _: () = msg_send![
             store,
@@ -105,6 +111,7 @@ mod macos {
             encodedContentRuleList: json_ns
             completionHandler: &*completion
         ];
+        log::info!("content_blocker: compile request sent, completion will fire asynchronously");
         // `completion` drops here but WKContentRuleListStore already copied it.
     }
 
@@ -132,7 +139,9 @@ mod macos {
     /// # Safety
     /// `config` must be a valid `WKWebViewConfiguration *` on the main thread.
     pub unsafe fn apply_to_config(config: id) {
+        log::info!("content_blocker: apply_to_config called");
         if config == nil {
+            log::warn!("content_blocker: apply_to_config got nil config, skipping");
             return;
         }
 

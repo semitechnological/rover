@@ -189,7 +189,13 @@ fn parse_args() -> CliCommand {
 }
 
 fn main() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug"))
+        .format_timestamp_millis()
+        .init();
+    log::info!("rover starting up");
+
     let cli = parse_args();
+    log::info!("cli command: {:?}", cli);
 
     Application::new().run(|cx| {
         rover_theme::init(cx);
@@ -253,7 +259,9 @@ fn main() {
         cx.set_global(LiveBrowserTabsGlobal(live_browser_tabs.clone()));
 
         // Pre-compile WKContentRuleList now so it doesn't block paint() on first browser open.
+        log::info!("main: calling prewarm_content_blocker");
         rover_browser::prewarm_content_blocker();
+        log::info!("main: prewarm_content_blocker returned");
 
         // Initialize semantic index on a background thread (model download may be slow)
         std::thread::spawn(move || {

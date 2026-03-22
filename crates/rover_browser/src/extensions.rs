@@ -36,13 +36,17 @@ mod macos {
     /// # Safety
     /// Must be called from the main thread.
     pub unsafe fn load_extensions() -> Option<id> {
+        log::info!("extensions: load_extensions called");
         if !macos_version_ok() {
-            log::debug!("extensions: macOS < 15.4, WKWebExtension API unavailable");
+            log::info!("extensions: macOS < 15.4, WKWebExtension API unavailable, skipping");
             return None;
         }
+        log::info!("extensions: macOS version ok, checking extensions dir");
 
         let extensions_dir = dirs::config_dir()?.join("rover").join("extensions");
+        log::info!("extensions: dir = {:?}, exists={}", extensions_dir, extensions_dir.exists());
         if !extensions_dir.exists() {
+            log::info!("extensions: no extensions dir, skipping");
             return None;
         }
 

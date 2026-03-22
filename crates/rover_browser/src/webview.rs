@@ -32,8 +32,10 @@ mod macos {
             height: f64,
             events: NavEventQueue,
         ) -> Option<Self> {
+            log::info!("WebViewHandle::create: start ({x:.0},{y:.0},{width:.0},{height:.0})");
             unsafe {
                 let config: id = msg_send![class!(WKWebViewConfiguration), new];
+                log::info!("WebViewHandle::create: got WKWebViewConfiguration");
 
                 // Shared process pool (cross-tab session sharing).
                 let pool = crate::shared_config::shared_process_pool();
@@ -48,20 +50,28 @@ mod macos {
                     let _: () = msg_send![config, setWebExtensionController: controller];
                 }
 
+                log::info!("WebViewHandle::create: applying content blocker");
                 // Apply uBOL-derived content blocking rules to this configuration.
                 crate::content_blocker::apply_to_config(config);
+                log::info!("WebViewHandle::create: content blocker applied");
 
+                log::info!("WebViewHandle::create: applying resource hints");
                 // Inject preconnect/dns-prefetch hints for common CDN origins.
                 crate::resource_hints::apply_to_config(config);
+                log::info!("WebViewHandle::create: resource hints applied");
 
                 let frame = NSRect::new(NSPoint::new(x, y), NSSize::new(width, height));
+                log::info!("WebViewHandle::create: alloc+init WKWebView");
                 let webview: id = msg_send![class!(WKWebView), alloc];
                 let webview: id =
                     msg_send![webview, initWithFrame:frame configuration:config];
                 if webview == nil {
+                    log::error!("WebViewHandle::create: WKWebView init returned nil!");
                     return None;
                 }
+                log::info!("WebViewHandle::create: adding subview to parent NSView");
                 let _: () = msg_send![parent, addSubview: webview];
+                log::info!("WebViewHandle::create: subview added");
 
                 // Create and attach the navigation delegate (objc2 world).
                 use objc2::MainThreadMarker;
@@ -79,6 +89,7 @@ mod macos {
                 let ui_ptr: *const _ = objc2::rc::Retained::as_ptr(&ui_delegate);
                 let _: () = msg_send![webview, setUIDelegate: ui_ptr];
 
+                log::info!("WebViewHandle::create: success");
                 Some(Self {
                     raw: webview,
                     _nav_delegate: Box::new(SendableRetained(nav_delegate)),

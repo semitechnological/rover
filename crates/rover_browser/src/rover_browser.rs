@@ -1083,8 +1083,10 @@ impl Element for WebViewElement {
 
             if let Some(browser) = self.browser.upgrade() {
                 browser.update(cx, |bw, _cx| {
+                    log::debug!("paint: active_tab={}, total_tabs={}", bw.active_tab, bw.tabs.len());
                     if let Some(tab) = bw.tabs.get_mut(bw.active_tab) {
                         if let Some(wv) = &tab.webview_handle {
+                            log::debug!("paint: webview exists, updating frame ({x:.0},{y:.0},{width:.0},{height:.0})");
                             wv.set_frame(x, y, width, height);
                             wv.show();
                             if let Some(title) = wv.title() {
@@ -1093,17 +1095,30 @@ impl Element for WebViewElement {
                                 }
                             }
                         } else {
+                            log::info!("paint: no webview yet — creating for tab url={}", tab.url);
                             let events = tab.events.clone();
                             // Create a WebView for the active tab.
                             // We don't refill the warmup pool here to avoid doing
                             // heavy ObjC work inside the render/paint cycle.
-                            if let Some(wv) = WebViewHandle::create(ns_view, x, y, width, height, events) {
-                                wv.navigate(&tab.url);
-                                tab.webview_handle = Some(wv);
+                            log::info!("paint: calling WebViewHandle::create");
+                            match WebViewHandle::create(ns_view, x, y, width, height, events) {
+                                Some(wv) => {
+                                    log::info!("paint: WebViewHandle::create succeeded, navigating to {}", tab.url);
+                                    wv.navigate(&tab.url);
+                                    tab.webview_handle = Some(wv);
+                                    log::info!("paint: webview created and navigating");
+                                }
+                                None => {
+                                    log::error!("paint: WebViewHandle::create returned None!");
+                                }
                             }
                         }
+                    } else {
+                        log::warn!("paint: active_tab {} out of bounds (len={})", bw.active_tab, bw.tabs.len());
                     }
                 });
+            } else {
+                log::warn!("paint: browser entity has been dropped");
             }
         }
     }
@@ -1155,18 +1170,24 @@ pub fn navigate_or_open(
     semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
     live_tabs: Option<LiveBrowserTabsRef>,
 ) {
+    log::info!("navigate_or_open: url={url}");
     // Try to push URL to existing browser window's inbox
     if let Some(ref lt) = live_tabs {
         let has_window = {
             let lock = lt.lock().unwrap();
-            !lock.tabs.is_empty()
+            let n = lock.tabs.len();
+            log::info!("navigate_or_open: live_tabs has {n} tabs");
+            n > 0
         };
         if has_window {
+            log::info!("navigate_or_open: pushing to existing window inbox");
             lt.lock().unwrap().url_inbox.push(url.to_string());
             return;
         }
+    } else {
+        log::info!("navigate_or_open: no live_tabs ref");
     }
-    // No existing window — open a new one
+    log::info!("navigate_or_open: opening new browser window");
     open_browser_window_inner(cx, url, db, semantic, live_tabs);
 }
 
@@ -1177,7 +1198,7 @@ fn open_browser_window_inner(
     semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
     live_tabs: Option<LiveBrowserTabsRef>,
 ) {
-
+    log::info!("open_browser_window_inner: binding keys");
     // Cmd+\ opens the floating transport from anywhere in the browser window.
     // Cmd+Shift+C copies the current URL directly (no transport needed).
     cx.bind_keys([
@@ -1198,8 +1219,11 @@ fn open_browser_window_inner(
             ..Default::default()
         },
         move |window, cx| {
+            log::info!("open_window factory: creating BrowserWindow");
             cx.new(|cx| {
+                log::info!("BrowserWindow::new starting");
                 let mut bw = BrowserWindow::new(window, cx, db);
+                log::info!("BrowserWindow::new done, {} tabs", bw.tabs.len());
                 bw.semantic_index = semantic;
                 bw.live_tabs = live_tabs;
                 if let Some(tab) = bw.tabs.get_mut(0) {

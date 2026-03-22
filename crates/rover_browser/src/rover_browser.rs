@@ -1094,14 +1094,12 @@ impl Element for WebViewElement {
                             }
                         } else {
                             let events = tab.events.clone();
-                            // Try the warm-up pool first (pre-spun process), fall back to fresh.
-                            let wv = warmup_pool::take(ns_view, x, y, width, height, events.clone())
-                                .or_else(|| WebViewHandle::create(ns_view, x, y, width, height, events));
-                            if let Some(wv) = wv {
+                            // Create a WebView for the active tab.
+                            // We don't refill the warmup pool here to avoid doing
+                            // heavy ObjC work inside the render/paint cycle.
+                            if let Some(wv) = WebViewHandle::create(ns_view, x, y, width, height, events) {
                                 wv.navigate(&tab.url);
                                 tab.webview_handle = Some(wv);
-                                // Refill the pool in the background for next time.
-                                unsafe { warmup_pool::refill(ns_view); }
                             }
                         }
                     }

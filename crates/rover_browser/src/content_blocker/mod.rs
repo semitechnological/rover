@@ -14,6 +14,10 @@
 //! 3. **Scriptlet injection** — `WKUserScript` at document-start that stubs
 //!    out tracking SDKs and ad-framework entry-points before page scripts run,
 //!    mirroring uBOL's `web_accessible_resources/` scriptlets.
+//!
+//! Compilation is fire-and-forget: we kick it off early and store the result
+//! when the completion handler fires on the run loop.  This avoids blocking
+//! GPUI's render/paint cycle with a synchronous NSRunLoop spin.
 
 mod cosmetic;
 mod rules;
@@ -25,7 +29,10 @@ mod macos {
     use cocoa::base::{id, nil};
     use cocoa::foundation::NSString;
     use objc::*;
-    use once_cell::sync::Lazy;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    };
 
     use super::cosmetic::COSMETIC_JS;
     use super::rules::RULES_JSON;
@@ -35,40 +42,41 @@ mod macos {
     /// recompile the cached bytecode.
     const RULES_ID: &str = "rover-content-blocker-v3";
 
-    struct RuleList(id);
-    unsafe impl Send for RuleList {}
-    unsafe impl Sync for RuleList {}
+    /// Wraps a raw ObjC `id` so it can live in a `static Mutex`.
+    struct SendId(id);
+    unsafe impl Send for SendId {}
+    unsafe impl Sync for SendId {}
 
-    static CONTENT_RULE_LIST: Lazy<Option<RuleList>> =
-        Lazy::new(|| unsafe { compile_rules() }.map(RuleList));
+    /// Compiled WKContentRuleList, available once the async completion fires.
+    static CONTENT_RULE_LIST: Mutex<Option<SendId>> = Mutex::new(None);
+    /// Guards against starting compilation more than once.
+    static COMPILE_STARTED: AtomicBool = AtomicBool::new(false);
 
-    /// Compile `RULES_JSON` via `WKContentRuleListStore`.
+    /// Kick off compilation of the content rule list.
     ///
-    /// The store caches compiled bytecode on disk keyed by `RULES_ID`, so the
-    /// JSON->bytecode pass only runs on first launch (or when the ID changes).
-    ///
-    /// # Safety
-    /// Must be called from the main thread; NSRunLoop is spun to drive the
-    /// async completion handler back synchronously.
-    unsafe fn compile_rules() -> Option<id> {
+    /// Non-blocking: the completion handler stores the result when the run loop
+    /// next processes it.  Safe to call from any main-thread context.
+    pub fn prewarm() {
+        if COMPILE_STARTED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            unsafe { start_async_compile() };
+        }
+    }
+
+    unsafe fn start_async_compile() {
         let store: id = msg_send![class!(WKContentRuleListStore), defaultStore];
         if store == nil {
             log::warn!("content_blocker: WKContentRuleListStore unavailable");
-            return None;
+            return;
         }
 
         let identifier: id = NSString::alloc(nil).init_str(RULES_ID);
         let json_ns: id = NSString::alloc(nil).init_str(RULES_JSON);
 
-        use std::sync::{
-            atomic::{AtomicBool, Ordering},
-            Arc, Mutex,
-        };
-        let done = Arc::new(AtomicBool::new(false));
-        let result: Arc<Mutex<Option<id>>> = Arc::new(Mutex::new(None));
-        let done_c = done.clone();
-        let result_c = result.clone();
-
+        // The completion handler is called on the main queue by WKContentRuleListStore.
+        // We just store the result; no blocking needed.
         let completion = ConcreteBlock::new(move |list: id, error: id| {
             if error != nil {
                 let desc: id = msg_send![error, localizedDescription];
@@ -81,33 +89,23 @@ mod macos {
             } else if list != nil {
                 let retained: id = msg_send![list, retain];
                 if !retained.is_null() {
-                    *result_c.lock().unwrap() = Some(retained);
+                    if let Ok(mut guard) = CONTENT_RULE_LIST.lock() {
+                        *guard = Some(SendId(retained));
+                        log::debug!("content_blocker: rule list ready");
+                    }
                 }
             }
-            done_c.store(true, Ordering::Release);
         });
         let completion = completion.copy();
 
+        // Fire-and-forget: WKContentRuleListStore retains the completion block.
         let _: () = msg_send![
             store,
             compileContentRuleListForIdentifier: identifier
             encodedContentRuleList: json_ns
             completionHandler: &*completion
         ];
-
-        let runloop: id = msg_send![class!(NSRunLoop), currentRunLoop];
-        while !done.load(Ordering::Acquire) {
-            let interval: std::os::raw::c_double = 0.01;
-            let date: id =
-                msg_send![class!(NSDate), dateWithTimeIntervalSinceNow: interval];
-            let _: () = msg_send![runloop, runUntilDate: date];
-        }
-
-        let list = result.lock().unwrap().take();
-        if list.is_none() {
-            log::warn!("content_blocker: compiled list is nil, network blocking disabled");
-        }
-        list
+        // `completion` drops here but WKContentRuleListStore already copied it.
     }
 
     const AT_DOCUMENT_START: usize = 0;
@@ -126,17 +124,10 @@ mod macos {
         }
     }
 
-    /// Eagerly initialize the content rule list so the lazy compilation doesn't
-    /// happen during `paint()` (which would spin NSRunLoop inside GPUI's render).
-    /// Call once at app startup before opening any windows.
-    pub fn prewarm() {
-        let _ = &*CONTENT_RULE_LIST;
-    }
-
     /// Apply all three layers of content blocking to a `WKWebViewConfiguration`.
     ///
-    /// Call this **before** `initWithFrame:configuration:` so every new WebView
-    /// has blocking active from its very first request / paint.
+    /// Network blocking is applied only if the rule list has already compiled.
+    /// Cosmetic filtering and scriptlets are always applied immediately.
     ///
     /// # Safety
     /// `config` must be a valid `WKWebViewConfiguration *` on the main thread.
@@ -147,23 +138,21 @@ mod macos {
 
         let ucc: id = msg_send![config, userContentController];
 
-        // Layer 1 — network blocking via WKContentRuleList.
-        if let Some(rule_list) = CONTENT_RULE_LIST.as_ref().map(|rl| rl.0) {
-            if !rule_list.is_null() {
-                let _: () = msg_send![ucc, addContentRuleList: rule_list];
-                log::debug!("content_blocker: network rule list applied");
-            } else {
-                log::warn!("content_blocker: rule_list id is null, skipping addContentRuleList:");
+        // Layer 1 — network blocking via WKContentRuleList (if compiled yet).
+        if let Ok(guard) = CONTENT_RULE_LIST.lock() {
+            if let Some(ref rl) = *guard {
+                if !rl.0.is_null() {
+                    let _: () = msg_send![ucc, addContentRuleList: rl.0];
+                    log::debug!("content_blocker: network rule list applied");
+                }
             }
         }
 
         // Layer 2 — cosmetic filtering.
         add_user_script(ucc, COSMETIC_JS, AT_DOCUMENT_START);
-        log::debug!("content_blocker: cosmetic script injected");
 
         // Layer 3 — scriptlets.
         add_user_script(ucc, SCRIPTLETS_JS, AT_DOCUMENT_START);
-        log::debug!("content_blocker: scriptlet script injected");
     }
 }
 

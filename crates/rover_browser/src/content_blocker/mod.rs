@@ -126,6 +126,13 @@ mod macos {
         }
     }
 
+    /// Eagerly initialize the content rule list so the lazy compilation doesn't
+    /// happen during `paint()` (which would spin NSRunLoop inside GPUI's render).
+    /// Call once at app startup before opening any windows.
+    pub fn prewarm() {
+        let _ = &*CONTENT_RULE_LIST;
+    }
+
     /// Apply all three layers of content blocking to a `WKWebViewConfiguration`.
     ///
     /// Call this **before** `initWithFrame:configuration:` so every new WebView
@@ -161,4 +168,7 @@ mod macos {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos::apply_to_config;
+pub use macos::{apply_to_config, prewarm};
+
+#[cfg(not(target_os = "macos"))]
+pub fn prewarm() {}

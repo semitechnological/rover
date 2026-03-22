@@ -252,6 +252,9 @@ fn main() {
             std::sync::Arc::new(std::sync::Mutex::new(rover_browser::LiveBrowserTabs::default()));
         cx.set_global(LiveBrowserTabsGlobal(live_browser_tabs.clone()));
 
+        // Pre-compile WKContentRuleList now so it doesn't block paint() on first browser open.
+        rover_browser::prewarm_content_blocker();
+
         // Initialize semantic index on a background thread (model download may be slow)
         std::thread::spawn(move || {
             let db_path = dirs::config_dir()

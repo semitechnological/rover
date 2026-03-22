@@ -1113,6 +1113,14 @@ impl Element for WebViewElement {
 
 // ─── Entry points ─────────────────────────────────────────────────────────────
 
+/// Eagerly warm up the content blocker's rule list before any browser window opens.
+/// Call once at app startup so the NSRunLoop spin in compile_rules() happens
+/// during initialization rather than inside GPUI's paint() render pass.
+pub fn prewarm_content_blocker() {
+    #[cfg(target_os = "macos")]
+    content_blocker::prewarm();
+}
+
 pub fn open_browser_window(cx: &mut App, db: Option<Arc<rover_db::RoverDb>>) {
     open_browser_window_inner(cx, DEFAULT_URL, db, None, None);
 }

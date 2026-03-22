@@ -1222,13 +1222,14 @@ impl PickerDelegate for RoverDelegate {
                         if target.is_empty() {
                             // Close frontmost window — use the app that was active BEFORE Rover opened
                             let front_app = self.previous_frontmost_app.clone();
-                            if let Some(app) = front_app {
+                            if let Some(_app) = front_app {
                                 std::thread::spawn(move || {
                                     std::thread::sleep(std::time::Duration::from_millis(200));
-                                    let safe = crate::tools::escape_applescript(&app);
+                                    // Send Cmd+W to the frontmost app — works universally,
+                                    // including terminal apps that don't have Standard Suite.
                                     let _ = std::process::Command::new("osascript")
                                         .arg("-e")
-                                        .arg(format!(r#"tell application "{safe}" to close window 1"#))
+                                        .arg(r#"tell application "System Events" to keystroke "w" using command down"#)
                                         .status();
                                 });
                             }
@@ -1238,9 +1239,14 @@ impl PickerDelegate for RoverDelegate {
                             std::thread::spawn(move || {
                                 std::thread::sleep(std::time::Duration::from_millis(200));
                                 let safe = crate::tools::escape_applescript(&target);
+                                // Quit by process name via System Events — works for all apps
+                                // including terminals that don't expose an AppleScript dictionary.
+                                let script = format!(
+                                    "tell application \"System Events\"\ntry\nquit (first application process whose name is \"{safe}\")\nend try\nend tell"
+                                );
                                 let _ = std::process::Command::new("osascript")
                                     .arg("-e")
-                                    .arg(format!(r#"tell application "{safe}" to quit"#))
+                                    .arg(&script)
                                     .status();
                             });
                         }

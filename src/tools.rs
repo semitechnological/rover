@@ -897,10 +897,10 @@ fn close_window_tool() -> ToolDefinition {
         Schema::new("CloseWindowArgs"),
         |_args| {
             require_permission("Close frontmost window")?;
-            let script = r#"tell application "System Events"
-    set frontApp to name of first application process whose frontmost is true
-end tell
-tell application frontApp to close window 1"#;
+            // Send Cmd+W to the frontmost app via System Events.
+            // This works universally, even for terminal apps that don't implement
+            // the Standard Suite's "close window" command.
+            let script = r#"tell application "System Events" to keystroke "w" using command down"#;
             match run_osascript(script) {
                 Ok(_) => Ok("Closed frontmost window".to_string()),
                 Err(e) => Err(e),
@@ -923,7 +923,15 @@ fn quit_app_tool() -> ToolDefinition {
             }
             let safe = escape_applescript(app);
             require_permission(&format!("Quit {safe}"))?;
-            let script = format!(r#"tell application "{safe}" to quit"#);
+            // Quit by process name via System Events — works for all apps including
+            // terminals that don't expose an AppleScript dictionary.
+            let script = format!(
+                r#"tell application "System Events"
+    try
+        quit (first application process whose name is "{safe}")
+    end try
+end tell"#
+            );
             match run_osascript(&script) {
                 Ok(_) => Ok(format!("Quit {safe}")),
                 Err(e) => Err(e),

@@ -40,7 +40,7 @@ pub const CACHED_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 pub const FROZEN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 pub const CLOSED_TIMEOUT: Duration = Duration::from_secs(2 * 60 * 60);
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(30);
-const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(16);
 
 actions!(rover_browser, [OpenTransport, ShareCurrentUrl]);
 
@@ -180,6 +180,8 @@ pub enum BrowserAction {
     SearchHistory(String),
     SearchBookmarks(String),
     Share,
+    /// Bring the browser window to the foreground.
+    BringToFront,
 }
 
 // ─── Command parsing ──────────────────────────────────────────────────────────
@@ -344,6 +346,8 @@ pub struct BrowserWindow {
     db: Option<Arc<rover_db::RoverDb>>,
     pub live_tabs: Option<LiveBrowserTabsRef>,
     focus: FocusHandle,
+    /// Open the transport address bar on the next drain_events tick.
+    open_transport_after_init: bool,
     _lifecycle_task: Task<()>,
     _event_task: Task<()>,
 }
@@ -376,44 +380,60 @@ impl BrowserWindow {
             }
         });
 
+        // Read home URL from settings (empty = open blank tab + address bar).
+        let home_url = db.as_ref()
+            .and_then(|d| d.get_setting("browser_home_url").ok().flatten())
+            .unwrap_or_default();
+
         // Restore previous session if available.
-        let (tabs, active_tab) = match db.as_ref().and_then(|d| d.load_session().ok()) {
-            Some(session) if !session.is_empty() => {
-                let mut active = 0;
-                let tabs: Vec<BrowserTab> = session
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (url, title, is_active))| {
-                        if is_active {
-                            active = i;
-                        }
-                        BrowserTab {
-                            title,
-                            url,
-                            state: if is_active { TabState::Active } else { TabState::Frozen },
-                            last_active: Instant::now(),
-                            events: nav_events::new_queue(),
-                            #[cfg(target_os = "macos")]
-                            webview_handle: None,
-                        }
-                    })
-                    .collect();
-                log::info!("session: restored {} tabs", tabs.len());
-                (tabs, active)
-            }
-            _ => {
-                let tabs = vec![BrowserTab {
-                    title: "Perplexity".to_string(),
-                    url: DEFAULT_URL.to_string(),
-                    state: TabState::Active,
-                    last_active: Instant::now(),
-                    events: nav_events::new_queue(),
-                    #[cfg(target_os = "macos")]
-                    webview_handle: None,
-                }];
-                (tabs, 0)
-            }
-        };
+        let (tabs, active_tab, open_transport_after_init) =
+            match db.as_ref().and_then(|d| d.load_session().ok()) {
+                Some(session) if !session.is_empty() => {
+                    let mut active = 0;
+                    let tabs: Vec<BrowserTab> = session
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, (url, title, is_active))| {
+                            if is_active {
+                                active = i;
+                            }
+                            BrowserTab {
+                                title,
+                                url,
+                                state: if is_active { TabState::Active } else { TabState::Frozen },
+                                last_active: Instant::now(),
+                                events: nav_events::new_queue(),
+                                #[cfg(target_os = "macos")]
+                                webview_handle: None,
+                            }
+                        })
+                        .collect();
+                    log::info!("session: restored {} tabs", tabs.len());
+                    (tabs, active, false) // session restore: don't auto-open transport
+                }
+                _ => {
+                    let startup_url = if home_url.is_empty() {
+                        String::new() // blank tab — transport will open for URL entry
+                    } else {
+                        home_url.clone()
+                    };
+                    let title = if startup_url.is_empty() {
+                        "New Tab".to_string()
+                    } else {
+                        domain_from_url(&startup_url).to_string()
+                    };
+                    let tabs = vec![BrowserTab {
+                        title,
+                        url: startup_url,
+                        state: TabState::Active,
+                        last_active: Instant::now(),
+                        events: nav_events::new_queue(),
+                        #[cfg(target_os = "macos")]
+                        webview_handle: None,
+                    }];
+                    (tabs, 0, true) // new session: open transport immediately
+                }
+            };
 
         Self {
             semantic_index: None,
@@ -425,12 +445,20 @@ impl BrowserWindow {
             db: db.clone(),
             live_tabs: None,
             focus,
+            open_transport_after_init,
             _lifecycle_task: lifecycle_task,
             _event_task: event_task,
         }
     }
 
     // ── Public API for the transport ───────────────────────────────────────────
+
+    /// Returns the configured home URL, or empty string (blank tab) if not set.
+    fn home_url(&self) -> String {
+        self.db.as_ref()
+            .and_then(|db| db.get_setting("browser_home_url").ok().flatten())
+            .unwrap_or_default()
+    }
 
     /// Returns (title, tab_state) pairs for all tabs plus the active index.
     pub fn tab_infos(&self) -> (Vec<(String, TabState)>, usize) {
@@ -518,7 +546,13 @@ impl BrowserWindow {
                 return;
             }
             BrowserAction::NewTab => {
-                self.open_tab_external(DEFAULT_URL, cx);
+                let url = self.home_url();
+                self.open_tab_external(&url, cx);
+                // Signal drain_events to open the transport on the next tick.
+                // We can't call open_browser_transport here because BrowserWindow
+                // is already mutably borrowed (we're inside an entity update), and
+                // BrowserTransport::render would attempt to read it — causing a panic.
+                self.open_transport_after_init = true;
             }
             BrowserAction::CloseTab => {
                 let i = self.active_tab;
@@ -621,6 +655,15 @@ impl BrowserWindow {
                 }
             }
             BrowserAction::ListTabs => {}
+            BrowserAction::BringToFront => {
+                #[cfg(target_os = "macos")]
+                unsafe {
+                    use cocoa::base::id;
+                    use objc::*;
+                    let app: id = msg_send![class!(NSApplication), sharedApplication];
+                    let _: () = msg_send![app, activateIgnoringOtherApps: true];
+                }
+            }
         }
         cx.notify();
     }
@@ -642,8 +685,13 @@ impl BrowserWindow {
             tab.last_active = Instant::now();
         }
 
+        let title = if url.is_empty() {
+            "New Tab".to_string()
+        } else {
+            domain_from_url(url).to_string()
+        };
         self.tabs.push(BrowserTab {
-            title: domain_from_url(url).to_string(),
+            title,
             url: url.to_string(),
             state: TabState::Active,
             last_active: Instant::now(),
@@ -689,6 +737,13 @@ impl BrowserWindow {
     }
 
     fn drain_events(&mut self, cx: &mut Context<Self>) {
+        // Open transport address bar on first tick after a new (non-restored) session.
+        if self.open_transport_after_init {
+            self.open_transport_after_init = false;
+            let weak = cx.entity().downgrade();
+            transport::open_browser_transport(weak, cx);
+        }
+
         // Check URL inbox for navigation requests from the picker
         if let Some(ref live) = self.live_tabs {
             let (urls, close_indices, actions) = {
@@ -959,7 +1014,13 @@ impl Render for BrowserWindow {
                 let mods = &event.keystroke.modifiers;
                 if mods.platform {
                     match key {
-                        "t" => { this.open_tab_external(DEFAULT_URL, cx); cx.notify(); }
+                        "t" => {
+                            let url = this.home_url();
+                            this.open_tab_external(&url, cx);
+                            let weak = cx.entity().downgrade();
+                            transport::open_browser_transport(weak, cx);
+                            cx.notify();
+                        }
                         "w" => {
                             let i = this.active_tab;
                             this.close_tab(i, cx);
@@ -1181,7 +1242,21 @@ pub fn navigate_or_open(
         };
         if has_window {
             log::info!("navigate_or_open: pushing to existing window inbox");
-            lt.lock().unwrap().url_inbox.push(url.to_string());
+            // Immediately activate — don't wait for the next drain_events tick.
+            #[cfg(target_os = "macos")]
+            unsafe {
+                use cocoa::base::id;
+                use objc::*;
+                let app: id = msg_send![class!(NSApplication), sharedApplication];
+                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+            }
+            let mut lock = lt.lock().unwrap();
+            // Also push via inbox so the window does makeKeyAndOrderFront on itself.
+            lock.action_inbox.push(BrowserAction::BringToFront);
+            // Only open a new tab if a URL was specified.
+            if !url.is_empty() {
+                lock.url_inbox.push(url.to_string());
+            }
             return;
         }
     } else {
@@ -1198,6 +1273,16 @@ fn open_browser_window_inner(
     semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
     live_tabs: Option<LiveBrowserTabsRef>,
 ) {
+    // Bring our process to the front before opening the window — required on
+    // macOS 14+ where LSUIElement apps can't steal focus without this.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use cocoa::base::id;
+        use objc::*;
+        let app: id = msg_send![class!(NSApplication), sharedApplication];
+        let _: () = msg_send![app, activateIgnoringOtherApps: true];
+    }
+
     log::info!("open_browser_window_inner: binding keys");
     // Cmd+\ opens the floating transport from anywhere in the browser window.
     // Cmd+Shift+C copies the current URL directly (no transport needed).
@@ -1205,8 +1290,11 @@ fn open_browser_window_inner(
         KeyBinding::new("cmd-\\", OpenTransport, Some("BrowserWindow")),
         KeyBinding::new("cmd-shift-c", ShareCurrentUrl, Some("BrowserWindow")),
     ]);
+    log::info!("open_browser_window_inner: keys bound, calling open_window");
 
     let url = url.to_string();
+    // Clone live_tabs before it's moved into the window factory closure.
+    let live_tabs_for_shortcuts = live_tabs.clone();
     let window_handle = cx.open_window(
         WindowOptions {
             window_bounds: None, // fullscreen / maximised by OS
@@ -1226,30 +1314,35 @@ fn open_browser_window_inner(
                 log::info!("BrowserWindow::new done, {} tabs", bw.tabs.len());
                 bw.semantic_index = semantic;
                 bw.live_tabs = live_tabs;
-                if let Some(tab) = bw.tabs.get_mut(0) {
-                    tab.url = url.clone();
-                    tab.title = looks_like_url(&url)
-                        .then(|| {
-                            url.strip_prefix("https://")
-                                .or_else(|| url.strip_prefix("http://"))
-                                .unwrap_or(&url)
-                                .split('/')
-                                .next()
-                                .unwrap_or(&url)
-                                .trim_start_matches("www.")
-                                .to_string()
-                        })
-                        .unwrap_or_else(|| url.clone());
+                // Only override the first tab's URL when an explicit URL was provided.
+                // Empty URL means "open blank tab with address bar" — let new() decide.
+                if !url.is_empty() {
+                    if let Some(tab) = bw.tabs.get_mut(0) {
+                        tab.url = url.clone();
+                        tab.title = domain_from_url(&url).to_string();
+                    }
+                    // An explicit URL was given — don't auto-open the transport.
+                    bw.open_transport_after_init = false;
                 }
                 bw
             })
         },
-    )
-    .ok();
+    );
+    log::info!("open_browser_window_inner: open_window returned ok={}", window_handle.is_ok());
+    window_handle.ok();
 
     // Install option+drag window move handler
     #[cfg(target_os = "macos")]
     install_option_drag_handler();
+
+    // Install keyboard shortcut monitor so Cmd+T/W/R/[/] work even when
+    // WKWebView has first-responder focus (GPUI's on_key_down never fires then).
+    #[cfg(target_os = "macos")]
+    if let Some(ref lt) = live_tabs_for_shortcuts {
+        install_browser_keyboard_shortcuts(lt.clone());
+    }
+
+    log::info!("open_browser_window_inner: done");
 }
 
 /// Installs a local NSEvent monitor that listens for Option+leftMouseDragged
@@ -1261,8 +1354,9 @@ fn install_option_drag_handler() {
     use objc::*;
 
     unsafe {
-        // NSEventMaskLeftMouseDragged = 1 << 6 = 64
-        let mask: u64 = 1 << 6;
+        // NSEventMaskLeftMouseDown = 1 << 1 = 2
+        // performWindowDragWithEvent: must be called from the initial mouseDown, not mouseDragged.
+        let mask: u64 = 1 << 1;
         let block = block::ConcreteBlock::new(move |event: id| -> id {
             let modifier_flags: u64 = msg_send![event, modifierFlags];
             // NSEventModifierFlagOption = 1 << 19 = 524288
@@ -1284,6 +1378,83 @@ fn install_option_drag_handler() {
         ];
     }
 }
+
+/// Intercepts Cmd+T/W/R/[/] when a WKWebView has first-responder focus so
+/// GPUI's on_key_down (which never fires for embedded native views) is bypassed.
+///
+/// Uses a local NSEvent monitor — only fires for this app's key window events.
+/// Only installed once per process lifetime.
+#[cfg(target_os = "macos")]
+fn install_browser_keyboard_shortcuts(live: LiveBrowserTabsRef) {
+    use cocoa::base::{id, nil};
+    use objc::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static INSTALLED: AtomicBool = AtomicBool::new(false);
+    if INSTALLED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+
+    unsafe {
+        // NSEventMaskKeyDown = 1 << 10
+        let mask: u64 = 1 << 10;
+        let block = block::ConcreteBlock::new(move |event: id| -> id {
+            // Only intercept when the browser has open tabs and the key window is
+            // not an NSPanel (the picker and transport are panels; the browser is a
+            // normal NSWindow).
+            let app: id = msg_send![class!(NSApplication), sharedApplication];
+            let key_win: id = msg_send![app, keyWindow];
+            if key_win == nil {
+                return event;
+            }
+            let is_panel: bool = msg_send![key_win, isKindOfClass: class!(NSPanel)];
+            if is_panel {
+                return event;
+            }
+            let has_tabs = live.lock().map(|l| !l.tabs.is_empty()).unwrap_or(false);
+            if !has_tabs {
+                return event;
+            }
+
+            let modifier_flags: u64 = msg_send![event, modifierFlags];
+            // Require exactly Cmd, no Shift/Control/Option.
+            // NSEventModifierFlagShift=0x20000 Control=0x40000 Option=0x80000 Command=0x100000
+            const CMD: u64 = 0x10_0000;
+            const MODIFIERS: u64 = 0x1E_0000;
+            if modifier_flags & MODIFIERS != CMD {
+                return event;
+            }
+
+            let key_code: u16 = msg_send![event, keyCode];
+            let action = match key_code {
+                17 => Some(BrowserAction::NewTab),   // t
+                13 => Some(BrowserAction::CloseTab), // w
+                15 => Some(BrowserAction::Reload),   // r
+                33 => Some(BrowserAction::Back),     // [
+                30 => Some(BrowserAction::Forward),  // ]
+                _ => None,
+            };
+
+            if let Some(action) = action {
+                if let Ok(mut lock) = live.lock() {
+                    lock.action_inbox.push(action);
+                }
+                return nil; // consume — don't also dispatch to WKWebView
+            }
+            event
+        });
+        let block = block.copy();
+        let _: id = msg_send![
+            class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: mask
+            handler: &*block
+        ];
+    }
+}
+
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 

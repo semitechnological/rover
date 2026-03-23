@@ -54,6 +54,13 @@ impl Global for LastFrontmostAppGlobal {}
 struct LiveBrowserTabsGlobal(rover_browser::LiveBrowserTabsRef);
 impl Global for LiveBrowserTabsGlobal {}
 
+/// A URL queued by the picker that the global polling task will open in the browser.
+struct PendingBrowserUrlGlobal(Arc<std::sync::Mutex<Option<String>>>);
+impl Global for PendingBrowserUrlGlobal {}
+
+struct PendingSettingsGlobal(Arc<std::sync::Mutex<bool>>);
+impl Global for PendingSettingsGlobal {}
+
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -257,6 +264,8 @@ fn main() {
         let live_browser_tabs: rover_browser::LiveBrowserTabsRef =
             std::sync::Arc::new(std::sync::Mutex::new(rover_browser::LiveBrowserTabs::default()));
         cx.set_global(LiveBrowserTabsGlobal(live_browser_tabs.clone()));
+        cx.set_global(PendingBrowserUrlGlobal(Arc::new(std::sync::Mutex::new(None))));
+        cx.set_global(PendingSettingsGlobal(Arc::new(std::sync::Mutex::new(false))));
 
         // Pre-compile WKContentRuleList now so it doesn't block paint() on first browser open.
         log::info!("main: calling prewarm_content_blocker");
@@ -457,6 +466,39 @@ fn main() {
                         }
                     });
                 }
+            }
+        })
+        .detach();
+
+        // Poll for browser URLs and settings opens queued by the picker.
+        // Entity-free task so it survives picker dismissal.
+        cx.spawn(async move |cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(50))
+                    .await;
+                let _ = cx.update(|cx: &mut App| {
+                    // Browser URL
+                    let pending_arc = cx.global::<PendingBrowserUrlGlobal>().0.clone();
+                    let url = pending_arc.lock().unwrap().take();
+                    if let Some(url) = url {
+                        log::info!("pending_browser_poll: opening browser for url={url}");
+                        let db = cx.global::<DbGlobal>().0.clone();
+                        let lt = cx.global::<LiveBrowserTabsGlobal>().0.clone();
+                        rover_browser::navigate_or_open(cx, &url, Some(db), None, Some(lt));
+                    }
+                    // Settings window
+                    let should_open = {
+                        let mut lock = cx.global::<PendingSettingsGlobal>().0.lock().unwrap();
+                        let v = *lock;
+                        *lock = false;
+                        v
+                    };
+                    if should_open {
+                        let db = cx.global::<DbGlobal>().0.clone();
+                        settings_window::open_settings_window(db, cx);
+                    }
+                });
             }
         })
         .detach();
@@ -688,23 +730,21 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previou
                                 }
                                 PickerEvent::OpenSettings => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
-                                    let db = settings_db.clone();
-                                    let handle = window.window_handle();
-                                    cx.spawn(async move |_entity, cx: &mut AsyncApp| {
-                                        let _ = cx.update(|cx| {
-                                            settings_window::open_settings_window(db, cx);
-                                        });
-                                        let _ = handle.update(cx, |_, window, _cx| {
-                                            window.remove_window();
-                                        });
-                                    })
-                                    .detach();
+                                    *cx.global::<PendingSettingsGlobal>().0.lock().unwrap() = true;
+                                    window.remove_window();
                                 }
                                 PickerEvent::ToggleActions => {}
                                 PickerEvent::OpenTerminal { cmd } => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
                                     window.remove_window();
                                     terminal::open_ghostty(cmd.as_deref(), cx);
+                                }
+                                PickerEvent::OpenBrowser { url } => {
+                                    dismiss_flag.store(false, Ordering::Relaxed);
+                                    // Queue the URL for the entity-free polling task — avoids
+                                    // cx.open_window being called inside an entity event handler.
+                                    *cx.global::<PendingBrowserUrlGlobal>().0.lock().unwrap() = Some(url.clone());
+                                    window.remove_window();
                                 }
                             }
                         },

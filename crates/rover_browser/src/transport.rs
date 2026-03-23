@@ -201,8 +201,11 @@ impl Render for BrowserTransport {
                     .border_1()
                     .border_color(pill_border)
                     .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _window, cx| {
-                        if let Some(browser) = this.browser.upgrade() {
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if is_active {
+                            // Re-focus the input so the user can start typing immediately.
+                            window.focus(&this.focus);
+                        } else if let Some(browser) = this.browser.upgrade() {
                             browser.update(cx, |bw, cx| {
                                 bw.switch_tab_external(i, cx);
                             });

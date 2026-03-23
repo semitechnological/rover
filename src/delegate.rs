@@ -295,6 +295,38 @@ impl RoverDelegate {
         }
     }
 
+    /// Resolve plain search prefix (google query, g query, yt query, etc.) → URL.
+    /// Same engine table as resolve_bang but no `!` prefix required.
+    fn resolve_search_prefix(query: &str) -> Option<String> {
+        let (prefix, search_query) = query.split_once(' ')?;
+        let search_query = search_query.trim();
+        if search_query.is_empty() {
+            return None;
+        }
+        let prefix_lower = prefix.to_lowercase();
+        for engine in rover_browser::SEARCH_ENGINES {
+            if engine.long_prefix == prefix_lower
+                || engine.short_prefix.map(|s| s == prefix_lower).unwrap_or(false)
+            {
+                let encoded = urlencoding::encode(search_query);
+                return Some(engine.url_template.replace("{query}", &encoded));
+            }
+        }
+        let extra: &[(&str, &str)] = &[
+            ("amzn", "https://www.amazon.com/s?k={query}"),
+            ("npm", "https://www.npmjs.com/search?q={query}"),
+            ("crates", "https://crates.io/search?q={query}"),
+            ("mdn", "https://developer.mozilla.org/en-US/search?q={query}"),
+        ];
+        for (alias, template) in extra {
+            if prefix_lower == *alias {
+                let encoded = urlencoding::encode(search_query);
+                return Some(template.replace("{query}", &encoded));
+            }
+        }
+        None
+    }
+
     /// Resolve bang syntax (!g query → Google search URL, !amzn shoes → Amazon search, etc.)
     fn resolve_bang(query: &str) -> Option<String> {
         let without_bang = query.strip_prefix('!')?;
@@ -1005,31 +1037,10 @@ impl PickerDelegate for RoverDelegate {
                     self.help_loading = false;
                 }
 
-                // Priority 1b: URL detection → open in Rover browser
-                if rover_browser::looks_like_url(&query) && !query.is_empty() {
-                    let url = if query.starts_with("http://") || query.starts_with("https://") {
-                        query.clone()
-                    } else {
-                        format!("https://{query}")
-                    };
+                // Priority 1b: search engine prefix without bang (google query, g query, etc.)
+                // No URL auto-detection — user must use explicit prefixes or bangs (!g query).
+                if let Some(url) = Self::resolve_search_prefix(&query) {
                     self.url_result = Some(url);
-                } else if self.browser_was_focused
-                    && !query.is_empty()
-                    && query.len() >= 2
-                    && !help_prefix
-                    && !self.close_tab_requested
-                    && !self.close_all_tabs_requested
-                    && self.quit_target.is_none()
-                {
-                    // Auto-websearch when browser was focused
-                    let default_engine = self.db.get_setting("default_search_engine")
-                        .ok().flatten().unwrap_or_else(|| "google".to_string());
-                    let template = rover_browser::SEARCH_ENGINES.iter()
-                        .find(|e| e.name == default_engine || e.short_prefix == Some(&default_engine))
-                        .map(|e| e.url_template)
-                        .unwrap_or("https://www.google.com/search?q={query}");
-                    let encoded = urlencoding::encode(&query);
-                    self.url_result = Some(template.replace("{query}", &encoded));
                 } else {
                     self.url_result = None;
                 }
@@ -1124,14 +1135,7 @@ impl PickerDelegate for RoverDelegate {
                         template.replace("{query}", &encoded)
                     };
                     self.address_bar_active = false;
-                    let browser_db = self.db.clone();
-                    let sem = self.semantic.clone();
-                    let lt = self.live_tabs.clone();
-                    cx.spawn(async move |_this, cx: &mut AsyncApp| {
-                        cx.update(|cx| {
-                            rover_browser::navigate_or_open(cx, &url, Some(browser_db), sem, lt);
-                        }).ok();
-                    }).detach();
+                    cx.emit(rover_picker::PickerEvent::OpenBrowser { url });
                     return true;
                 }
 
@@ -1150,16 +1154,7 @@ impl PickerDelegate for RoverDelegate {
                     // Non-active tab — switch to it
                     let (_, url, _, _) = &self.browser_ctx.tabs[tab_ix];
                     let url = url.clone();
-                    let browser_db = self.db.clone();
-                    let sem = self.semantic.clone();
-                    let lt = self.live_tabs.clone();
-                    cx.spawn(async move |_this, cx: &mut AsyncApp| {
-                        cx.update(|cx| {
-                            rover_browser::navigate_or_open(cx, &url, Some(browser_db), sem, lt);
-                        })
-                        .ok();
-                    })
-                    .detach();
+                    cx.emit(rover_picker::PickerEvent::OpenBrowser { url });
                     return true;
                 }
 
@@ -1262,16 +1257,7 @@ impl PickerDelegate for RoverDelegate {
 
                 if o.has_url && self.selected_ix == o.url_ix {
                     if let Some(url) = self.url_result.clone() {
-                        let browser_db = self.db.clone();
-                        let sem = self.semantic.clone();
-                        let lt = self.live_tabs.clone();
-                        cx.spawn(async move |_this, cx: &mut AsyncApp| {
-                            cx.update(|cx| {
-                                rover_browser::navigate_or_open(cx, &url, Some(browser_db), sem, lt);
-                            })
-                            .ok();
-                        })
-                        .detach();
+                        cx.emit(rover_picker::PickerEvent::OpenBrowser { url });
                     }
                     return true;
                 }
@@ -1415,22 +1401,10 @@ impl PickerDelegate for RoverDelegate {
                                     return false;
                                 }
                                 BuiltInCommand::Browser => {
-                                    let browser_db = self.db.clone();
-                                    let sem = self.semantic.clone();
-                                    let lt = self.live_tabs.clone();
-                                    cx.spawn(async move |_this, cx: &mut AsyncApp| {
-                                        cx.update(|cx| {
-                                            rover_browser::navigate_or_open(
-                                                cx,
-                                                rover_browser::DEFAULT_URL,
-                                                Some(browser_db),
-                                                sem,
-                                                lt,
-                                            );
-                                        })
-                                        .ok();
-                                    })
-                                    .detach();
+                                    // Empty URL = blank tab + address bar opens automatically.
+                                    cx.emit(rover_picker::PickerEvent::OpenBrowser {
+                                        url: String::new(),
+                                    });
                                     return true;
                                 }
                                 BuiltInCommand::CloseWindow => {

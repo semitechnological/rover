@@ -32,6 +32,7 @@ pub enum PickerEvent {
     OpenSettings,
     ToggleActions,
     OpenTerminal { cmd: Option<String> },
+    OpenBrowser { url: String },
 }
 
 pub trait PickerDelegate: Sized + 'static {

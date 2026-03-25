@@ -1,6 +1,10 @@
 mod ai;
 mod clipboard_monitor;
 mod delegate;
+#[allow(dead_code)]
+mod delegate_legacy;
+#[allow(dead_code)]
+mod delegate_plugin;
 mod help_docs;
 mod hotkey;
 mod settings_window;

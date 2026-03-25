@@ -1,0 +1,11 @@
+[package]
+name = "rover_plugin_api"
+version = "0.1.0"
+edition = "2021"
+description = "Plugin API for Rover launcher — defines the Plugin trait and all supporting types"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+dirs.workspace = true

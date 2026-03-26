@@ -11,6 +11,8 @@
 pub mod builtin;
 pub mod manifest;
 mod registry;
+pub mod web_bridge;
 
 pub use manifest::{default_plugin_dir, scan_plugin_manifests, PluginManifest};
 pub use registry::PluginRegistry;
+pub use web_bridge::BRIDGE_SCRIPT;

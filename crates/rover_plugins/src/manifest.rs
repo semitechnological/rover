@@ -22,12 +22,16 @@ pub struct PluginManifest {
     /// Author name or email.
     #[serde(default)]
     pub author: String,
-    /// Plugin type: "wasm" or "native" (future).
+    /// Plugin type: "wasm" or "native" (legacy, use `runtime` instead).
     #[serde(default = "default_kind")]
     pub kind: String,
     /// Relative path to the plugin binary (e.g. `"plugin.wasm"`).
     #[serde(default)]
     pub binary: String,
+    /// Plugin runtime: "native", "crepuscularity", or "web".
+    /// Determines how the plugin's UI is rendered and where logic executes.
+    #[serde(default)]
+    pub runtime: Option<RuntimeConfig>,
     /// Whether the plugin is enabled by default.
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -63,6 +67,29 @@ pub struct ManifestCommand {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub has_submenu: bool,
+}
+
+/// Runtime configuration in the manifest.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RuntimeConfig {
+    /// Compiled Rust plugin (default).
+    Native,
+    /// Crepuscularity template plugin with hot-reload.
+    Crepuscularity {
+        /// Directory containing .crepus template files, relative to plugin dir.
+        #[serde(default = "default_templates")]
+        template_dir: String,
+    },
+    /// Web plugin running JS/TS in the embedded browser.
+    Web {
+        /// Entry point: `index.html` or `main.js`, relative to plugin dir.
+        entry: String,
+    },
+}
+
+fn default_templates() -> String {
+    "templates".to_string()
 }
 
 fn default_version() -> String {
@@ -203,6 +230,67 @@ mod tests {
         // May or may not be empty depending on what's in temp, but shouldn't panic
         let _ = manifests;
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_crepuscularity_runtime() {
+        let toml_str = r#"
+            id = "ext.theme_picker"
+            name = "Theme Picker"
+
+            [runtime]
+            type = "crepuscularity"
+            template_dir = "ui"
+        "#;
+        let manifest: PluginManifest = toml::from_str(toml_str).unwrap();
+        match manifest.runtime {
+            Some(RuntimeConfig::Crepuscularity { template_dir }) => {
+                assert_eq!(template_dir, "ui");
+            }
+            other => panic!("Expected Crepuscularity runtime, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_web_runtime() {
+        let toml_str = r#"
+            id = "ext.web_notes"
+            name = "Web Notes"
+
+            [runtime]
+            type = "web"
+            entry = "index.html"
+        "#;
+        let manifest: PluginManifest = toml::from_str(toml_str).unwrap();
+        match manifest.runtime {
+            Some(RuntimeConfig::Web { entry }) => {
+                assert_eq!(entry, "index.html");
+            }
+            other => panic!("Expected Web runtime, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_native_runtime() {
+        let toml_str = r#"
+            id = "ext.native"
+            name = "Native Plugin"
+
+            [runtime]
+            type = "native"
+        "#;
+        let manifest: PluginManifest = toml::from_str(toml_str).unwrap();
+        assert!(matches!(manifest.runtime, Some(RuntimeConfig::Native)));
+    }
+
+    #[test]
+    fn parse_no_runtime_defaults_to_none() {
+        let toml_str = r#"
+            id = "ext.legacy"
+            name = "Legacy Plugin"
+        "#;
+        let manifest: PluginManifest = toml::from_str(toml_str).unwrap();
+        assert!(manifest.runtime.is_none());
     }
 
     #[test]

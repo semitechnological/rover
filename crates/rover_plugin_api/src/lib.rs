@@ -1,13 +1,79 @@
 //! # Rover Plugin API
 //!
 //! This crate defines the `Plugin` trait and all supporting types that Rover
-//! plugins implement. Both built-in (compiled-in) plugins and future external
-//! (WASM/dylib) plugins use this API.
+//! plugins implement. Built-in plugins, external TOML-manifest plugins,
+//! crepuscularity template plugins, and web/JS/TS plugins all use this API.
+//!
+//! ## Plugin Runtimes
+//!
+//! Plugins declare a runtime that determines how their UI is rendered and
+//! where their logic executes:
+//!
+//! - **Native** — Rust code compiled into the binary. UI via raw GPUI.
+//! - **Crepuscularity** — `.crepus` template files (Tailwind-like DSL) rendered
+//!   via the crepuscularity runtime. Logic in Rust. Supports hot-reload.
+//! - **Web** — HTML/CSS/JS running inside the embedded WKWebView browser.
+//!   Logic in JavaScript or TypeScript. Communicates via `window.rover.*` bridge.
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+
+// ─── Plugin Runtime ──────────────────────────────────────────────────────────
+
+/// The runtime environment a plugin uses for rendering and execution.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginRuntime {
+    /// Compiled Rust plugin. UI rendered via raw GPUI builder API.
+    Native,
+
+    /// Crepuscularity template plugin. UI defined in `.crepus` files and
+    /// rendered via the crepuscularity-runtime crate. Supports hot-reload.
+    Crepuscularity {
+        /// Path to the plugin's `.crepus` template directory.
+        /// Relative paths are resolved from the plugin's data_dir.
+        template_dir: PathBuf,
+    },
+
+    /// Web plugin. UI is HTML/CSS/JS loaded in the embedded WKWebView.
+    /// Plugin logic runs in JavaScript and communicates via `window.rover.*`.
+    Web {
+        /// Entry point: path to `index.html` or `main.js`.
+        entry: PathBuf,
+    },
+}
+
+impl Default for PluginRuntime {
+    fn default() -> Self {
+        PluginRuntime::Native
+    }
+}
+
+// ─── Render Output ───────────────────────────────────────────────────────────
+
+/// How a plugin wants to render a match row or inline content.
+/// The picker dispatcher uses this to select the appropriate renderer.
+#[derive(Debug, Clone)]
+pub enum RenderOutput {
+    /// Use the default picker rendering (title + subtitle + icon).
+    Default,
+
+    /// Render via a crepuscularity template with context variables.
+    CrepuscularityTemplate {
+        /// Path to the `.crepus` component file.
+        template: PathBuf,
+        /// Context variables passed to the template.
+        vars: HashMap<String, String>,
+    },
+
+    /// Render HTML content inside a web view panel.
+    Html {
+        /// HTML string to render.
+        html: String,
+    },
+}
 
 // ─── Plugin Trait ────────────────────────────────────────────────────────────
 
@@ -29,6 +95,9 @@ pub trait Plugin: Send + Sync {
 
     /// Semver version string.
     fn version(&self) -> &str { "0.1.0" }
+
+    /// The runtime this plugin uses for rendering and execution.
+    fn runtime(&self) -> PluginRuntime { PluginRuntime::Native }
 
     // ── Lifecycle ────────────────────────────────────────────────────────
 
@@ -70,6 +139,13 @@ pub trait Plugin: Send + Sync {
     /// Provide a rendering hint for a specific match row.
     fn render_match(&self, _match_id: &str, _selected: bool) -> RenderHint {
         RenderHint::Default
+    }
+
+    /// Return a rich render output for a match row. Used by crepuscularity
+    /// and web plugins to provide template-based or HTML rendering.
+    /// Falls back to `render_match()` when this returns `RenderOutput::Default`.
+    fn render_output(&self, _match_id: &str, _selected: bool) -> RenderOutput {
+        RenderOutput::Default
     }
 
     // ── Submenu support ──────────────────────────────────────────────────
@@ -364,3 +440,54 @@ impl fmt::Display for PluginError {
 }
 
 impl std::error::Error for PluginError {}
+
+// ─── Web Plugin Message Protocol ─────────────────────────────────────────────
+
+/// Messages sent from the web plugin (JS) to Rover via WKScriptMessageHandler.
+#[derive(Debug, Clone)]
+pub enum WebPluginMessage {
+    /// Plugin is ready and has loaded.
+    Ready { plugin_id: String },
+    /// Plugin wants to add match results to the picker.
+    AddResults { results: Vec<MatchResult> },
+    /// Plugin wants to clear its previous results.
+    ClearResults,
+    /// Plugin wants to copy text to clipboard.
+    CopyToClipboard(String),
+    /// Plugin wants to open a URL.
+    OpenUrl(String),
+    /// Plugin wants to run a shell command.
+    RunShell(String),
+    /// Plugin wants to dismiss the picker.
+    Dismiss,
+    /// Plugin wants to store a value.
+    StorageSet { key: String, value: String },
+    /// Plugin wants to retrieve a value.
+    StorageGet { key: String },
+}
+
+/// Messages sent from Rover to the web plugin (JS) via evaluateJavaScript.
+#[derive(Debug, Clone)]
+pub enum WebPluginEvent {
+    /// User typed a query.
+    Query { text: String },
+    /// User confirmed a match from this plugin.
+    Confirm { match_id: String, secondary: bool },
+    /// Response to a StorageGet request.
+    StorageValue { key: String, value: Option<String> },
+    /// Plugin configuration/settings.
+    Config { data: HashMap<String, String> },
+}
+
+// ─── Manifest Runtime Config ─────────────────────────────────────────────────
+
+/// Runtime-specific configuration from the plugin manifest (plugin.toml).
+#[derive(Debug, Clone)]
+pub enum ManifestRuntime {
+    /// `runtime = "native"` — compiled Rust plugin.
+    Native,
+    /// `runtime = "crepuscularity"` with template_dir.
+    Crepuscularity { template_dir: String },
+    /// `runtime = "web"` with entry point.
+    Web { entry: String },
+}

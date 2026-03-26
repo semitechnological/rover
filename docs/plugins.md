@@ -265,6 +265,83 @@ let mut registry = PluginRegistry::new();
 let _ = registry.load_external(&default_plugin_dir());
 ```
 
+## Plugin Runtimes
+
+Plugins declare a **runtime** that determines how their UI is rendered and where their logic executes. There are three runtimes:
+
+### Native (Rust/GPUI)
+
+Default runtime. Plugin code is compiled Rust. UI rendered via raw GPUI builder API or the `view!` macro. This is what all built-in plugins use.
+
+```toml
+[runtime]
+type = "native"
+```
+
+### Crepuscularity
+
+UI defined in `.crepus` template files (Tailwind-like DSL) and rendered via the crepuscularity-runtime crate. Logic in Rust. Supports **hot-reload** — edit a `.crepus` file and the UI updates without recompiling.
+
+```toml
+[runtime]
+type = "crepuscularity"
+template_dir = "templates"   # relative to plugin directory
+```
+
+Template files use the crepuscularity DSL:
+
+```
+# templates/row.crepus
+$: default selected = false
+div flex items-center gap-2 px-3 py-2
+    if {selected}
+        div bg-blue-500 rounded-full w-2 h-2
+    span text-sm text-white
+        "{title}"
+    span text-xs text-zinc-400
+        "{description}"
+```
+
+Plugins return `RenderOutput::CrepuscularityTemplate` from `render_output()` to provide template path and context variables.
+
+### Web (JS/TS/HTML)
+
+Plugin UI is HTML/CSS/JS loaded in the embedded WKWebView browser. Logic runs in JavaScript or TypeScript. Communicates with Rover via a `window.rover.*` bridge API.
+
+```toml
+[runtime]
+type = "web"
+entry = "index.html"   # or "main.js", relative to plugin directory
+```
+
+Web plugins receive events and send results through the bridge:
+
+```javascript
+// Listen for queries from the picker
+window.rover.onQuery((query) => {
+    const results = search(query);
+    window.rover.addResults(results.map(r => ({
+        id: r.id,
+        title: r.title,
+        subtitle: r.description,
+        score: r.relevance,
+    })));
+});
+
+// Handle user confirming a result
+window.rover.onConfirm((matchId, secondary) => {
+    if (secondary) {
+        window.rover.copyToClipboard(getData(matchId));
+    } else {
+        window.rover.openUrl(getUrl(matchId));
+    }
+});
+
+// Access plugin storage
+const saved = await window.rover.storage.get("last_query");
+await window.rover.storage.set("last_query", query);
+```
+
 ### Future: WASM Plugins
 
 External WASM plugins will implement a guest-side API that mirrors the `Plugin` trait. The host will load the `.wasm` binary via wasmtime and bridge calls through the `rover_extension_api` interface. This is tracked but not yet implemented.

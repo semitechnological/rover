@@ -31,8 +31,6 @@ impl Global for DbGlobal {}
 struct SemanticGlobal(pub Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>);
 impl Global for SemanticGlobal {}
 
-// CommandsGlobal removed — plugins own their commands now
-
 struct ExtensionRuntimesGlobal(
     std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
 );

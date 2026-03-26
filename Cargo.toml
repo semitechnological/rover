@@ -76,7 +76,6 @@ urlencoding = "2"
 rover_fuzzy.workspace = true
 rover_theme.workspace = true
 rover_picker.workspace = true
-rover_commands.workspace = true
 rover_extensions.workspace = true
 rover_plugin_api.workspace = true
 rover_plugins.workspace = true

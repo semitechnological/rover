@@ -171,6 +171,7 @@ impl RoverPluginDelegate {
         semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
         live_tabs: Option<rover_browser::LiveBrowserTabsRef>,
         ext_runtimes: HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
+        previous_app: Option<String>,
     ) -> Self {
         // Build plugin context with extras
         let mut extras: HashMap<String, Arc<dyn std::any::Any + Send + Sync>> = HashMap::new();
@@ -184,7 +185,8 @@ impl RoverPluginDelegate {
             extras.insert("semantic_index".to_string(), sem.clone());
         }
 
-        let previous_frontmost_app = Self::detect_frontmost_app();
+        // Use the pre-computed frontmost app from the background poller (avoids a blocking osascript call)
+        let previous_frontmost_app = previous_app;
         let terminal_was_focused = previous_frontmost_app
             .as_ref()
             .map(|n| n == "Ghostty" || n == "Terminal" || n == "iTerm2" || n == "Alacritty" || n == "kitty" || n == "WezTerm")
@@ -295,7 +297,9 @@ impl RoverPluginDelegate {
                         .map(|m| m.score > 0)
                         .unwrap_or(false);
 
-                // 2. Query non-FuzzyCommand plugins (AlwaysEvaluate, Prefix, Fallback)
+                // 2. Query non-FuzzyCommand plugins (AlwaysEvaluate, Prefix, Fallback).
+                // Pass has_calc_result=false first; if the calculator fires we filter
+                // Fallback results out directly rather than re-running the entire query.
                 let plugin_results = self.registry.query(
                     query,
                     has_good_fuzzy,
@@ -306,9 +310,14 @@ impl RoverPluginDelegate {
                     .iter()
                     .any(|r| r.plugin_id == "builtin.calculator");
 
-                // Re-query with calc info if needed for fallback suppression
-                let final_plugin_results = if has_calc_result {
-                    self.registry.query(query, has_good_fuzzy, true, &self.plugin_ctx)
+                // Filter Fallback results when calc has a result, avoiding a second query.
+                let final_plugin_results: Vec<MatchResult> = if has_calc_result {
+                    plugin_results.into_iter()
+                        .filter(|r| !matches!(
+                            self.registry.get(&r.plugin_id).map(|p| p.match_mode()),
+                            Some(MatchMode::Fallback { .. })
+                        ))
+                        .collect()
                 } else {
                     plugin_results
                 };

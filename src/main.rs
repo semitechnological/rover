@@ -695,6 +695,7 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                         semantic,
                         Some(live_tabs_ref),
                         ext_runtimes,
+                        previous_app.clone(),
                     );
                     let picker = cx.new(|cx| {
                         let mut p = Picker::new(delegate, cx);

@@ -151,24 +151,21 @@ fn open_url_tool() -> ToolDefinition {
             .property(SchemaProperty::new("url", SchemaPropertyType::String).description("The URL to open")),
         |args| {
             let raw_url = args["url"].as_str().unwrap_or("");
-            // Percent-encode characters that are dangerous in AppleScript string context
-            let url: String = raw_url.chars().map(|c| match c {
-                '"' => "%22".to_string(),
-                '\\' => "%5C".to_string(),
-                c if c.is_control() => String::new(),
-                c => c.to_string(),
-            }).collect();
+            let safe_url = escape_applescript(raw_url);
             let script = format!(
                 r#"tell application "Safari"
     activate
-    open location "{url}"
+    open location "{safe_url}"
 end tell"#
             );
             match run_osascript(&script) {
-                Ok(_) => Ok(format!("Opened {url}")),
+                Ok(_) => Ok(format!("Opened {raw_url}")),
                 Err(_) => {
-                    std::process::Command::new("open").arg(&url).spawn().map_err(|e| e.to_string())?;
-                    Ok(format!("Opened {url}"))
+                    std::process::Command::new("open")
+                        .arg(raw_url)
+                        .spawn()
+                        .map_err(|e| e.to_string())?;
+                    Ok(format!("Opened {raw_url}"))
                 }
             }
         },

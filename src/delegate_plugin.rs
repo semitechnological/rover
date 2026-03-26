@@ -136,6 +136,9 @@ pub struct RoverPluginDelegate {
     ai_session: Option<Arc<rusty_foundationmodels::Session>>,
     ai_debounce: Option<Task<()>>,
 
+    // ── File search async state ──
+    file_search_task: Option<Task<()>>,
+
     // ── Semantic / help async state ──
     semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
 
@@ -229,6 +232,7 @@ impl RoverPluginDelegate {
             history_stash: String::new(),
             ai_session,
             ai_debounce: None,
+            file_search_task: None,
             semantic,
             previous_frontmost_app,
             browser_was_focused,
@@ -575,6 +579,45 @@ impl RoverPluginDelegate {
         }
     }
 
+    /// If the file search plugin is loading, spawn a background task to run mdfind.
+    fn maybe_spawn_file_search(&mut self, cx: &mut Context<Picker<Self>>) {
+        let pending = self
+            .registry
+            .get("builtin.file_search")
+            .and_then(|p| {
+                let fs = p
+                    .as_any()
+                    .downcast_ref::<rover_plugins::builtin::file_search::FileSearchPlugin>()?;
+                if fs.is_loading() && !fs.pending_query().is_empty() {
+                    Some(fs.pending_query().to_string())
+                } else {
+                    None
+                }
+            });
+
+        if let Some(query) = pending {
+            self.file_search_task = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
+                // Run mdfind on the async executor thread; it's blocking but short-lived.
+                let results = rover_commands::file_search::search_files(&query, 20);
+                let q = query.clone();
+                let _ = cx.update(|cx| {
+                    let _ = this.update(cx, |picker, cx| {
+                        if let Some(p) = picker
+                            .delegate
+                            .registry
+                            .get_mut("builtin.file_search")
+                        {
+                            if let Some(fs) = p.as_any_mut().downcast_mut::<rover_plugins::builtin::file_search::FileSearchPlugin>() {
+                                fs.set_results(&q, results);
+                            }
+                        }
+                        cx.notify();
+                    });
+                });
+            }));
+        }
+    }
+
     // ── Rendering helpers ────────────────────────────────────────────────
 
     fn pill(selected: bool, colors: &rover_theme::ThemeColors) -> Div {
@@ -683,6 +726,7 @@ impl PickerDelegate for RoverPluginDelegate {
 
     fn update_matches(&mut self, query: String, cx: &mut Context<Picker<Self>>) -> Task<()> {
         self.do_query(&query);
+        self.maybe_spawn_file_search(cx);
         cx.notify();
         Task::ready(())
     }

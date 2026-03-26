@@ -164,16 +164,8 @@ impl Plugin for EditorPlugin {
                 return ConfirmResult::Dismiss;
             }
 
-            // No path provided — just activate the editor app.
-            let script = format!(
-                r#"tell application "{}" to activate"#,
-                self.preferred_editor.name().replace('"', "\\\"")
-            );
-            let _ = std::process::Command::new("osascript")
-                .arg("-e")
-                .arg(&script)
-                .spawn();
-            return ConfirmResult::Dismiss;
+            // No path provided — activate the editor app via delegate (uses escape_applescript).
+            return ConfirmResult::LaunchApp(self.preferred_editor.name().to_string());
         }
         ConfirmResult::Stay
     }

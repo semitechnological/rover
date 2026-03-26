@@ -139,10 +139,6 @@ pub struct RoverPluginDelegate {
     // ── Semantic / help async state ──
     semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
 
-    // ── Terminal state ──
-    terminal_output: Option<String>,
-    terminal_running: bool,
-
     // ── App tracking state ──
     /// The frontmost app before Rover activated
     pub previous_frontmost_app: Option<String>,
@@ -167,7 +163,6 @@ impl RoverPluginDelegate {
         registry: PluginRegistry,
         db: Arc<RoverDb>,
         ai_session: Option<Arc<rusty_foundationmodels::Session>>,
-        ai_enabled: bool,
         semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
         live_tabs: Option<rover_browser::LiveBrowserTabsRef>,
         ext_runtimes: HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
@@ -235,8 +230,6 @@ impl RoverPluginDelegate {
             ai_session,
             ai_debounce: None,
             semantic,
-            terminal_output: None,
-            terminal_running: false,
             previous_frontmost_app,
             browser_was_focused,
             terminal_was_focused,

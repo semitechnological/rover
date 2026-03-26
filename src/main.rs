@@ -691,7 +691,6 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                         registry,
                         db,
                         ai_session,
-                        ai_enabled,
                         semantic,
                         Some(live_tabs_ref),
                         ext_runtimes,

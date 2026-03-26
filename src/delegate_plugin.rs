@@ -103,6 +103,14 @@ pub struct RoverPluginDelegate {
     fuzzy_candidates: Vec<StringMatchCandidate>,
     /// Maps candidate index → (plugin_id, CommandDescriptor)
     fuzzy_command_map: Vec<(String, CommandDescriptor)>,
+    /// Query history for up/down arrow cycling
+    query_history: Vec<String>,
+    /// Current position in query history (-1 or None means not browsing)
+    history_cursor: Option<usize>,
+    /// The query that was active before the user started browsing history
+    history_stash: String,
+    /// Number of context items (browser tabs, etc.) at the start of matches
+    context_count: usize,
 }
 
 impl RoverPluginDelegate {
@@ -125,6 +133,10 @@ impl RoverPluginDelegate {
             view_mode: ViewMode::Main,
             fuzzy_candidates,
             fuzzy_command_map,
+            query_history: Vec::new(),
+            history_cursor: None,
+            history_stash: String::new(),
+            context_count: 0,
         };
 
         // Initial empty query
@@ -135,6 +147,10 @@ impl RoverPluginDelegate {
     fn do_query(&mut self, query: &str) {
         self.query = query.to_string();
         self.matches.clear();
+        self.context_count = 0;
+
+        // Reset history browsing when the user types
+        self.history_cursor = None;
 
         match &self.view_mode {
             ViewMode::Submenu { plugin_id, .. } => {
@@ -308,6 +324,18 @@ impl PickerDelegate for RoverPluginDelegate {
             return false;
         }
 
+        // Save non-empty queries to history
+        let query = self.query.clone();
+        if !query.trim().is_empty() {
+            // Deduplicate: remove if already present, then push to end
+            self.query_history.retain(|q| q != &query);
+            self.query_history.push(query);
+            // Cap history size
+            if self.query_history.len() > 100 {
+                self.query_history.remove(0);
+            }
+        }
+
         let m = self.matches[self.selected_ix].clone();
         let result = match &self.view_mode {
             ViewMode::Submenu { plugin_id, .. } => {
@@ -337,6 +365,58 @@ impl PickerDelegate for RoverPluginDelegate {
     }
 
     fn dismissed(&mut self, _cx: &mut Context<Picker<Self>>) {}
+
+    fn no_matches_text(&self) -> SharedString {
+        match &self.view_mode {
+            ViewMode::Main => "No matches".into(),
+            ViewMode::Submenu { title, .. } => SharedString::from(format!("No {} found", title.to_lowercase())),
+        }
+    }
+
+    fn context_item_count(&self) -> usize {
+        self.context_count
+    }
+
+    fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
+        if self.query_history.is_empty() {
+            return None;
+        }
+
+        match self.history_cursor {
+            None => {
+                if up {
+                    // Start browsing history from the end
+                    self.history_stash = query.to_string();
+                    let ix = self.query_history.len() - 1;
+                    self.history_cursor = Some(ix);
+                    Some(self.query_history[ix].clone())
+                } else {
+                    None
+                }
+            }
+            Some(ix) => {
+                if up {
+                    if ix > 0 {
+                        let new_ix = ix - 1;
+                        self.history_cursor = Some(new_ix);
+                        Some(self.query_history[new_ix].clone())
+                    } else {
+                        None // At the beginning of history
+                    }
+                } else {
+                    if ix + 1 < self.query_history.len() {
+                        let new_ix = ix + 1;
+                        self.history_cursor = Some(new_ix);
+                        Some(self.query_history[new_ix].clone())
+                    } else {
+                        // Past the end — return to stashed query
+                        self.history_cursor = None;
+                        Some(self.history_stash.clone())
+                    }
+                }
+            }
+        }
+    }
 
     fn render_match(
         &self,

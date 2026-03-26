@@ -53,14 +53,16 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser"]
+default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser", "tile", "editor"]
 calculator = ["rover_plugins/calculator"]
 app-launcher = ["rover_plugins/app-launcher"]
 clipboard = ["rover_plugins/clipboard"]
 file-search = ["rover_plugins/file-search"]
-ai = ["rover_plugins/ai"]
+ai = ["rover_plugins/ai", "dep:rusty_foundationmodels"]
 terminal = ["rover_plugins/terminal"]
-browser = ["rover_plugins/browser"]
+browser = ["rover_plugins/browser", "dep:rover_browser"]
+tile = ["rover_plugins/tile"]
+editor = ["rover_plugins/editor"]
 
 [dependencies]
 gpui.workspace = true
@@ -79,8 +81,8 @@ rover_extensions.workspace = true
 rover_plugin_api.workspace = true
 rover_plugins.workspace = true
 rover_db.workspace = true
-rusty_foundationmodels.workspace = true
-rover_browser.workspace = true
+rusty_foundationmodels = { workspace = true, optional = true }
+rover_browser = { workspace = true, optional = true }
 rover_semantic.workspace = true
 
 

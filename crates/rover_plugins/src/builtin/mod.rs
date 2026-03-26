@@ -22,3 +22,9 @@ pub mod terminal;
 
 #[cfg(feature = "browser")]
 pub mod browser;
+
+#[cfg(feature = "tile")]
+pub mod tile;
+
+#[cfg(feature = "editor")]
+pub mod editor;

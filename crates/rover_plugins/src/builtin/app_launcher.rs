@@ -126,17 +126,9 @@ impl Plugin for AppLauncherPlugin {
         _ctx: &mut PluginContext,
     ) -> ConfirmResult {
         if let Some(app_name) = match_id.strip_prefix("launch:") {
-            if let Some(app) = self.apps.iter().find(|a| a.name == app_name) {
-                // Use AppleScript to activate (per CLAUDE.md: don't use `open -a`)
-                let script = format!(
-                    r#"tell application "{}" to activate"#,
-                    app.name.replace('"', "\\\"")
-                );
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(&script)
-                    .spawn();
-                return ConfirmResult::Dismiss;
+            if self.apps.iter().any(|a| a.name == app_name) {
+                // Delegate AppleScript execution to the host; it uses escape_applescript()
+                return ConfirmResult::LaunchApp(app_name.to_string());
             }
         }
         ConfirmResult::Stay

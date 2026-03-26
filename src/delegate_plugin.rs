@@ -419,10 +419,8 @@ impl RoverPluginDelegate {
                 true
             }
             ConfirmResult::LaunchApp(name) => {
-                let script = format!(
-                    r#"tell application "{}" to activate"#,
-                    name.replace('"', "\\\"")
-                );
+                let safe = crate::tools::escape_applescript(&name);
+                let script = format!(r#"tell application "{safe}" to activate"#);
                 let _ = std::process::Command::new("osascript")
                     .arg("-e")
                     .arg(&script)
@@ -459,10 +457,8 @@ impl RoverPluginDelegate {
                 true
             }
             ConfirmResult::QuitApp(name) => {
-                let script = format!(
-                    r#"tell application "{}" to quit"#,
-                    name.replace('"', "\\\"")
-                );
+                let safe = crate::tools::escape_applescript(&name);
+                let script = format!(r#"tell application "{safe}" to quit"#);
                 let _ = std::process::Command::new("osascript")
                     .arg("-e")
                     .arg(&script)

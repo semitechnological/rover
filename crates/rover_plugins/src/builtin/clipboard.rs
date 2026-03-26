@@ -6,6 +6,7 @@
 
 use rover_db::RoverDb;
 use rover_plugin_api::*;
+use std::any::Any;
 use std::sync::Arc;
 
 pub struct ClipboardPlugin {
@@ -124,6 +125,7 @@ impl Plugin for ClipboardPlugin {
                     icon: None,
                     score: 1.0 - (i as f64 * 0.001), // Most recent first
                     plugin_id: self.id().to_string(),
+                    render_hint: None,
                 })
             })
             .collect()
@@ -143,6 +145,33 @@ impl Plugin for ClipboardPlugin {
             }
         }
         ConfirmResult::Stay
+    }
+
+    fn context_items(&self, _ctx: &PluginContext) -> Vec<ContextItem> {
+        if let Some(db) = &self.db {
+            let recent = db.list_clipboard_history().unwrap_or_default();
+            recent
+                .into_iter()
+                .take(3)
+                .enumerate()
+                .map(|(i, entry)| {
+                    let preview: String = entry
+                        .content
+                        .chars()
+                        .take(30)
+                        .collect::<String>()
+                        .replace('\n', " ");
+                    ContextItem {
+                        id: format!("recent_clip:{}", i),
+                        label: preview,
+                        icon: Some(IconHint::Emoji("clipboard".to_string())),
+                        is_active: false,
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        }
     }
 
     fn actions_for_match(&self, match_id: &str) -> Vec<ActionDescriptor> {
@@ -193,4 +222,7 @@ impl Plugin for ClipboardPlugin {
         }
         ConfirmResult::Stay
     }
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

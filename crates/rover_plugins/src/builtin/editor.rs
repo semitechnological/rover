@@ -4,6 +4,7 @@
 //! supports opening recently-used files.
 
 use rover_plugin_api::*;
+use std::any::Any;
 
 /// Supported editor applications.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,4 +216,7 @@ impl Plugin for EditorPlugin {
             _ => ConfirmResult::Stay,
         }
     }
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

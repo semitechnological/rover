@@ -150,13 +150,14 @@ fn open_url_tool() -> ToolDefinition {
         Schema::new("OpenUrlArgs")
             .property(SchemaProperty::new("url", SchemaPropertyType::String).description("The URL to open")),
         |args| {
-            let url = args["url"]
-                .as_str()
-                .unwrap_or("")
-                .replace('\\', "%5C")
-                .replace('"', "%22")
-                .replace('\n', "")
-                .replace('\r', "");
+            let raw_url = args["url"].as_str().unwrap_or("");
+            // Percent-encode characters that are dangerous in AppleScript string context
+            let url: String = raw_url.chars().map(|c| match c {
+                '"' => "%22".to_string(),
+                '\\' => "%5C".to_string(),
+                c if c.is_control() => String::new(),
+                c => c.to_string(),
+            }).collect();
             let script = format!(
                 r#"tell application "Safari"
     activate
@@ -939,8 +940,6 @@ end tell"#
         },
     )
 }
-
-// ─── Keychain ─────────────────────────────────────────────────────────────────
 
 // ─── Browser Tab Management ───────────────────────────────────────────────────
 

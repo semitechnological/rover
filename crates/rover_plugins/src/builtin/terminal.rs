@@ -1,8 +1,11 @@
 //! Terminal plugin — runs shell commands inline or opens a terminal window.
 //!
 //! Match mode: `Prefix(">")` — activated when query starts with `>` or `!`.
+//! Also auto-suggests commands when terminal was recently focused (via
+//! `ctx.terminal_was_focused`).
 
 use rover_plugin_api::*;
+use std::any::Any;
 
 pub struct TerminalPlugin {
     last_output: Option<String>,
@@ -61,13 +64,26 @@ impl Plugin for TerminalPlugin {
         }]
     }
 
-    fn on_query(&mut self, query: &str, _ctx: &PluginContext) -> Vec<MatchResult> {
-        // Strip prefix
-        let cmd = query
-            .strip_prefix('>')
-            .or_else(|| query.strip_prefix('!'))
-            .map(|s| s.trim())
-            .unwrap_or("");
+    fn on_query(&mut self, query: &str, ctx: &PluginContext) -> Vec<MatchResult> {
+        // Check for explicit prefix
+        let has_prefix = query.starts_with('>') || query.starts_with('!');
+
+        // Auto-suggest: when terminal was focused, treat bare queries as commands
+        let auto_suggest = !has_prefix && ctx.terminal_was_focused && !query.is_empty();
+
+        if !has_prefix && !auto_suggest {
+            return vec![];
+        }
+
+        let cmd = if has_prefix {
+            query
+                .strip_prefix('>')
+                .or_else(|| query.strip_prefix('!'))
+                .map(|s| s.trim())
+                .unwrap_or("")
+        } else {
+            query.trim()
+        };
 
         if cmd.is_empty() {
             return vec![MatchResult {
@@ -77,17 +93,32 @@ impl Plugin for TerminalPlugin {
                 icon: Some(IconHint::Emoji("$".to_string())),
                 score: 1.0,
                 plugin_id: self.id().to_string(),
+                render_hint: Some(RenderHint::StatePill {
+                    label: "SHELL".to_string(),
+                    color: "green".to_string(),
+                }),
             }];
         }
 
-        vec![MatchResult {
+        let mut results = vec![MatchResult {
             id: format!("run:{}", cmd),
             title: format!("$ {}", cmd),
             subtitle: Some("Press Enter to run".to_string()),
             icon: Some(IconHint::Emoji("$".to_string())),
-            score: 1.0,
+            score: if auto_suggest { 0.7 } else { 1.0 },
             plugin_id: self.id().to_string(),
-        }]
+            render_hint: Some(RenderHint::StatePill {
+                label: "SHELL".to_string(),
+                color: "green".to_string(),
+            }),
+        }];
+
+        // When auto-suggesting, lower the score so fuzzy app matches still rank higher
+        if auto_suggest {
+            results[0].score = 0.7;
+        }
+
+        results
     }
 
     fn on_confirm(
@@ -121,4 +152,7 @@ impl Plugin for TerminalPlugin {
             None
         }
     }
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

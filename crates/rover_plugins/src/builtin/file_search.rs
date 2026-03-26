@@ -5,6 +5,7 @@
 
 use rover_commands::file_search;
 use rover_plugin_api::*;
+use std::any::Any;
 
 pub struct FileSearchPlugin {
     results: Vec<file_search::FileResult>,
@@ -85,6 +86,7 @@ impl Plugin for FileSearchPlugin {
                 icon: None,
                 score: 1.0 - (i as f64 * 0.01),
                 plugin_id: self.id().to_string(),
+                render_hint: None,
             })
             .collect()
     }
@@ -107,4 +109,7 @@ impl Plugin for FileSearchPlugin {
         }
         ConfirmResult::Stay
     }
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

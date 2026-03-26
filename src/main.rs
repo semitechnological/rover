@@ -1,9 +1,5 @@
 mod ai;
 mod clipboard_monitor;
-mod delegate;
-#[allow(dead_code)]
-mod delegate_legacy;
-#[allow(dead_code)]
 mod delegate_plugin;
 mod help_docs;
 mod hotkey;
@@ -11,12 +7,12 @@ mod settings_window;
 mod terminal;
 mod tools;
 
-use delegate::RoverDelegate;
+use delegate_plugin::RoverPluginDelegate;
 use gpui::*;
-use rover_commands::{register_apps, register_browser, register_builtins, CommandRegistry};
 use rover_db::RoverDb;
 use rover_extensions::{load_extensions, register_extension_themes};
 use rover_picker::{bind_picker_keys, Picker, PickerEvent};
+use rover_plugins::PluginRegistry;
 use rover_theme::{self, ThemeRegistry};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -35,8 +31,7 @@ impl Global for DbGlobal {}
 struct SemanticGlobal(pub Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>);
 impl Global for SemanticGlobal {}
 
-struct CommandsGlobal(Vec<rover_commands::Command>);
-impl Global for CommandsGlobal {}
+// CommandsGlobal removed — plugins own their commands now
 
 struct ExtensionRuntimesGlobal(
     std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
@@ -217,29 +212,8 @@ fn main() {
             register_extension_themes(&loaded_extensions, registry);
         }
 
-        let mut cmd_registry = CommandRegistry::new();
-        register_builtins(&mut cmd_registry);
-        register_browser(&mut cmd_registry);
-        register_apps(&mut cmd_registry);
-
-        // Load WASM extension runtimes and register their commands
+        // Load WASM extension runtimes
         let ext_runtimes = rover_extensions::runtime::load_extension_runtimes(&loaded_extensions);
-        for (ext_id, _runtime, commands) in &ext_runtimes {
-            for cmd_info in commands {
-                cmd_registry.register(rover_commands::Command {
-                    name: cmd_info.name.clone(),
-                    description: cmd_info.description.clone(),
-                    icon: None,
-                    kind: rover_commands::CommandKind::Extension {
-                        ext_id: ext_id.clone(),
-                        command: cmd_info.name.clone(),
-                    },
-                    has_submenu: false,
-                });
-            }
-        }
-
-        let commands: Vec<_> = cmd_registry.commands().to_vec();
 
         // Store extension runtimes as a global for command execution
         let runtime_map: std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef> =
@@ -258,11 +232,10 @@ fn main() {
         tools::set_yolo_mode(yolo);
 
         cx.set_global(DbGlobal(db.clone()));
-        cx.set_global(CommandsGlobal(commands.clone()));
         cx.set_global(WindowOpenGlobal(Arc::new(AtomicBool::new(false))));
         cx.set_global(WindowHandleGlobal(None));
         let last_frontmost = Arc::new(std::sync::Mutex::new(
-            delegate::RoverDelegate::detect_frontmost_app(),
+            RoverPluginDelegate::detect_frontmost_app(),
         ));
         cx.set_global(LastFrontmostAppGlobal(last_frontmost.clone()));
         let live_browser_tabs: rover_browser::LiveBrowserTabsRef =
@@ -349,9 +322,8 @@ fn main() {
                 cx.global_mut::<WindowHandleGlobal>().0 = None;
             } else {
                 let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
-                let commands = cx.global::<CommandsGlobal>().0.clone();
                 let db = cx.global::<DbGlobal>().0.clone();
-                open_window(commands, db, prev_app, cx);
+                open_window(db, prev_app, cx);
             }
         });
 
@@ -431,7 +403,7 @@ fn main() {
                     cx.background_executor()
                         .timer(std::time::Duration::from_millis(500))
                         .await;
-                    if let Some(app) = delegate::RoverDelegate::detect_frontmost_app() {
+                    if let Some(app) = RoverPluginDelegate::detect_frontmost_app() {
                         if let Ok(mut lock) = tracker.lock() {
                             *lock = Some(app);
                         }
@@ -464,9 +436,8 @@ fn main() {
                         } else {
                             // Use the continuously tracked last non-Rover frontmost app
                             let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
-                            let commands = cx.global::<CommandsGlobal>().0.clone();
                             let db = cx.global::<DbGlobal>().0.clone();
-                            open_window(commands, db, prev_app, cx);
+                            open_window(db, prev_app, cx);
                         }
                     });
                 }
@@ -510,10 +481,9 @@ fn main() {
         match cli {
             CliCommand::None => {
                 // Just start the menubar app — picker opens via hotkey
-                let commands = cx.global::<CommandsGlobal>().0.clone();
                 let db_clone = cx.global::<DbGlobal>().0.clone();
                 let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
-                open_window(commands, db_clone, prev_app, cx);
+                open_window(db_clone, prev_app, cx);
             }
             CliCommand::Browser => {
                 rover_browser::open_browser_window_with_live_tabs(
@@ -599,7 +569,7 @@ fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) 
     });
 }
 
-fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
+fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
 
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
@@ -619,8 +589,6 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previou
         match picker_position.as_str() {
             "cursor" => {
                 let (cx_pos, cy_pos) = cursor_position();
-                // Position window so the input bar (at bottom) sits just above the cursor,
-                // offset slightly to the right so the cursor isn't hidden.
                 let x = (cx_pos - w * 0.35).max(8.0).min(sw - w - 8.0);
                 let y = (cy_pos - h - 8.0).max(8.0).min(sh - h - 8.0);
                 Bounds {
@@ -644,7 +612,6 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previou
                 }
             }
             _ => {
-                // "center" (default)
                 let x = (sw - w) / 2.0;
                 let y = (sh - h) / 2.0;
                 Bounds {
@@ -673,19 +640,7 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previou
     let ai_enabled = ai_session.is_some();
 
     let ext_runtimes = cx.global::<ExtensionRuntimesGlobal>().0.clone();
-    // Read live browser context (populated by browser window when open)
     let live_tabs_ref = cx.global::<LiveBrowserTabsGlobal>().0.clone();
-    let live_browser_ctx = {
-        let lt = live_tabs_ref.lock().unwrap();
-        if lt.tabs.is_empty() {
-            None
-        } else {
-            Some(delegate::BrowserContext {
-                tabs: lt.tabs.iter().map(|(t, u, s, la)| (t.clone(), u.clone(), s.clone(), *la)).collect(),
-                active_tab: lt.active_tab,
-            })
-        }
-    };
 
     let window = cx
         .open_window(
@@ -710,13 +665,39 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previou
                         .flatten()
                         .map(|v| v == "true")
                         .unwrap_or(false);
-                    // Browser tabs only show if the browser window is actually open (live tabs exist)
-                    let browser_focused = live_browser_ctx.as_ref().map(|c| !c.tabs.is_empty()).unwrap_or(false);
-                    let terminal_focused = previous_app.as_ref().map(|a| a == "Ghostty").unwrap_or(false);
-                    let mut delegate = RoverDelegate::new(commands, db, ai_session, ai_enabled, semantic, live_browser_ctx, Some(live_tabs_ref), ext_runtimes);
-                    delegate.previous_frontmost_app = previous_app.clone();
-                    delegate.browser_was_focused = browser_focused;
-                    delegate.terminal_was_focused = terminal_focused;
+
+                    // Build plugin registry with all builtin plugins
+                    let mut registry = PluginRegistry::new();
+                    use rover_plugin_api::PluginConfig;
+                    let mut ctx = rover_plugin_api::PluginContext::new(PluginConfig::default());
+                    ctx.frontmost_app = previous_app.clone();
+
+                    // Register all builtin plugins
+                    registry.register(Box::new(rover_plugins::builtin::calculator::CalculatorPlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::app_launcher::AppLauncherPlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::clipboard::ClipboardPlugin::new(db.clone())));
+                    registry.register(Box::new(rover_plugins::builtin::file_search::FileSearchPlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::ai::AiPlugin::new(ai_enabled)));
+                    registry.register(Box::new(rover_plugins::builtin::terminal::TerminalPlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::browser::BrowserPlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::search_engine::SearchEnginePlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::quit::QuitPlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::help::HelpPlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::tile::TilePlugin::new()));
+                    registry.register(Box::new(rover_plugins::builtin::editor::EditorPlugin::new()));
+
+                    // Initialize all plugins
+                    registry.init_all(&mut ctx);
+
+                    let delegate = RoverPluginDelegate::new(
+                        registry,
+                        db,
+                        ai_session,
+                        ai_enabled,
+                        semantic,
+                        Some(live_tabs_ref),
+                        ext_runtimes,
+                    );
                     let picker = cx.new(|cx| {
                         let mut p = Picker::new(delegate, cx);
                         p.compact = compact;
@@ -745,8 +726,6 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previou
                                 }
                                 PickerEvent::OpenBrowser { url } => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
-                                    // Queue the URL for the entity-free polling task — avoids
-                                    // cx.open_window being called inside an entity event handler.
                                     *cx.global::<PendingBrowserUrlGlobal>().0.lock().unwrap() = Some(url.clone());
                                     window.remove_window();
                                 }
@@ -807,7 +786,7 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, previou
 }
 
 struct RoverWindow {
-    picker: Entity<Picker<RoverDelegate>>,
+    picker: Entity<Picker<RoverPluginDelegate>>,
 }
 
 impl Render for RoverWindow {

@@ -4,6 +4,7 @@
 //! Match mode: `FuzzyCommand` — commands are matched via fuzzy search.
 
 use rover_plugin_api::*;
+use std::any::Any;
 
 /// Recognized tiling positions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -313,4 +314,7 @@ impl Plugin for TilePlugin {
         }
         ConfirmResult::Stay
     }
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

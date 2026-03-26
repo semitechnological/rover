@@ -5590,6 +5590,7 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "log",
+ "rover_browser",
  "rover_commands",
  "rover_db",
  "rover_fuzzy",
@@ -5597,6 +5598,7 @@ dependencies = [
  "serde",
  "serde_json",
  "toml 0.8.23",
+ "urlencoding",
 ]
 
 [[package]]

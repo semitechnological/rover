@@ -199,6 +199,14 @@ pub trait Plugin: Send + Sync {
     ) -> ConfirmResult {
         ConfirmResult::Stay
     }
+
+    // ── Downcasting ─────────────────────────────────────────────────────
+
+    /// Downcast to concrete type for plugin-specific API access.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Downcast to concrete type (mutable) for plugin-specific API access.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 // ─── Match Mode ──────────────────────────────────────────────────────────────
@@ -257,6 +265,8 @@ pub struct MatchResult {
     pub score: f64,
     /// The plugin that produced this result.
     pub plugin_id: String,
+    /// Optional rendering hint for this specific result.
+    pub render_hint: Option<RenderHint>,
 }
 
 // ─── Confirm Result ──────────────────────────────────────────────────────────
@@ -283,6 +293,8 @@ pub enum ConfirmResult {
     OpenTerminal(Option<String>),
     /// Open the settings window.
     OpenSettings,
+    /// Quit/force-quit a macOS application by name.
+    QuitApp(String),
     /// Custom result for internal use.
     Custom(Box<dyn Any + Send>),
 }
@@ -349,6 +361,10 @@ pub enum RenderHint {
     WithSubtitle { subtitle: String },
     /// Show a preview text.
     WithPreview { preview: String },
+    /// Show a colored state pill next to the title (e.g. "URL", "SHELL", "AI").
+    StatePill { label: String, color: String },
+    /// Show inline action buttons alongside the match row.
+    WithActions { actions: Vec<ActionDescriptor> },
 }
 
 // ─── Action Descriptor ───────────────────────────────────────────────────────
@@ -369,16 +385,36 @@ pub struct PluginContext {
     pub db: Option<Arc<dyn PluginStorage>>,
     /// Plugin-specific configuration.
     pub config: PluginConfig,
+    /// Name of the frontmost macOS app (before Rover activated).
+    pub frontmost_app: Option<String>,
+    /// Whether a terminal window was focused before Rover activated.
+    pub terminal_was_focused: bool,
+    /// Opaque handles for heavyweight services (AI session, live tabs, etc.)
+    /// keyed by convention: `"ai_session"`, `"live_tabs"`, `"semantic_index"`.
+    pub extras: HashMap<String, Arc<dyn Any + Send + Sync>>,
 }
 
 impl PluginContext {
     pub fn new(config: PluginConfig) -> Self {
-        Self { db: None, config }
+        Self {
+            db: None,
+            config,
+            frontmost_app: None,
+            terminal_was_focused: false,
+            extras: HashMap::new(),
+        }
     }
 
     pub fn with_storage(mut self, db: Arc<dyn PluginStorage>) -> Self {
         self.db = Some(db);
         self
+    }
+
+    /// Get a typed extra by key, returning None if missing or wrong type.
+    pub fn extra<T: 'static + Send + Sync>(&self, key: &str) -> Option<Arc<T>> {
+        self.extras
+            .get(key)
+            .and_then(|v| v.clone().downcast::<T>().ok())
     }
 }
 

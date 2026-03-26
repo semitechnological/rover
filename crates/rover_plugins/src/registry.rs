@@ -362,6 +362,9 @@ mod tests {
                 ConfirmResult::Stay
             }
         }
+
+        fn as_any(&self) -> &dyn std::any::Any { self }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any { self }
     }
 
     fn make_match(id: &str, title: &str, score: f64, plugin_id: &str) -> MatchResult {
@@ -372,6 +375,7 @@ mod tests {
             icon: None,
             score,
             plugin_id: plugin_id.to_string(),
+            render_hint: None,
         }
     }
 

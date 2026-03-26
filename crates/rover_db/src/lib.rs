@@ -135,7 +135,11 @@ impl RoverDb {
                 combined.extend(ciphertext);
                 BASE64.encode(&combined)
             }
-            Err(_) => plaintext.to_string(),
+            Err(e) => {
+                log::error!("clipboard encryption failed, storing encrypted marker: {e}");
+                // Never store plaintext on encryption failure — use a placeholder
+                "[encryption failed]".to_string()
+            }
         }
     }
 
@@ -455,10 +459,11 @@ impl RoverDb {
 
     pub fn search_history(&self, query: &str, limit: usize) -> Result<Vec<HistoryRow>> {
         let conn = self.conn.lock().unwrap();
-        let pattern = format!("%{}%", query);
+        let escaped = query.replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
         let mut stmt = conn.prepare(
             "SELECT id, url, title, visited_at, visit_count FROM browser_history
-             WHERE url LIKE ?1 OR title LIKE ?1
+             WHERE url LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\'
              ORDER BY visited_at DESC
              LIMIT ?2",
         )?;
@@ -528,10 +533,11 @@ impl RoverDb {
 
     pub fn search_bookmarks(&self, query: &str) -> Result<Vec<BookmarkRow>> {
         let conn = self.conn.lock().unwrap();
-        let pattern = format!("%{}%", query);
+        let escaped = query.replace('%', "\\%").replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
         let mut stmt = conn.prepare(
             "SELECT id, url, title, created_at FROM bookmarks
-             WHERE url LIKE ?1 OR title LIKE ?1
+             WHERE url LIKE ?1 ESCAPE '\\' OR title LIKE ?1 ESCAPE '\\'
              ORDER BY created_at DESC",
         )?;
         let rows = stmt
@@ -805,6 +811,34 @@ mod tests {
         db.add_bookmark("", "Empty").unwrap();
         db.add_bookmark("  ", "Spaces").unwrap();
         assert!(db.list_bookmarks().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_search_escapes_like_wildcards() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_history("https://example.com/100%_done", "100% Done").unwrap();
+        db.add_history("https://other.com/safe", "Safe Page").unwrap();
+
+        // Searching for "%" should only match the URL/title containing a literal %
+        let results = db.search_history("%", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://example.com/100%_done");
+
+        // Searching for "_" should only match the URL/title containing a literal _
+        let results = db.search_history("_", 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://example.com/100%_done");
+    }
+
+    #[test]
+    fn test_bookmark_search_escapes_like_wildcards() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_bookmark("https://example.com/100%", "100% Complete").unwrap();
+        db.add_bookmark("https://other.com/safe", "Safe").unwrap();
+
+        let results = db.search_bookmarks("%").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].url, "https://example.com/100%");
     }
 
     #[test]

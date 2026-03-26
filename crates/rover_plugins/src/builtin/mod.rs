@@ -28,3 +28,12 @@ pub mod tile;
 
 #[cfg(feature = "editor")]
 pub mod editor;
+
+#[cfg(feature = "search-engine")]
+pub mod search_engine;
+
+#[cfg(feature = "quit")]
+pub mod quit;
+
+#[cfg(feature = "help")]
+pub mod help;

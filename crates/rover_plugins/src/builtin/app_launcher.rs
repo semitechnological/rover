@@ -7,6 +7,7 @@
 use rover_commands::app_launcher::discover_apps;
 use rover_fuzzy::{match_strings, StringMatch, StringMatchCandidate};
 use rover_plugin_api::*;
+use std::any::Any;
 
 /// Info about a discovered macOS application.
 #[derive(Debug, Clone)]
@@ -111,6 +112,7 @@ impl Plugin for AppLauncherPlugin {
                     icon: Some(IconHint::AppIcon(app.name.clone())),
                     score: m.score as f64,
                     plugin_id: self.id().to_string(),
+                    render_hint: None,
                 })
             })
             .collect()
@@ -182,4 +184,7 @@ impl Plugin for AppLauncherPlugin {
             _ => ConfirmResult::Stay,
         }
     }
+
+    fn as_any(&self) -> &dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

@@ -56,6 +56,18 @@ fn require_permission(action: &str) -> Result<(), String> {
 /// Shared shell execution with 64 KB output truncation.
 const SHELL_OUTPUT_LIMIT: usize = 65_536;
 
+fn truncate_to_char_boundary(s: &mut String, max_len: usize) {
+    if s.len() <= max_len {
+        return;
+    }
+
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s.truncate(end);
+}
+
 fn run_shell_command(command: &str) -> Result<String, String> {
     let output = std::process::Command::new("sh")
         .arg("-c")
@@ -65,17 +77,17 @@ fn run_shell_command(command: &str) -> Result<String, String> {
     let mut stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     if stdout.len() > SHELL_OUTPUT_LIMIT {
-        stdout.truncate(SHELL_OUTPUT_LIMIT);
+        truncate_to_char_boundary(&mut stdout, SHELL_OUTPUT_LIMIT);
         stdout.push_str("\n[output truncated]");
     }
     if stderr.len() > SHELL_OUTPUT_LIMIT {
-        stderr.truncate(SHELL_OUTPUT_LIMIT);
+        truncate_to_char_boundary(&mut stderr, SHELL_OUTPUT_LIMIT);
         stderr.push_str("\n[output truncated]");
     }
     if output.status.success() {
         Ok(stdout)
     } else {
-        Ok(format!("stdout: {stdout}\nstderr: {stderr}"))
+        Err(format!("stdout: {stdout}\nstderr: {stderr}"))
     }
 }
 
@@ -1029,4 +1041,24 @@ fn get_keychain_secret_tool() -> ToolDefinition {
             }
         },
     )
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncates_multibyte_strings_on_char_boundaries() {
+        let mut value = "a\u00E9\u{1f600}".to_string();
+        truncate_to_char_boundary(&mut value, 2);
+        assert_eq!(value, "a");
+    }
+
+    #[test]
+    fn returns_error_for_failed_shell_commands() {
+        let err = run_shell_command("printf ok; printf err >&2; exit 3").unwrap_err();
+        assert!(err.contains("stdout: ok"));
+        assert!(err.contains("stderr: err"));
+    }
 }

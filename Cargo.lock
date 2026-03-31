@@ -5461,6 +5461,7 @@ dependencies = [
  "objc",
  "raw-window-handle",
  "rover_browser",
+ "rover_commands",
  "rover_db",
  "rover_extensions",
  "rover_fuzzy",

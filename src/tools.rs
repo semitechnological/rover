@@ -1050,7 +1050,7 @@ mod tests {
 
     #[test]
     fn truncates_multibyte_strings_on_char_boundaries() {
-        let mut value = "a\u00E9\u{1f600}".to_string();
+        let mut value = "a\u{00E9}\u{1f600}".to_string();
         truncate_to_char_boundary(&mut value, 2);
         assert_eq!(value, "a");
     }

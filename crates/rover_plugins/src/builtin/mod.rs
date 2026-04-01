@@ -23,17 +23,5 @@ pub mod terminal;
 #[cfg(feature = "browser")]
 pub mod browser;
 
-#[cfg(feature = "tile")]
+#[cfg(all(feature = "tile", target_os = "macos"))]
 pub mod tile;
-
-#[cfg(feature = "editor")]
-pub mod editor;
-
-#[cfg(feature = "search-engine")]
-pub mod search_engine;
-
-#[cfg(feature = "quit")]
-pub mod quit;
-
-#[cfg(feature = "help")]
-pub mod help;

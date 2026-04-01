@@ -5590,15 +5590,14 @@ dependencies = [
  "anyhow",
  "dirs 6.0.0",
  "log",
- "rover_browser",
  "rover_commands",
  "rover_db",
  "rover_fuzzy",
  "rover_plugin_api",
  "serde",
  "serde_json",
- "toml 0.8.23",
- "urlencoding",
+ "tile_ax",
+ "tile_core",
 ]
 
 [[package]]
@@ -5622,6 +5621,21 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rover_wm"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -6720,6 +6734,28 @@ dependencies = [
  "quick-error",
  "weezl",
  "zune-jpeg",
+]
+
+[[package]]
+name = "tile_ax"
+version = "0.1.0"
+dependencies = [
+ "core-foundation 0.10.0",
+ "core-graphics 0.24.0",
+ "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-foundation",
+ "tile_core",
+]
+
+[[package]]
+name = "tile_core"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

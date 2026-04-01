@@ -6,7 +6,6 @@
 
 use rover_db::RoverDb;
 use rover_plugin_api::*;
-use std::any::Any;
 use std::sync::Arc;
 
 pub struct ClipboardPlugin {
@@ -15,8 +14,6 @@ pub struct ClipboardPlugin {
     entries: Vec<rover_db::ClipboardEntry>,
     /// Filtered indices into `entries`.
     filtered: Vec<usize>,
-    /// Recent entries for the context pill bar (up to 3), cached to avoid DB hits on every render.
-    recent_context: Vec<rover_db::ClipboardEntry>,
 }
 
 impl ClipboardPlugin {
@@ -25,7 +22,6 @@ impl ClipboardPlugin {
             db: Some(db),
             entries: Vec::new(),
             filtered: Vec::new(),
-            recent_context: Vec::new(),
         }
     }
 
@@ -33,7 +29,6 @@ impl ClipboardPlugin {
         if let Some(db) = &self.db {
             self.entries = db.list_clipboard_history().unwrap_or_default();
             self.filtered = (0..self.entries.len()).collect();
-            self.recent_context = self.entries.iter().take(3).cloned().collect();
         }
     }
 
@@ -129,7 +124,6 @@ impl Plugin for ClipboardPlugin {
                     icon: None,
                     score: 1.0 - (i as f64 * 0.001), // Most recent first
                     plugin_id: self.id().to_string(),
-                    render_hint: None,
                 })
             })
             .collect()
@@ -149,27 +143,6 @@ impl Plugin for ClipboardPlugin {
             }
         }
         ConfirmResult::Stay
-    }
-
-    fn context_items(&self, _ctx: &PluginContext) -> Vec<ContextItem> {
-        self.recent_context
-            .iter()
-            .enumerate()
-            .map(|(i, entry)| {
-                let preview: String = entry
-                    .content
-                    .chars()
-                    .take(30)
-                    .collect::<String>()
-                    .replace('\n', " ");
-                ContextItem {
-                    id: format!("recent_clip:{}", i),
-                    label: preview,
-                    icon: Some(IconHint::Emoji("clipboard".to_string())),
-                    is_active: false,
-                }
-            })
-            .collect()
     }
 
     fn actions_for_match(&self, match_id: &str) -> Vec<ActionDescriptor> {
@@ -210,7 +183,7 @@ impl Plugin for ClipboardPlugin {
                             if let Some(db) = &self.db {
                                 let _ = db.delete_clipboard_entry(entry.id);
                             }
-                            self.load_entries(); // also refreshes recent_context
+                            self.load_entries();
                         }
                         return ConfirmResult::Stay;
                     }
@@ -220,7 +193,4 @@ impl Plugin for ClipboardPlugin {
         }
         ConfirmResult::Stay
     }
-
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

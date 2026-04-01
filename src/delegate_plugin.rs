@@ -1,17 +1,15 @@
-//! Plugin-based `RoverPluginDelegate` — dispatches all logic to the PluginRegistry.
+//! Thin `RoverDelegate` that dispatches all logic to the PluginRegistry.
 //!
-//! This replaces the monolithic `delegate.rs` with a slim adapter
+//! This replaces the monolithic `delegate_legacy.rs` with a slim adapter
 //! between the `rover_picker::PickerDelegate` trait and the plugin system.
 
 use gpui::prelude::*;
 use gpui::*;
-use rover_db::RoverDb;
 use rover_fuzzy::{match_strings, StringMatchCandidate};
 use rover_picker::{ItemAction, Picker, PickerDelegate, PickerEvent};
 use rover_plugin_api::*;
 use rover_plugins::PluginRegistry;
 use rover_theme::theme;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 // ─── View modes ──────────────────────────────────────────────────────────────
@@ -90,21 +88,6 @@ impl PickerMatch {
             PickerMatch::SubmenuItem(r) => r.score,
         }
     }
-
-    fn render_hint(&self) -> Option<&RenderHint> {
-        match self {
-            PickerMatch::PluginResult(r) => r.render_hint.as_ref(),
-            _ => None,
-        }
-    }
-
-    fn icon_hint(&self) -> Option<&IconHint> {
-        match self {
-            PickerMatch::PluginResult(r) => r.icon.as_ref(),
-            PickerMatch::FuzzyCommand { descriptor, .. } => descriptor.icon.as_ref(),
-            PickerMatch::SubmenuItem(r) => r.icon.as_ref(),
-        }
-    }
 }
 
 // ─── The delegate ────────────────────────────────────────────────────────────
@@ -120,93 +103,10 @@ pub struct RoverPluginDelegate {
     fuzzy_candidates: Vec<StringMatchCandidate>,
     /// Maps candidate index → (plugin_id, CommandDescriptor)
     fuzzy_command_map: Vec<(String, CommandDescriptor)>,
-    /// Number of context items (browser tabs, etc.) at the start of matches
-    context_count: usize,
-
-    // ── DB-backed state ──
-    db: Arc<RoverDb>,
-    /// Query history for up/down arrow cycling
-    query_history: Vec<String>,
-    /// Current position in query history
-    history_cursor: Option<usize>,
-    /// The query that was active before the user started browsing history
-    history_stash: String,
-
-    // ── AI async state ──
-    ai_session: Option<Arc<rusty_foundationmodels::Session>>,
-    ai_debounce: Option<Task<()>>,
-
-    // ── File search async state ──
-    file_search_task: Option<Task<()>>,
-
-    // ── Semantic / help async state ──
-    semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
-
-    // ── App tracking state ──
-    /// The frontmost app before Rover activated
-    pub previous_frontmost_app: Option<String>,
-    /// Whether the browser was focused before Rover activated
-    pub browser_was_focused: bool,
-    /// Whether a terminal (Ghostty, etc.) was focused before Rover activated
-    pub terminal_was_focused: bool,
-
-    // ── Browser state ──
-    live_tabs: Option<rover_browser::LiveBrowserTabsRef>,
-
-    // ── Extension runtimes ──
-    ext_runtimes: HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
-
-    // ── Cached inline content ──
-    cached_ai_text: Option<String>,
-    cached_terminal_output: Option<(String, bool)>,
 }
 
 impl RoverPluginDelegate {
-    pub fn new(
-        registry: PluginRegistry,
-        db: Arc<RoverDb>,
-        ai_session: Option<Arc<rusty_foundationmodels::Session>>,
-        semantic: Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
-        live_tabs: Option<rover_browser::LiveBrowserTabsRef>,
-        ext_runtimes: HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef>,
-        previous_app: Option<String>,
-    ) -> Self {
-        // Build plugin context with extras
-        let mut extras: HashMap<String, Arc<dyn std::any::Any + Send + Sync>> = HashMap::new();
-        if let Some(ref session) = ai_session {
-            extras.insert("ai_session".to_string(), session.clone());
-        }
-        if let Some(ref tabs) = live_tabs {
-            extras.insert("live_tabs".to_string(), tabs.clone());
-        }
-        if let Some(ref sem) = semantic {
-            extras.insert("semantic_index".to_string(), sem.clone());
-        }
-
-        // Use the pre-computed frontmost app from the background poller (avoids a blocking osascript call)
-        let previous_frontmost_app = previous_app;
-        let terminal_was_focused = previous_frontmost_app
-            .as_ref()
-            .map(|n| n == "Ghostty" || n == "Terminal" || n == "iTerm2" || n == "Alacritty" || n == "kitty" || n == "WezTerm")
-            .unwrap_or(false);
-        let browser_was_focused = previous_frontmost_app
-            .as_ref()
-            .map(|n| n == "rover" || n == "Rover")
-            .unwrap_or(false);
-
-        let plugin_ctx = PluginContext {
-            db: None,
-            config: PluginConfig::default(),
-            frontmost_app: previous_frontmost_app.clone(),
-            terminal_was_focused,
-            extras,
-        };
-
-        // Load query history from DB
-        let query_history = db
-            .list_query_history()
-            .unwrap_or_default();
-
+    pub fn new(registry: PluginRegistry, plugin_ctx: PluginContext) -> Self {
         // Build fuzzy candidates from all plugin commands
         let all_commands = registry.all_commands();
         let fuzzy_candidates: Vec<StringMatchCandidate> = all_commands
@@ -225,22 +125,6 @@ impl RoverPluginDelegate {
             view_mode: ViewMode::Main,
             fuzzy_candidates,
             fuzzy_command_map,
-            context_count: 0,
-            db,
-            query_history,
-            history_cursor: None,
-            history_stash: String::new(),
-            ai_session,
-            ai_debounce: None,
-            file_search_task: None,
-            semantic,
-            previous_frontmost_app,
-            browser_was_focused,
-            terminal_was_focused,
-            live_tabs,
-            ext_runtimes,
-            cached_ai_text: None,
-            cached_terminal_output: None,
         };
 
         // Initial empty query
@@ -248,36 +132,9 @@ impl RoverPluginDelegate {
         delegate
     }
 
-    /// Detect the frontmost app BEFORE Rover activates.
-    pub fn detect_frontmost_app() -> Option<String> {
-        let output = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg(r#"tell application "System Events" to get name of first application process whose frontmost is true"#)
-            .output()
-            .ok()?;
-        if output.status.success() {
-            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !name.is_empty() && name != "rover" && name != "Rover" {
-                Some(name)
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    }
-
     fn do_query(&mut self, query: &str) {
         self.query = query.to_string();
         self.matches.clear();
-        self.context_count = 0;
-
-        // Reset history browsing when the user types
-        self.history_cursor = None;
-
-        // Update plugin context with current state
-        self.plugin_ctx.frontmost_app = self.previous_frontmost_app.clone();
-        self.plugin_ctx.terminal_was_focused = self.terminal_was_focused;
 
         match &self.view_mode {
             ViewMode::Submenu { plugin_id, .. } => {
@@ -294,32 +151,26 @@ impl RoverPluginDelegate {
                         .map(|m| m.score > 0)
                         .unwrap_or(false);
 
-                // 2. Query non-FuzzyCommand plugins (AlwaysEvaluate, Prefix, Fallback).
-                // Pass has_calc_result=false first; if the calculator fires we filter
-                // Fallback results out directly rather than re-running the entire query.
+                // 2. Query non-FuzzyCommand plugins (AlwaysEvaluate, Prefix, Fallback)
                 let plugin_results = self.registry.query(
                     query,
                     has_good_fuzzy,
-                    false,
+                    false, // will be updated after we get calc results
                     &self.plugin_ctx,
                 );
-                let has_calc_result = plugin_results
-                    .iter()
-                    .any(|r| r.plugin_id == "builtin.calculator");
+                let has_calc_result = plugin_results.iter().any(|r| r.plugin_id == "builtin.calculator");
 
-                // Filter Fallback results when calc has a result, avoiding a second query.
-                let final_plugin_results: Vec<MatchResult> = if has_calc_result {
-                    plugin_results.into_iter()
-                        .filter(|r| !matches!(
-                            self.registry.get(&r.plugin_id).map(|p| p.match_mode()),
-                            Some(MatchMode::Fallback { .. })
-                        ))
-                        .collect()
-                } else {
+                // Re-query fallback plugins now that we know about calc
+                let final_plugin_results = if has_calc_result && !plugin_results.iter().any(|r| {
+                    r.plugin_id.contains("ai") || r.plugin_id.contains("terminal")
+                }) {
+                    // No need to re-query if no fallback results were included
                     plugin_results
+                } else {
+                    self.registry.query(query, has_good_fuzzy, has_calc_result, &self.plugin_ctx)
                 };
 
-                // Add plugin results (calc, terminal, search engine, AI, quit, etc.)
+                // Add plugin results (calc, terminal prefix, AI fallback, etc.)
                 for result in final_plugin_results {
                     self.matches.push(PickerMatch::PluginResult(result));
                 }
@@ -337,6 +188,7 @@ impl RoverPluginDelegate {
 
                 // Sort: plugin results first (by priority), then fuzzy matches by score
                 self.matches.sort_by(|a, b| {
+                    // Plugin results before fuzzy commands
                     let a_is_plugin = matches!(a, PickerMatch::PluginResult(_));
                     let b_is_plugin = matches!(b, PickerMatch::PluginResult(_));
                     if a_is_plugin != b_is_plugin {
@@ -346,13 +198,11 @@ impl RoverPluginDelegate {
                             std::cmp::Ordering::Greater
                         };
                     }
+                    // Then by score descending
                     b.score().partial_cmp(&a.score()).unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
         }
-
-        // Update cached inline content
-        self.update_inline_caches();
 
         // Clamp selection
         if self.selected_ix >= self.matches.len() {
@@ -360,53 +210,12 @@ impl RoverPluginDelegate {
         }
     }
 
-    fn update_inline_caches(&mut self) {
-        // Cache AI inline content
-        self.cached_ai_text = None;
-        if let Some(ai) = self.registry.get("builtin.ai") {
-            if let Some(InlineContent::Text(text)) = ai.inline_content(&self.plugin_ctx) {
-                self.cached_ai_text = Some(text);
-            }
-        }
-        // Also check help plugin
-        if self.cached_ai_text.is_none() {
-            if let Some(help) = self.registry.get("builtin.help") {
-                if let Some(InlineContent::Text(text)) = help.inline_content(&self.plugin_ctx) {
-                    self.cached_ai_text = Some(text);
-                }
-            }
-        }
-
-        // Cache terminal inline content
-        self.cached_terminal_output = None;
-        if let Some(term) = self.registry.get("builtin.terminal") {
-            match term.inline_content(&self.plugin_ctx) {
-                Some(InlineContent::TerminalOutput { output, running }) => {
-                    self.cached_terminal_output = Some((output, running));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn handle_confirm_result(
-        &mut self,
-        result: ConfirmResult,
-        cx: &mut Context<Picker<Self>>,
-    ) -> bool {
+    fn handle_confirm_result(&mut self, result: ConfirmResult, cx: &mut Context<Picker<Self>>) -> bool {
         match result {
             ConfirmResult::Dismiss => true,
-            ConfirmResult::Stay => {
-                // Check if AI plugin started loading — spawn async task
-                self.maybe_spawn_ai(cx);
-                self.maybe_spawn_help(cx);
-                cx.notify();
-                false
-            }
+            ConfirmResult::Stay => false,
             ConfirmResult::EnterSubmenu { title } => {
-                let plugin_id = self
-                    .matches
-                    .get(self.selected_ix)
+                let plugin_id = self.matches.get(self.selected_ix)
                     .map(|m| m.plugin_id().to_string())
                     .unwrap_or_default();
                 self.view_mode = ViewMode::Submenu { plugin_id, title };
@@ -421,16 +230,13 @@ impl RoverPluginDelegate {
                 true
             }
             ConfirmResult::RunShell(cmd) => {
+                // Run via sh -c
                 let _ = std::process::Command::new("sh").arg("-c").arg(&cmd).spawn();
                 true
             }
             ConfirmResult::LaunchApp(name) => {
-                let safe = crate::tools::escape_applescript(&name);
-                let script = format!(r#"tell application "{safe}" to activate"#);
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(&script)
-                    .spawn();
+                let script = format!(r#"tell application "{}" to activate"#, name.replace('"', "\\\""));
+                let _ = std::process::Command::new("osascript").arg("-e").arg(&script).spawn();
                 true
             }
             ConfirmResult::OpenWindow(req) => {
@@ -462,239 +268,8 @@ impl RoverPluginDelegate {
                 cx.emit(PickerEvent::OpenSettings);
                 true
             }
-            ConfirmResult::QuitApp(name) => {
-                let safe = crate::tools::escape_applescript(&name);
-                let script = format!(r#"tell application "{safe}" to quit"#);
-                let _ = std::process::Command::new("osascript")
-                    .arg("-e")
-                    .arg(&script)
-                    .spawn();
-                true
-            }
             ConfirmResult::Custom(_) => false,
         }
-    }
-
-    /// If the AI plugin is loading, spawn an async task to get the response.
-    fn maybe_spawn_ai(&mut self, cx: &mut Context<Picker<Self>>) {
-        let ai_loading = self
-            .registry
-            .get("builtin.ai")
-            .and_then(|p| {
-                let ai = p.as_any().downcast_ref::<rover_plugins::builtin::ai::AiPlugin>()?;
-                if ai.is_loading() { Some(ai.last_query().to_string()) } else { None }
-            });
-
-        if let Some(query) = ai_loading {
-            if let Some(session) = self.ai_session.clone() {
-                self.ai_debounce = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
-                    let result = session.respond(&query).await;
-                    let _ = cx.update(|cx| {
-                        let _ = this.update(cx, |picker, cx| {
-                            if let Some(ai) = picker.delegate.registry.get_mut("builtin.ai") {
-                                if let Some(ai_plugin) = ai.as_any_mut().downcast_mut::<rover_plugins::builtin::ai::AiPlugin>() {
-                                    ai_plugin.set_result(Some(match result {
-                                        Ok(text) => text,
-                                        Err(e) => format!("Error: {e}"),
-                                    }));
-                                }
-                            }
-                            picker.delegate.update_inline_caches();
-                            cx.notify();
-                        });
-                    });
-                }));
-            }
-        }
-    }
-
-    /// If the help plugin is loading, spawn async semantic search + AI.
-    fn maybe_spawn_help(&mut self, cx: &mut Context<Picker<Self>>) {
-        let help_loading = self
-            .registry
-            .get("builtin.help")
-            .and_then(|p| {
-                let help = p.as_any().downcast_ref::<rover_plugins::builtin::help::HelpPlugin>()?;
-                if help.is_loading() { Some(help.last_query().to_string()) } else { None }
-            });
-
-        if let Some(topic) = help_loading {
-            let semantic = self.semantic.clone();
-            let session = self.ai_session.clone();
-            cx.spawn(async move |this, cx: &mut AsyncApp| {
-                // Vector search for relevant docs
-                let context = if let Some(sem) = &semantic {
-                    let idx = sem.lock().unwrap();
-                    idx.search(&topic, None, 6)
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|r| {
-                            if r.collection == "pages" {
-                                let url = r
-                                    .metadata
-                                    .get("url")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("unknown");
-                                format!("[From page: {url}]\n{}", r.text)
-                            } else {
-                                r.text
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n\n")
-                } else {
-                    String::new()
-                };
-
-                let answer = if let Some(session) = session {
-                    let prompt = format!(
-                        "The user asked for help about: {topic}\n\n\
-                         Here is relevant documentation:\n{context}\n\n\
-                         Give a concise, helpful answer based on the documentation above. \
-                         Be brief (2-4 sentences max)."
-                    );
-                    match session.respond(&prompt).await {
-                        Ok(text) => text,
-                        Err(e) => format!("Error: {e}"),
-                    }
-                } else if !context.is_empty() {
-                    context
-                } else {
-                    "No help available for this topic.".to_string()
-                };
-
-                let _ = cx.update(|cx| {
-                    let _ = this.update(cx, |picker, cx| {
-                        if let Some(help) = picker.delegate.registry.get_mut("builtin.help") {
-                            if let Some(help_plugin) = help.as_any_mut().downcast_mut::<rover_plugins::builtin::help::HelpPlugin>() {
-                                help_plugin.set_result(Some(answer));
-                            }
-                        }
-                        picker.delegate.update_inline_caches();
-                        cx.notify();
-                    });
-                });
-            })
-            .detach();
-        }
-    }
-
-    /// If the file search plugin is loading, spawn a background task to run mdfind.
-    fn maybe_spawn_file_search(&mut self, cx: &mut Context<Picker<Self>>) {
-        let pending = self
-            .registry
-            .get("builtin.file_search")
-            .and_then(|p| {
-                let fs = p
-                    .as_any()
-                    .downcast_ref::<rover_plugins::builtin::file_search::FileSearchPlugin>()?;
-                if fs.is_loading() && !fs.pending_query().is_empty() {
-                    Some(fs.pending_query().to_string())
-                } else {
-                    None
-                }
-            });
-
-        if let Some(query) = pending {
-            self.file_search_task = Some(cx.spawn(async move |this, cx: &mut AsyncApp| {
-                // Run mdfind on the async executor thread; it's blocking but short-lived.
-                let results = rover_commands::file_search::search_files(&query, 20);
-                let q = query.clone();
-                let _ = cx.update(|cx| {
-                    let _ = this.update(cx, |picker, cx| {
-                        if let Some(p) = picker
-                            .delegate
-                            .registry
-                            .get_mut("builtin.file_search")
-                        {
-                            if let Some(fs) = p.as_any_mut().downcast_mut::<rover_plugins::builtin::file_search::FileSearchPlugin>() {
-                                fs.set_results(&q, results);
-                            }
-                        }
-                        cx.notify();
-                    });
-                });
-            }));
-        }
-    }
-
-    // ── Rendering helpers ────────────────────────────────────────────────
-
-    fn pill(selected: bool, colors: &rover_theme::ThemeColors) -> Div {
-        let mut p = div()
-            .px_2()
-            .py(px(4.0))
-            .rounded_full()
-            .border_1()
-            .flex()
-            .items_center()
-            .gap_1()
-            .cursor_pointer();
-        if selected {
-            p = p
-                .bg(colors.element_selected)
-                .border_color(colors.text_accent);
-        } else {
-            p = p
-                .bg(colors.surface_background)
-                .border_color(colors.border_variant);
-        }
-        p
-    }
-
-    fn state_pill_color(color_name: &str) -> (Rgba, Hsla) {
-        match color_name {
-            "blue" => (
-                rgba(0x1e3a5fcc),
-                hsla(210.0 / 360.0, 0.7, 0.65, 1.0),
-            ),
-            "green" => (
-                rgba(0x1a3d1acc),
-                hsla(120.0 / 360.0, 0.6, 0.55, 1.0),
-            ),
-            "red" => (
-                rgba(0x5f1e1ecc),
-                hsla(0.0, 0.7, 0.6, 1.0),
-            ),
-            "purple" => (
-                rgba(0x3d1a5fcc),
-                hsla(270.0 / 360.0, 0.6, 0.65, 1.0),
-            ),
-            "gray" | _ => (
-                rgba(0x333333cc),
-                hsla(0.0, 0.0, 0.6, 1.0),
-            ),
-        }
-    }
-
-    fn render_state_pill(
-        label: &str,
-        color: &str,
-        selected: bool,
-        colors: &rover_theme::ThemeColors,
-    ) -> Div {
-        let (bg, text_color) = Self::state_pill_color(color);
-        let mut p = div()
-            .px_2()
-            .py(px(4.0))
-            .rounded_full()
-            .border_1()
-            .flex()
-            .items_center()
-            .gap_1()
-            .cursor_pointer();
-        if selected {
-            p = p.bg(colors.element_selected).border_color(text_color);
-        } else {
-            p = p.bg(bg).border_color(colors.border_variant);
-        }
-        p.child(
-            div()
-                .text_color(text_color)
-                .text_size(px(10.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(label.to_string())),
-        )
     }
 }
 
@@ -718,15 +293,12 @@ impl PickerDelegate for RoverPluginDelegate {
     fn placeholder_text(&self) -> Arc<str> {
         match &self.view_mode {
             ViewMode::Main => Arc::from("Type to search..."),
-            ViewMode::Submenu { title, .. } => {
-                Arc::from(format!("Search {}...", title).as_str())
-            }
+            ViewMode::Submenu { title, .. } => Arc::from(format!("Search {}...", title).as_str()),
         }
     }
 
     fn update_matches(&mut self, query: String, cx: &mut Context<Picker<Self>>) -> Task<()> {
         self.do_query(&query);
-        self.maybe_spawn_file_search(cx);
         cx.notify();
         Task::ready(())
     }
@@ -736,29 +308,16 @@ impl PickerDelegate for RoverPluginDelegate {
             return false;
         }
 
-        // Save non-empty queries to DB-backed history
-        let query = self.query.clone();
-        if !query.trim().is_empty() {
-            let _ = self.db.add_query(&query);
-            self.query_history.retain(|q| q != &query);
-            self.query_history.push(query);
-            if self.query_history.len() > 100 {
-                self.query_history.remove(0);
-            }
-        }
-
         let m = self.matches[self.selected_ix].clone();
         let result = match &self.view_mode {
             ViewMode::Submenu { plugin_id, .. } => {
                 let pid = plugin_id.clone();
-                self.registry
-                    .submenu_confirm(&pid, m.id(), &self.query, &mut self.plugin_ctx)
+                self.registry.submenu_confirm(&pid, m.id(), &self.query, &mut self.plugin_ctx)
             }
             ViewMode::Main => {
                 let pid = m.plugin_id().to_string();
                 let mid = m.id().to_string();
-                self.registry
-                    .confirm(&pid, &mid, &self.query, false, &mut self.plugin_ctx)
+                self.registry.confirm(&pid, &mid, &self.query, false, &mut self.plugin_ctx)
             }
         };
 
@@ -773,63 +332,11 @@ impl PickerDelegate for RoverPluginDelegate {
         let m = self.matches[self.selected_ix].clone();
         let pid = m.plugin_id().to_string();
         let mid = m.id().to_string();
-        let result =
-            self.registry
-                .confirm(&pid, &mid, &self.query, true, &mut self.plugin_ctx);
+        let result = self.registry.confirm(&pid, &mid, &self.query, true, &mut self.plugin_ctx);
         self.handle_confirm_result(result, cx)
     }
 
     fn dismissed(&mut self, _cx: &mut Context<Picker<Self>>) {}
-
-    fn no_matches_text(&self) -> SharedString {
-        match &self.view_mode {
-            ViewMode::Main => "No matches".into(),
-            ViewMode::Submenu { title, .. } => {
-                SharedString::from(format!("No {} found", title.to_lowercase()))
-            }
-        }
-    }
-
-    fn context_item_count(&self) -> usize {
-        self.context_count
-    }
-
-    fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
-        if self.query_history.is_empty() {
-            return None;
-        }
-
-        match self.history_cursor {
-            None => {
-                if up {
-                    self.history_stash = query.to_string();
-                    let ix = self.query_history.len() - 1;
-                    self.history_cursor = Some(ix);
-                    Some(self.query_history[ix].clone())
-                } else {
-                    None
-                }
-            }
-            Some(ix) => {
-                if up {
-                    if ix > 0 {
-                        let new_ix = ix - 1;
-                        self.history_cursor = Some(new_ix);
-                        Some(self.query_history[new_ix].clone())
-                    } else {
-                        None
-                    }
-                } else if ix + 1 < self.query_history.len() {
-                    let new_ix = ix + 1;
-                    self.history_cursor = Some(new_ix);
-                    Some(self.query_history[new_ix].clone())
-                } else {
-                    self.history_cursor = None;
-                    Some(self.history_stash.clone())
-                }
-            }
-        }
-    }
 
     fn render_match(
         &self,
@@ -840,25 +347,28 @@ impl PickerDelegate for RoverPluginDelegate {
         let m = self.matches.get(ix)?;
         let colors = theme(cx).colors.clone();
 
-        let title = m.title().to_string();
-
-        // Check for StatePill render hint
-        if let Some(RenderHint::StatePill { label, color }) = m.render_hint() {
-            let mut pill = Self::render_state_pill(label, color, selected, &colors);
-            pill = pill.child(
-                div()
-                    .text_color(if selected { colors.text_accent } else { colors.text })
-                    .text_size(px(12.0))
-                    .child(SharedString::from(title)),
-            );
-            return Some(pill.into_any_element());
-        }
-
-        // Default pill rendering
         let text_color = if selected { colors.text_accent } else { colors.text };
+
+        let title = m.title().to_string();
+        let _subtitle = m.subtitle().map(|s| s.to_string());
         let has_sub = m.has_submenu();
 
-        let mut row = Self::pill(selected, &colors);
+        let mut row = div()
+            .px_2()
+            .py(px(4.0))
+            .rounded_full()
+            .border_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .cursor_pointer();
+
+        if selected {
+            row = row.bg(colors.element_selected).border_color(colors.text_accent);
+        } else {
+            row = row.bg(colors.surface_background).border_color(colors.border_variant);
+        }
+
         row = row.child(
             div()
                 .text_color(text_color)
@@ -887,11 +397,7 @@ impl PickerDelegate for RoverPluginDelegate {
         let m = self.matches.get(ix)?;
         let colors = theme(cx).colors.clone();
 
-        let row_bg = if selected {
-            colors.element_selected
-        } else {
-            gpui::transparent_black()
-        };
+        let row_bg = if selected { colors.element_selected } else { gpui::transparent_black() };
         let text_color = if selected { colors.text_accent } else { colors.text };
 
         let title = m.title().to_string();
@@ -909,19 +415,6 @@ impl PickerDelegate for RoverPluginDelegate {
             .cursor_pointer();
 
         let mut left = div().flex().items_center().gap_2();
-
-        // Render state pill badge if present
-        if let Some(RenderHint::StatePill { label, color }) = m.render_hint() {
-            let (_, pill_text_color) = Self::state_pill_color(color);
-            left = left.child(
-                div()
-                    .text_color(pill_text_color)
-                    .text_size(px(10.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(SharedString::from(label.clone())),
-            );
-        }
-
         left = left.child(
             div()
                 .text_color(text_color)
@@ -963,20 +456,23 @@ impl PickerDelegate for RoverPluginDelegate {
     }
 
     fn ai_widget_content(&self) -> Option<&str> {
-        self.cached_ai_text.as_deref()
+        // Check if AI plugin has inline content
+        if let Some(ai) = self.registry.get("builtin.ai") {
+            if let Some(InlineContent::Text(ref text)) = ai.inline_content(&self.plugin_ctx) {
+                // We can't return a reference to a temporary, so this is a limitation.
+                // The full integration will need to cache this. For now, return None.
+                let _ = text;
+            }
+        }
+        None
     }
 
     fn terminal_output(&self) -> Option<&str> {
-        self.cached_terminal_output
-            .as_ref()
-            .map(|(output, _)| output.as_str())
+        None
     }
 
     fn terminal_running(&self) -> bool {
-        self.cached_terminal_output
-            .as_ref()
-            .map(|(_, running)| *running)
-            .unwrap_or(false)
+        false
     }
 
     fn actions_for_selected(&self) -> Vec<ItemAction> {
@@ -1006,8 +502,7 @@ impl PickerDelegate for RoverPluginDelegate {
                 if let Some(action) = actions.get(action_ix) {
                     let aid = action.id.clone();
                     if let Some(plugin_mut) = self.registry.get_mut(&pid) {
-                        let result =
-                            plugin_mut.execute_action(&mid, &aid, &mut self.plugin_ctx);
+                        let result = plugin_mut.execute_action(&mid, &aid, &mut self.plugin_ctx);
                         return self.handle_confirm_result(result, cx);
                     }
                 }

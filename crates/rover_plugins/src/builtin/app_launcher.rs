@@ -7,7 +7,6 @@
 use rover_commands::app_launcher::discover_apps;
 use rover_fuzzy::{match_strings, StringMatch, StringMatchCandidate};
 use rover_plugin_api::*;
-use std::any::Any;
 
 /// Info about a discovered macOS application.
 #[derive(Debug, Clone)]
@@ -112,7 +111,6 @@ impl Plugin for AppLauncherPlugin {
                     icon: Some(IconHint::AppIcon(app.name.clone())),
                     score: m.score as f64,
                     plugin_id: self.id().to_string(),
-                    render_hint: None,
                 })
             })
             .collect()
@@ -126,9 +124,17 @@ impl Plugin for AppLauncherPlugin {
         _ctx: &mut PluginContext,
     ) -> ConfirmResult {
         if let Some(app_name) = match_id.strip_prefix("launch:") {
-            if self.apps.iter().any(|a| a.name == app_name) {
-                // Delegate AppleScript execution to the host; it uses escape_applescript()
-                return ConfirmResult::LaunchApp(app_name.to_string());
+            if let Some(app) = self.apps.iter().find(|a| a.name == app_name) {
+                // Use AppleScript to activate (per CLAUDE.md: don't use `open -a`)
+                let script = format!(
+                    r#"tell application "{}" to activate"#,
+                    app.name.replace('"', "\\\"")
+                );
+                let _ = std::process::Command::new("osascript")
+                    .arg("-e")
+                    .arg(&script)
+                    .spawn();
+                return ConfirmResult::Dismiss;
             }
         }
         ConfirmResult::Stay
@@ -176,7 +182,4 @@ impl Plugin for AppLauncherPlugin {
             _ => ConfirmResult::Stay,
         }
     }
-
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }

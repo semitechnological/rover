@@ -5,7 +5,6 @@
 
 use rover_commands::calculator;
 use rover_plugin_api::*;
-use std::any::Any;
 
 pub struct CalculatorPlugin {
     last_result: Option<String>,
@@ -88,7 +87,6 @@ impl Plugin for CalculatorPlugin {
                     icon: Some(IconHint::Emoji("=".to_string())),
                     score: 1.0,
                     plugin_id: self.id().to_string(),
-                    render_hint: None,
                 }]
             }
             None => vec![],
@@ -144,9 +142,6 @@ impl Plugin for CalculatorPlugin {
         }
         ConfirmResult::Stay
     }
-
-    fn as_any(&self) -> &dyn Any { self }
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
 }
 
 #[cfg(test)]

@@ -13,6 +13,11 @@ Rover is a macOS launcher/assistant bar built with `gpui = "0.2"` (crates.io, no
 - **Terminal** — built-in terminal suggestion and shell command execution
 - **Settings** — macOS menubar Settings/About with AI toggle, bar position, and more
 
+## Current status
+
+- main is the active branch in this checkout and is currently ahead of origin/main by 2 commits.
+- Validate with cargo test before merging or pushing.
+
 ## Architecture
 
 ```

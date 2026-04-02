@@ -16,6 +16,11 @@ A macOS launcher and AI assistant bar. Sits in the menu bar and pops up system-w
 - **Browser** — keyboard-driven WebKit browser window (Cmd+\ for address bar)
 - **Terminal** — built-in terminal suggestions; type `> command` to run shell commands
 
+## Current status
+
+- The current checkout is on main and has the tile-plugin merge plus build cleanup work in progress.
+- cargo test currently passes locally.
+
 ## Input
 
 | Prefix | Behaviour |

@@ -5461,7 +5461,6 @@ dependencies = [
  "objc",
  "raw-window-handle",
  "rover_browser",
- "rover_commands",
  "rover_db",
  "rover_extensions",
  "rover_fuzzy",
@@ -5621,21 +5620,6 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "rover_wm"
-version = "0.1.0"
-dependencies = [
- "core-foundation 0.10.0",
- "core-graphics 0.24.0",
- "log",
- "objc2",
- "objc2-app-kit",
- "objc2-foundation",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
 ]
 
 [[package]]

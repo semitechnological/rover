@@ -245,6 +245,41 @@ const TILE_COMMANDS: &[TileCommand] = &[
         keywords: &["snap", "nearest", "adjacent", "beside"],
         action: TileAction::SnapToNearest,
     },
+    TileCommand {
+        id: "display_next",
+        name: "Tile: Move to Next Display",
+        description: "Move window to the next monitor while preserving relative size/position",
+        keywords: &["display", "monitor", "next", "screen"],
+        action: TileAction::MoveToNextDisplay,
+    },
+    TileCommand {
+        id: "display_prev",
+        name: "Tile: Move to Previous Display",
+        description: "Move window to the previous monitor while preserving relative size/position",
+        keywords: &["display", "monitor", "previous", "screen"],
+        action: TileAction::MoveToPreviousDisplay,
+    },
+    TileCommand {
+        id: "undo_last_action",
+        name: "Tile: Undo Last Action",
+        description: "Undo the last tile action for the focused window",
+        keywords: &["undo", "revert", "back"],
+        action: TileAction::UndoLastAction,
+    },
+    TileCommand {
+        id: "toggle_multiplexer",
+        name: "Tile: Toggle Multiplexer Mode",
+        description: "Toggle local multiplexer tiling mode",
+        keywords: &["multiplexer", "mode", "toggle", "local"],
+        action: TileAction::ToggleMultiplexerMode,
+    },
+    TileCommand {
+        id: "set_multiplexer_region",
+        name: "Tile: Set Multiplexer Region",
+        description: "Use the focused window frame as the local multiplexer region",
+        keywords: &["multiplexer", "region", "windowed", "local"],
+        action: TileAction::SetMultiplexerRegionFromFrontmost,
+    },
 ];
 
 /// The Tile Window Manager plugin.
@@ -255,12 +290,18 @@ pub struct TilePlugin {
     /// Cached original frames for restore functionality.
     /// Keyed by (pid, window_index) to allow restoring windows.
     original_frames: Vec<(i32, usize, tile_core::Rect)>,
+    action_history: Vec<(i32, usize, tile_core::Rect)>,
+    multiplexer_mode: bool,
+    multiplexer_region: Option<tile_core::Rect>,
 }
 
 impl TilePlugin {
     pub fn new() -> Self {
         Self {
             original_frames: Vec::new(),
+            action_history: Vec::new(),
+            multiplexer_mode: false,
+            multiplexer_region: None,
         }
     }
 
@@ -324,6 +365,87 @@ impl TilePlugin {
                 } else {
                     Err("No original frame saved for this window".to_string())
                 }
+            }
+            TileAction::UndoLastAction => {
+                if let Some((pid, window_index, frame)) = self.action_history.pop() {
+                    if pid == ax_ref.pid && window_index == ax_ref.window_index {
+                        tile_ax::set_window_frame_raw(window_element, frame);
+                        Ok(())
+                    } else {
+                        Err("No matching undo history for this window".to_string())
+                    }
+                } else {
+                    Err("No action history available".to_string())
+                }
+            }
+            TileAction::ToggleMultiplexerMode => {
+                self.multiplexer_mode = !self.multiplexer_mode;
+                Ok(())
+            }
+            TileAction::SetMultiplexerRegionFromFrontmost => {
+                self.multiplexer_region = tile_ax::get_window_frame_raw(window_element);
+                self.multiplexer_mode = self.multiplexer_region.is_some();
+                Ok(())
+            }
+            TileAction::MoveToNextDisplay | TileAction::MoveToPreviousDisplay => {
+                let current_frame = match tile_ax::get_window_frame_raw(window_element) {
+                    Some(f) => f,
+                    None => {
+                        tile_ax::release_frontmost_window(window_element);
+                        return Err("Could not get current frame".to_string());
+                    }
+                };
+                let displays = tile_ax::all_usable_frames();
+                if displays.len() < 2 {
+                    return Err("Only one display detected".to_string());
+                }
+                let (cx, cy) = current_frame.center();
+                let mut current_idx = 0usize;
+                for (i, d) in displays.iter().enumerate() {
+                    if d.contains_point(cx, cy) {
+                        current_idx = i;
+                        break;
+                    }
+                }
+                let target_idx = if matches!(action, TileAction::MoveToNextDisplay) {
+                    (current_idx + 1) % displays.len()
+                } else if current_idx == 0 {
+                    displays.len() - 1
+                } else {
+                    current_idx - 1
+                };
+                let src = displays[current_idx];
+                let dst = displays[target_idx];
+                let rx = if src.width > 0.0 {
+                    (current_frame.x - src.x) / src.width
+                } else {
+                    0.0
+                };
+                let ry = if src.height > 0.0 {
+                    (current_frame.y - src.y) / src.height
+                } else {
+                    0.0
+                };
+                let rw = if src.width > 0.0 {
+                    current_frame.width / src.width
+                } else {
+                    0.5
+                };
+                let rh = if src.height > 0.0 {
+                    current_frame.height / src.height
+                } else {
+                    0.5
+                };
+                let mapped = tile_core::Rect::new(
+                    dst.x + dst.width * rx,
+                    dst.y + dst.height * ry,
+                    dst.width * rw,
+                    dst.height * rh,
+                );
+                self.action_history
+                    .push((ax_ref.pid, ax_ref.window_index, current_frame));
+                tile_ax::set_window_frame_raw(window_element, mapped);
+                Ok(())
             }
 
             // Actions that require BSP tree management. Since we operate on the

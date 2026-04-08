@@ -1,6 +1,7 @@
 use gpui::prelude::*;
 use gpui::*;
 use rover_db::RoverDb;
+use rover_extensions::{install_extension_zip, load_extensions};
 use rover_theme::{self, theme, ThemeRegistry};
 use std::sync::Arc;
 
@@ -32,6 +33,8 @@ pub struct SettingsView {
     // Recording state — Raycast-style click-to-record
     hotkey_recording: bool,
     recording_mods: u32,
+    extension_status: Option<String>,
+    installed_extensions: usize,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -40,6 +43,7 @@ pub enum SettingsSection {
     Appearance,
     Hotkeys,
     AI,
+    Extensions,
     Data,
     About,
 }
@@ -51,6 +55,7 @@ impl SettingsSection {
             Self::Appearance,
             Self::Hotkeys,
             Self::AI,
+            Self::Extensions,
             Self::Data,
             Self::About,
         ]
@@ -62,6 +67,7 @@ impl SettingsSection {
             Self::Appearance => "Appearance",
             Self::Hotkeys => "Hotkeys",
             Self::AI => "AI",
+            Self::Extensions => "Extensions",
             Self::Data => "Data",
             Self::About => "About",
         }
@@ -176,6 +182,8 @@ impl SettingsView {
             pulse_ctrl: false,
             hotkey_recording: false,
             recording_mods: 0,
+            extension_status: None,
+            installed_extensions: load_extensions().map(|v| v.len()).unwrap_or(0),
         }
     }
 
@@ -859,6 +867,123 @@ impl SettingsView {
             )
     }
 
+    fn render_extensions(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
+        let inbox = rover_extensions::extensions_inbox_dir().display().to_string();
+        let status = self.extension_status.clone();
+        div()
+            .flex()
+            .flex_col()
+            .child(Self::section_header("Extensions", colors))
+            .child(
+                div()
+                    .text_color(colors.text_muted)
+                    .text_size(px(12.0))
+                    .mb(px(8.0))
+                    .child("Install extension ZIPs, then restart Rover to load them."),
+            )
+            .child(
+                Self::setting_row(colors)
+                    .child(Self::setting_label(
+                        "Installed",
+                        "Number of loaded extensions found on disk",
+                        colors,
+                    ))
+                    .child(
+                        div()
+                            .text_color(colors.text)
+                            .text_size(px(13.0))
+                            .child(SharedString::from(self.installed_extensions.to_string())),
+                    ),
+            )
+            .child(
+                Self::setting_row(colors)
+                    .child(Self::setting_label(
+                        "Drop Folder",
+                        "You can drag ZIPs here from Finder",
+                        colors,
+                    ))
+                    .child(
+                        div()
+                            .text_color(colors.text_muted)
+                            .text_size(px(11.0))
+                            .child(SharedString::from(inbox)),
+                    ),
+            )
+            .child(
+                div()
+                    .id("open-extensions-inbox")
+                    .mt(px(12.0))
+                    .px(px(10.0))
+                    .py(px(8.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(colors.border_variant)
+                    .bg(colors.surface_background)
+                    .hover(|s| s.bg(colors.element_hover))
+                    .child(
+                        div()
+                            .text_color(colors.text)
+                            .text_size(px(12.0))
+                            .child("Open Extensions Inbox Folder"),
+                    )
+                    .on_click(cx.listener(|_this, _e, _w, _cx| {
+                        let inbox = rover_extensions::extensions_inbox_dir();
+                        let _ = std::fs::create_dir_all(&inbox);
+                        let _ = std::process::Command::new("open").arg(inbox).spawn();
+                    })),
+            )
+            .child(
+                div()
+                    .id("import-extension-zip")
+                    .mt(px(8.0))
+                    .px(px(10.0))
+                    .py(px(8.0))
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .border_1()
+                    .border_color(colors.text_accent)
+                    .bg(colors.element_selected)
+                    .child(
+                        div()
+                            .text_color(colors.text_accent)
+                            .text_size(px(12.0))
+                            .child("Import Extension ZIP..."),
+                    )
+                    .on_click(cx.listener(|this, _e, _w, cx| {
+                        match pick_extension_zip_path() {
+                            Some(path) => match install_extension_zip(std::path::Path::new(&path)) {
+                                Ok(ext) => {
+                                    this.extension_status = Some(format!(
+                                        "Installed '{}'. Restart Rover to load it.",
+                                        ext.manifest.name
+                                    ));
+                                    this.installed_extensions =
+                                        load_extensions().map(|v| v.len()).unwrap_or(this.installed_extensions);
+                                }
+                                Err(err) => {
+                                    this.extension_status =
+                                        Some(format!("Install failed: {err}"));
+                                }
+                            },
+                            None => {
+                                this.extension_status = Some("Import cancelled.".to_string());
+                            }
+                        }
+                        cx.notify();
+                    })),
+            )
+            .when_some(status, |el, msg| {
+                el.child(
+                    div()
+                        .mt(px(10.0))
+                        .text_size(px(12.0))
+                        .text_color(colors.text_muted)
+                        .child(SharedString::from(msg)),
+                )
+            })
+    }
+
     fn render_about(&self, colors: &rover_theme::ThemeColors) -> Div {
         div()
             .flex()
@@ -915,6 +1040,7 @@ impl Render for SettingsView {
             SettingsSection::Appearance => self.render_appearance(&colors, cx),
             SettingsSection::Hotkeys => self.render_hotkeys(&colors, cx),
             SettingsSection::AI => self.render_ai(&colors, cx),
+            SettingsSection::Extensions => self.render_extensions(&colors, cx),
             SettingsSection::Data => self.render_data(&colors, cx),
             SettingsSection::About => self.render_about(&colors),
         };
@@ -1062,4 +1188,23 @@ pub fn open_settings_window(db: Arc<RoverDb>, cx: &mut App) {
 
 pub fn open_settings_window_on_about(db: Arc<RoverDb>, cx: &mut App) {
     open_settings_window_with_section(db, SettingsSection::About, cx);
+}
+
+fn pick_extension_zip_path() -> Option<String> {
+    let script = r#"set chosen to choose file with prompt "Select Rover extension ZIP" of type {"zip"}
+POSIX path of chosen"#;
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(path)
+    }
 }

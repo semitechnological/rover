@@ -12,6 +12,10 @@ members = [
     "crates/rover_browser",
     "crates/rover_semantic",
     "crates/rusty_foundationmodels",
+    "crates/tile_core",
+    "crates/tile_ax",
+    "crates/tile_hotkeys",
+    "crates/tile_overlay",
 
 ]
 resolver = "2"
@@ -46,6 +50,8 @@ rover_plugins = { path = "crates/rover_plugins" }
 rover_db = { path = "crates/rover_db" }
 rover_browser = { path = "crates/rover_browser" }
 rover_semantic = { path = "crates/rover_semantic" }
+tile_hotkeys = { path = "crates/tile_hotkeys" }
+tile_overlay = { path = "crates/tile_overlay" }
 
 [package]
 name = "rover"

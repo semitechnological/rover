@@ -158,20 +158,9 @@ impl RoverPluginDelegate {
                     false, // will be updated after we get calc results
                     &self.plugin_ctx,
                 );
-                let has_calc_result = plugin_results.iter().any(|r| r.plugin_id == "builtin.calculator");
-
-                // Re-query fallback plugins now that we know about calc
-                let final_plugin_results = if has_calc_result && !plugin_results.iter().any(|r| {
-                    r.plugin_id.contains("ai") || r.plugin_id.contains("terminal")
-                }) {
-                    // No need to re-query if no fallback results were included
-                    plugin_results
-                } else {
-                    self.registry.query(query, has_good_fuzzy, has_calc_result, &self.plugin_ctx)
-                };
 
                 // Add plugin results (calc, terminal prefix, AI fallback, etc.)
-                for result in final_plugin_results {
+                for result in plugin_results {
                     self.matches.push(PickerMatch::PluginResult(result));
                 }
 

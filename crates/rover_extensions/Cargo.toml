@@ -15,3 +15,4 @@ wasmtime.workspace = true
 rover_theme.workspace = true
 rover_extension_api.workspace = true
 libloading.workspace = true
+zip = "8.5.1"

@@ -1,8 +1,17 @@
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
+#[derive(Clone)]
 pub struct FileResult {
     pub name: String,
     pub path: PathBuf,
+}
+
+struct SearchCache {
+    query: String,
+    at: Instant,
+    results: Vec<FileResult>,
 }
 
 /// Search for files matching a query using Spotlight (`mdfind`), falling back
@@ -11,8 +20,66 @@ pub fn search_files(query: &str, max_results: usize) -> Vec<FileResult> {
     if query.trim().is_empty() {
         return Vec::new();
     }
+    if query.len() < 2 {
+        return Vec::new();
+    }
 
-    search_spotlight(query, max_results).unwrap_or_else(|| search_dirs(query, max_results))
+    static CACHE: OnceLock<Mutex<Option<SearchCache>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(guard) = cache.lock() {
+        if let Some(entry) = guard.as_ref() {
+            if entry.query == query && entry.at.elapsed() < Duration::from_millis(250) {
+                return entry.results.iter().take(max_results).cloned().collect();
+            }
+        }
+    }
+
+    let results = search_spotlight(query, max_results).unwrap_or_else(|| search_dirs(query, max_results));
+    if let Ok(mut guard) = cache.lock() {
+        *guard = Some(SearchCache {
+            query: query.to_string(),
+            at: Instant::now(),
+            results: results.clone(),
+        });
+    }
+    results
+}
+
+/// Build a lightweight local file index from common user folders.
+/// Used as a fast fallback corpus for semantic file search.
+pub fn build_local_index(max_results: usize) -> Vec<FileResult> {
+    let mut results = Vec::new();
+    let dirs = [
+        dirs::home_dir().unwrap_or_default(),
+        dirs::desktop_dir().unwrap_or_default(),
+        dirs::document_dir().unwrap_or_default(),
+        dirs::download_dir().unwrap_or_default(),
+    ];
+    for dir in dirs {
+        if !dir.exists() {
+            continue;
+        }
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if results.len() >= max_results {
+                    break;
+                }
+                let path = entry.path();
+                let name = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if !name.is_empty() {
+                    results.push(FileResult { name, path });
+                }
+            }
+        }
+        if results.len() >= max_results {
+            break;
+        }
+    }
+    results
 }
 
 fn search_spotlight(query: &str, max_results: usize) -> Option<Vec<FileResult>> {

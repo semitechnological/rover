@@ -1,0 +1,13 @@
+[package]
+name = "tile_hotkeys"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+
+[dependencies]
+tile_core = { path = "../tile_core" }
+log = "0.4"
+block2 = "0.6"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSThread"] }
+objc2-app-kit = { version = "0.3", features = ["NSEvent"] }

@@ -1,5 +1,7 @@
 use crate::{Command, CommandKind, CommandRegistry};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 /// Terminal emulator app names to exclude from the launcher list.
 /// Rover has its own built-in terminal; these apps just confuse the picker.
@@ -17,6 +19,19 @@ const TERMINAL_APPS: &[&str] = &[
 
 /// Scan /Applications and ~/Applications for .app bundles.
 pub fn discover_apps() -> Vec<Command> {
+    static CACHE: OnceLock<Mutex<(Instant, Vec<Command>)>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| {
+        Mutex::new((
+            Instant::now().checked_sub(Duration::from_secs(120)).unwrap_or_else(Instant::now),
+            Vec::new(),
+        ))
+    });
+    if let Ok(guard) = cache.lock() {
+        if !guard.1.is_empty() && guard.0.elapsed() < Duration::from_secs(30) {
+            return guard.1.clone();
+        }
+    }
+
     let mut apps = Vec::new();
     let search_dirs = [
         PathBuf::from("/Applications"),
@@ -55,6 +70,9 @@ pub fn discover_apps() -> Vec<Command> {
     }
 
     apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    if let Ok(mut guard) = cache.lock() {
+        *guard = (Instant::now(), apps.clone());
+    }
     apps
 }
 

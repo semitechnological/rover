@@ -396,3 +396,25 @@ The registry has comprehensive tests covering:
 - Prefix mode filtering
 - FuzzyCommand mode isolation
 - Feature flag gating simulation
+
+## Search Bar + Pill Hooks (Current API)
+
+Rover plugins can now drive top pills and search-bar behavior directly:
+
+- `on_query_input(&mut self, query: &str, ctx: &PluginContext) -> Option<SearchBarUpdate>`
+  - `SearchBarUpdate::ReplaceQuery(String)`
+  - `SearchBarUpdate::SetPlaceholder(String)`
+- `context_items(&self, ctx: &PluginContext) -> Vec<ContextItem>`
+  - `ContextItem` includes `plugin_id`, `id`, `label`, `icon`, and `is_active`
+
+Pill confirms are dispatched back to the owning plugin by `plugin_id + id` through `on_confirm`, so plugin state and behavior stay modular.
+
+## Crepuscularity Conventions
+
+For Crepuscularity-based Rover plugins (components/widgets/screens):
+
+- Use runtime templates when you need hot reload, `include`, slots, or multi-component files.
+- Use single-file components for small widgets, and multi-component files with `#Name` for grouped UI sets.
+- Use `$: default` (single-file) or TOML defaults (multi-component) for optional props.
+- Keep plugin UI split by role (`components/`, `widgets/`, `screens/`) so modules can behave like touchbar-style surfaces.
+- For browser extension plugins, use `crepuscularity-webext` capability declarations and capability scanning conventions.

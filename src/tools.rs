@@ -1,4 +1,78 @@
+#[cfg(feature = "ai")]
 use rusty_foundationmodels::{Schema, SchemaProperty, SchemaPropertyType, ToolDefinition};
+#[cfg(not(feature = "ai"))]
+mod fm_stub {
+    #[derive(Clone)]
+    pub struct ToolDefinition;
+    #[derive(Clone)]
+    pub struct Schema;
+    #[derive(Clone)]
+    pub struct SchemaProperty;
+    #[derive(Clone, Copy)]
+    pub enum SchemaPropertyType {
+        String,
+        Double,
+        Bool,
+    }
+    impl From<SchemaPropertyType> for String {
+        fn from(value: SchemaPropertyType) -> Self {
+            match value {
+                SchemaPropertyType::String => "string".to_string(),
+                SchemaPropertyType::Double => "double".to_string(),
+                SchemaPropertyType::Bool => "bool".to_string(),
+            }
+        }
+    }
+    impl ToolDefinition {
+        pub fn new<N, D, F>(_name: N, _desc: D, _schema: Schema, _handler: F) -> Self
+        where
+            N: Into<String>,
+            D: Into<String>,
+            F: Fn(serde_json::Value) -> Result<String, String> + Send + Sync + 'static,
+        {
+            Self
+        }
+        pub fn with_handler<F>(self, _handler: F) -> Self
+        where
+            F: Send + Sync + 'static,
+        {
+            self
+        }
+    }
+    impl Schema {
+        pub fn new<T>(_t: T) -> Self
+        where
+            T: Into<String>,
+        {
+            Self
+        }
+        pub fn object() -> Self {
+            Self
+        }
+        pub fn property(self, _prop: SchemaProperty) -> Self {
+            self
+        }
+        pub fn required(self, _name: &str) -> Self {
+            self
+        }
+    }
+    impl SchemaProperty {
+        pub fn new<N: Into<String>>(_name: N, _ty: SchemaPropertyType) -> Self {
+            Self
+        }
+        pub fn description<D: Into<String>>(self, _description: D) -> Self {
+            self
+        }
+        pub fn optional(self) -> Self {
+            self
+        }
+        pub fn enum_values<S: Into<String>>(self, _values: Vec<S>) -> Self {
+            self
+        }
+    }
+}
+#[cfg(not(feature = "ai"))]
+use fm_stub::{Schema, SchemaProperty, SchemaPropertyType, ToolDefinition};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static YOLO_MODE: AtomicBool = AtomicBool::new(false);

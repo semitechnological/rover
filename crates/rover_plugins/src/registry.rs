@@ -143,6 +143,24 @@ impl PluginRegistry {
         results
     }
 
+    /// Let plugins intercept query input before normal matching.
+    pub fn query_input_hook(
+        &mut self,
+        query: &str,
+        ctx: &PluginContext,
+    ) -> Option<SearchBarUpdate> {
+        for plugin in &mut self.plugins {
+            let id = plugin.id().to_string();
+            if !self.enabled.get(&id).copied().unwrap_or(true) {
+                continue;
+            }
+            if let Some(update) = plugin.on_query_input(query, ctx) {
+                return Some(update);
+            }
+        }
+        None
+    }
+
     /// Confirm a match result from a specific plugin.
     pub fn confirm(
         &mut self,

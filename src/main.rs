@@ -1,8 +1,5 @@
 mod ai;
 mod clipboard_monitor;
-mod delegate;
-#[allow(dead_code)]
-mod delegate_legacy;
 #[allow(dead_code)]
 mod delegate_plugin;
 mod help_docs;
@@ -52,7 +49,9 @@ struct LastFrontmostAppGlobal(Arc<std::sync::Mutex<Option<String>>>);
 impl Global for LastFrontmostAppGlobal {}
 
 /// Shared live browser tabs — wrapped in a Global for GPUI access.
+#[cfg(feature = "browser")]
 struct LiveBrowserTabsGlobal(rover_browser::LiveBrowserTabsRef);
+#[cfg(feature = "browser")]
 impl Global for LiveBrowserTabsGlobal {}
 
 /// A URL queued by the picker that the global polling task will open in the browser.
@@ -240,16 +239,21 @@ fn main() {
             RoverPluginDelegate::detect_frontmost_app(),
         ));
         cx.set_global(LastFrontmostAppGlobal(last_frontmost.clone()));
+        #[cfg(feature = "browser")]
         let live_browser_tabs: rover_browser::LiveBrowserTabsRef =
             std::sync::Arc::new(std::sync::Mutex::new(rover_browser::LiveBrowserTabs::default()));
+        #[cfg(feature = "browser")]
         cx.set_global(LiveBrowserTabsGlobal(live_browser_tabs.clone()));
         cx.set_global(PendingBrowserUrlGlobal(Arc::new(std::sync::Mutex::new(None))));
         cx.set_global(PendingSettingsGlobal(Arc::new(std::sync::Mutex::new(false))));
 
         // Pre-compile WKContentRuleList now so it doesn't block paint() on first browser open.
-        log::info!("main: calling prewarm_content_blocker");
-        rover_browser::prewarm_content_blocker();
-        log::info!("main: prewarm_content_blocker returned");
+        #[cfg(feature = "browser")]
+        {
+            log::info!("main: calling prewarm_content_blocker");
+            rover_browser::prewarm_content_blocker();
+            log::info!("main: prewarm_content_blocker returned");
+        }
 
         // Initialize semantic index on a background thread (model download may be slow)
         std::thread::spawn(move || {
@@ -340,26 +344,31 @@ fn main() {
         });
 
         // Browser keybinding actions — push to live_tabs action inbox
+        #[cfg(feature = "browser")]
         cx.on_action::<BrowserNewTab>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
                 live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::NewTab);
             }
         });
+        #[cfg(feature = "browser")]
         cx.on_action::<BrowserCloseTab>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
                 live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::CloseTab);
             }
         });
+        #[cfg(feature = "browser")]
         cx.on_action::<BrowserReload>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
                 live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Reload);
             }
         });
+        #[cfg(feature = "browser")]
         cx.on_action::<BrowserBack>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
                 live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Back);
             }
         });
+        #[cfg(feature = "browser")]
         cx.on_action::<BrowserForward>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
                 live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Forward);
@@ -460,9 +469,12 @@ fn main() {
                     let url = pending_arc.lock().unwrap().take();
                     if let Some(url) = url {
                         log::info!("pending_browser_poll: opening browser for url={url}");
-                        let db = cx.global::<DbGlobal>().0.clone();
-                        let lt = cx.global::<LiveBrowserTabsGlobal>().0.clone();
-                        rover_browser::navigate_or_open(cx, &url, Some(db), None, Some(lt));
+                        #[cfg(feature = "browser")]
+                        {
+                            let db = cx.global::<DbGlobal>().0.clone();
+                            let lt = cx.global::<LiveBrowserTabsGlobal>().0.clone();
+                            rover_browser::navigate_or_open(cx, &url, Some(db), None, Some(lt));
+                        }
                     }
                     // Settings window
                     let should_open = {
@@ -488,21 +500,26 @@ fn main() {
                 open_window(db_clone, prev_app, cx);
             }
             CliCommand::Browser => {
+                #[cfg(feature = "browser")]
                 rover_browser::open_browser_window_with_live_tabs(
                     cx, rover_browser::DEFAULT_URL, Some(db), None, Some(live_browser_tabs.clone()),
                 );
             }
             CliCommand::OpenUrl(url) => {
+                #[cfg(feature = "browser")]
                 rover_browser::open_browser_window_with_live_tabs(
                     cx, &url, Some(db), None, Some(live_browser_tabs.clone()),
                 );
             }
             CliCommand::Search(query) => {
-                let encoded = urlencoding::encode(&query);
-                let url = format!("https://www.perplexity.ai/search?q={encoded}");
-                rover_browser::open_browser_window_with_live_tabs(
-                    cx, &url, Some(db), None, Some(live_browser_tabs.clone()),
-                );
+                #[cfg(feature = "browser")]
+                {
+                    let encoded = urlencoding::encode(&query);
+                    let url = format!("https://www.perplexity.ai/search?q={encoded}");
+                    rover_browser::open_browser_window_with_live_tabs(
+                        cx, &url, Some(db), None, Some(live_browser_tabs.clone()),
+                    );
+                }
             }
         }
     });
@@ -626,7 +643,7 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
     #[cfg(not(target_os = "macos"))]
     let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
 
-    let ai_session = if cx
+    let ai_enabled = if cx
         .global::<DbGlobal>()
         .0
         .get_setting("ai_enabled")
@@ -634,16 +651,9 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
         .flatten()
         .map(|v| v == "true")
         .unwrap_or(false)
-    {
-        ai::create_session().map(Arc::new)
-    } else {
-        None
-    };
-    let ai_enabled = ai_session.is_some();
+    { ai::is_available() } else { false };
 
     let ext_runtimes = cx.global::<ExtensionRuntimesGlobal>().0.clone();
-    let live_tabs_ref = cx.global::<LiveBrowserTabsGlobal>().0.clone();
-
     let window = cx
         .open_window(
             WindowOptions {
@@ -672,34 +682,29 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                     let mut registry = PluginRegistry::new();
                     use rover_plugin_api::PluginConfig;
                     let mut ctx = rover_plugin_api::PluginContext::new(PluginConfig::default());
-                    ctx.frontmost_app = previous_app.clone();
 
                     // Register all builtin plugins
+                    #[cfg(feature = "calculator")]
                     registry.register(Box::new(rover_plugins::builtin::calculator::CalculatorPlugin::new()));
+                    #[cfg(feature = "app-launcher")]
                     registry.register(Box::new(rover_plugins::builtin::app_launcher::AppLauncherPlugin::new()));
+                    #[cfg(feature = "clipboard")]
                     registry.register(Box::new(rover_plugins::builtin::clipboard::ClipboardPlugin::new(db.clone())));
+                    #[cfg(feature = "file-search")]
                     registry.register(Box::new(rover_plugins::builtin::file_search::FileSearchPlugin::new()));
+                    #[cfg(feature = "ai")]
                     registry.register(Box::new(rover_plugins::builtin::ai::AiPlugin::new(ai_enabled)));
+                    #[cfg(feature = "terminal")]
                     registry.register(Box::new(rover_plugins::builtin::terminal::TerminalPlugin::new()));
+                    #[cfg(feature = "browser")]
                     registry.register(Box::new(rover_plugins::builtin::browser::BrowserPlugin::new()));
-                    registry.register(Box::new(rover_plugins::builtin::search_engine::SearchEnginePlugin::new()));
-                    registry.register(Box::new(rover_plugins::builtin::quit::QuitPlugin::new()));
-                    registry.register(Box::new(rover_plugins::builtin::help::HelpPlugin::new()));
+                    #[cfg(all(feature = "tile", target_os = "macos"))]
                     registry.register(Box::new(rover_plugins::builtin::tile::TilePlugin::new()));
-                    registry.register(Box::new(rover_plugins::builtin::editor::EditorPlugin::new()));
 
                     // Initialize all plugins
                     registry.init_all(&mut ctx);
 
-                    let delegate = RoverPluginDelegate::new(
-                        registry,
-                        db,
-                        ai_session,
-                        semantic,
-                        Some(live_tabs_ref),
-                        ext_runtimes,
-                        previous_app.clone(),
-                    );
+                    let delegate = RoverPluginDelegate::new(registry, ctx);
                     let picker = cx.new(|cx| {
                         let mut p = Picker::new(delegate, cx);
                         p.compact = compact;

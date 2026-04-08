@@ -1,4 +1,6 @@
+#[cfg(feature = "ai")]
 use rusty_foundationmodels::Session;
+#[cfg(feature = "ai")]
 use crate::tools::build_os_tools;
 
 const SYSTEM_INSTRUCTIONS: &str = "\
@@ -26,9 +28,25 @@ Style:\n\
 - Never reveal tool names or say 'I ran a script'.\n\
 - When you perform an action (activated an app, added a reminder, skipped a track), just confirm it simply.";
 
+#[cfg(feature = "ai")]
 pub fn create_session() -> Option<Session> {
     if !rusty_foundationmodels::is_available() {
         return None;
     }
     Session::with_tools(SYSTEM_INSTRUCTIONS, build_os_tools()).ok()
+}
+
+#[cfg(not(feature = "ai"))]
+pub fn create_session() -> Option<()> {
+    None
+}
+
+#[cfg(feature = "ai")]
+pub fn is_available() -> bool {
+    rusty_foundationmodels::is_available()
+}
+
+#[cfg(not(feature = "ai"))]
+pub fn is_available() -> bool {
+    false
 }

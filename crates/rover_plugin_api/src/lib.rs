@@ -49,6 +49,12 @@ pub trait Plugin: Send + Sync {
     /// Called on every keystroke. Return match results for the current query.
     fn on_query(&mut self, query: &str, ctx: &PluginContext) -> Vec<MatchResult>;
 
+    /// Optional hook to intercept query updates before normal matching.
+    /// Returning `Some` allows a plugin to modify the search bar behavior.
+    fn on_query_input(&mut self, _query: &str, _ctx: &PluginContext) -> Option<SearchBarUpdate> {
+        None
+    }
+
     /// Called when the user confirms (presses Enter on) a match from this
     /// plugin.
     fn on_confirm(
@@ -216,10 +222,21 @@ pub enum ConfirmResult {
 /// A context item rendered as a pill at the top of the picker.
 #[derive(Debug, Clone)]
 pub struct ContextItem {
+    /// Plugin that owns this context item.
+    pub plugin_id: String,
     pub id: String,
     pub label: String,
     pub icon: Option<IconHint>,
     pub is_active: bool,
+}
+
+/// Search bar behavior update requested by a plugin.
+#[derive(Debug, Clone)]
+pub enum SearchBarUpdate {
+    /// Replace current query text.
+    ReplaceQuery(String),
+    /// Set a dynamic placeholder for current mode.
+    SetPlaceholder(String),
 }
 
 // ─── Inline Content ──────────────────────────────────────────────────────────

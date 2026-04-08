@@ -7,6 +7,16 @@ use std::sync::Arc;
 
 use crate::hotkey;
 
+#[cfg(feature = "ai")]
+fn ai_available_device() -> bool {
+    rusty_foundationmodels::is_available()
+}
+
+#[cfg(not(feature = "ai"))]
+fn ai_available_device() -> bool {
+    false
+}
+
 pub struct SettingsView {
     db: Arc<RoverDb>,
     selected_theme_ix: usize,
@@ -725,7 +735,7 @@ impl SettingsView {
     }
 
     fn render_ai(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
-        let ai_available = rusty_foundationmodels::is_available();
+        let ai_available = ai_available_device();
         div()
             .flex()
             .flex_col()

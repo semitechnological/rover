@@ -84,6 +84,7 @@ impl Plugin for BrowserPlugin {
             .iter()
             .enumerate()
             .map(|(i, tab)| ContextItem {
+                plugin_id: self.id().to_string(),
                 id: format!("tab:{}", i),
                 label: if tab.title.is_empty() {
                     tab.url.clone()

@@ -406,6 +406,9 @@ Rover plugins can now drive top pills and search-bar behavior directly:
   - `SearchBarUpdate::SetPlaceholder(String)`
 - `context_items(&self, ctx: &PluginContext) -> Vec<ContextItem>`
   - `ContextItem` includes `plugin_id`, `id`, `label`, `icon`, and `is_active`
+- `crepus_surfaces(&self, ctx: &PluginContext) -> Vec<CrepusSurface>`
+  - `CrepusSurfaceTarget` supports `Pills`, `Widget`, and `Screen`
+  - each surface declares `template`, optional `component` (`#Name`), `props`, and `priority`
 
 Pill confirms are dispatched back to the owning plugin by `plugin_id + id` through `on_confirm`, so plugin state and behavior stay modular.
 

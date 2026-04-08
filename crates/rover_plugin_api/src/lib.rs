@@ -110,6 +110,12 @@ pub trait Plugin: Send + Sync {
     /// Inline content shown as a card (e.g. AI response, terminal output).
     fn inline_content(&self, _ctx: &PluginContext) -> Option<InlineContent> { None }
 
+    // ── Crepuscularity surfaces ──────────────────────────────────────────
+
+    /// Optional declarative UI surfaces rendered by a Crepuscularity runtime
+    /// host. These can represent touchbar-style widgets and full screens.
+    fn crepus_surfaces(&self, _ctx: &PluginContext) -> Vec<CrepusSurface> { vec![] }
+
     // ── Window support ───────────────────────────────────────────────────
 
     /// Request to open a separate window (browser, editor, settings, etc.).
@@ -237,6 +243,34 @@ pub enum SearchBarUpdate {
     ReplaceQuery(String),
     /// Set a dynamic placeholder for current mode.
     SetPlaceholder(String),
+}
+
+/// A declarative Crepuscularity UI surface exported by a plugin.
+#[derive(Debug, Clone)]
+pub struct CrepusSurface {
+    /// Stable unique ID within the plugin.
+    pub id: String,
+    /// Which Rover surface to mount this UI into.
+    pub target: CrepusSurfaceTarget,
+    /// `.crepus` file path relative to plugin root.
+    pub template: String,
+    /// Optional multi-component fragment (`#Name`) in the template file.
+    pub component: Option<String>,
+    /// Context props passed to the renderer.
+    pub props: std::collections::HashMap<String, serde_json::Value>,
+    /// Priority for ordering among same-target surfaces.
+    pub priority: i32,
+}
+
+/// Surface targets that map to Rover UI regions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CrepusSurfaceTarget {
+    /// Top pill rail (touchbar-style context strip).
+    Pills,
+    /// Inline widget card region above the input bar.
+    Widget,
+    /// Full picker screen content.
+    Screen,
 }
 
 // ─── Inline Content ──────────────────────────────────────────────────────────

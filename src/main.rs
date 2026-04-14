@@ -20,11 +20,25 @@ use std::sync::{
     Arc,
 };
 
-actions!(rover, [Toggle, Quit, OpenSettings, ShowAbout, BrowserNewTab, BrowserCloseTab, BrowserReload, BrowserBack, BrowserForward]);
+actions!(
+    rover,
+    [
+        Toggle,
+        Quit,
+        OpenSettings,
+        ShowAbout,
+        BrowserNewTab,
+        BrowserCloseTab,
+        BrowserReload,
+        BrowserBack,
+        BrowserForward
+    ]
+);
 
 /// Static holding the semantic index, set from a background thread on startup.
-static SEMANTIC_INDEX: std::sync::Mutex<Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>> =
-    std::sync::Mutex::new(None);
+static SEMANTIC_INDEX: std::sync::Mutex<
+    Option<Arc<std::sync::Mutex<rover_semantic::SemanticIndex>>>,
+> = std::sync::Mutex::new(None);
 
 struct DbGlobal(pub Arc<RoverDb>);
 impl Global for DbGlobal {}
@@ -102,12 +116,12 @@ fn parse_args() -> CliCommand {
                  \n"
             );
             std::process::exit(0);
-        }
+        },
 
         Some("version") | Some("--version") | Some("-V") => {
             println!("rover {}", env!("CARGO_PKG_VERSION"));
             std::process::exit(0);
-        }
+        },
 
         Some("launch") => {
             let app = args[1..].join(" ");
@@ -116,15 +130,21 @@ fn parse_args() -> CliCommand {
                 std::process::exit(1);
             }
             // Sanitize: strip control chars & double-quotes to prevent injection.
-            let safe: String = app.chars().filter(|c| !c.is_control() && *c != '"').collect();
+            let safe: String = app
+                .chars()
+                .filter(|c| !c.is_control() && *c != '"')
+                .collect();
             let script = format!(r#"tell application "{safe}" to activate"#);
             let status = std::process::Command::new("osascript")
                 .arg("-e")
                 .arg(&script)
                 .status()
-                .unwrap_or_else(|e| { eprintln!("osascript error: {e}"); std::process::exit(1) });
+                .unwrap_or_else(|e| {
+                    eprintln!("osascript error: {e}");
+                    std::process::exit(1)
+                });
             std::process::exit(if status.success() { 0 } else { 1 });
-        }
+        },
 
         Some("run") => {
             let cmd = args[1..].join(" ");
@@ -136,23 +156,36 @@ fn parse_args() -> CliCommand {
                 .arg("-c")
                 .arg(&cmd)
                 .output()
-                .unwrap_or_else(|e| { eprintln!("spawn error: {e}"); std::process::exit(1) });
+                .unwrap_or_else(|e| {
+                    eprintln!("spawn error: {e}");
+                    std::process::exit(1)
+                });
             print!("{}", String::from_utf8_lossy(&output.stdout));
             eprint!("{}", String::from_utf8_lossy(&output.stderr));
             std::process::exit(output.status.code().unwrap_or(1));
-        }
+        },
 
         Some("screenshot") => {
             let name = args.get(1).map(|s| s.as_str()).unwrap_or("screenshot");
-            let safe: String = name.chars()
-                .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+            let safe: String = name
+                .chars()
+                .map(|c| {
+                    if c.is_alphanumeric() || c == '-' || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
                 .collect();
             let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
             let path = format!("{home}/Desktop/{safe}.png");
             let status = std::process::Command::new("screencapture")
                 .args(["-x", &path])
                 .status()
-                .unwrap_or_else(|e| { eprintln!("screencapture error: {e}"); std::process::exit(1) });
+                .unwrap_or_else(|e| {
+                    eprintln!("screencapture error: {e}");
+                    std::process::exit(1)
+                });
             if status.success() {
                 println!("{path}");
                 std::process::exit(0);
@@ -160,7 +193,7 @@ fn parse_args() -> CliCommand {
                 eprintln!("screencapture failed");
                 std::process::exit(1);
             }
-        }
+        },
 
         // ── GUI commands (start the app, skip the picker) ──────────────────
         Some("open") => {
@@ -175,7 +208,7 @@ fn parse_args() -> CliCommand {
                 format!("https://{raw}")
             };
             CliCommand::OpenUrl(url)
-        }
+        },
 
         Some("search") | Some("s") => {
             let query = args[1..].join(" ");
@@ -184,14 +217,14 @@ fn parse_args() -> CliCommand {
                 std::process::exit(1);
             }
             CliCommand::Search(query)
-        }
+        },
 
         Some("browser") | Some("b") => CliCommand::Browser,
 
         Some(unknown) => {
             eprintln!("Unknown command: {unknown}\nRun `rover help` for usage.");
             std::process::exit(1);
-        }
+        },
     }
 }
 
@@ -217,8 +250,13 @@ fn main() {
         let ext_runtimes = rover_extensions::runtime::load_extension_runtimes(&loaded_extensions);
 
         // Store extension runtimes as a global for command execution
-        let runtime_map: std::collections::HashMap<String, rover_extensions::runtime::ExtensionRuntimeRef> =
-            ext_runtimes.into_iter().map(|(id, rt, _)| (id, rt)).collect();
+        let runtime_map: std::collections::HashMap<
+            String,
+            rover_extensions::runtime::ExtensionRuntimeRef,
+        > = ext_runtimes
+            .into_iter()
+            .map(|(id, rt, _)| (id, rt))
+            .collect();
         cx.set_global(ExtensionRuntimesGlobal(runtime_map));
 
         let db = Arc::new(RoverDb::open().expect("Failed to open database"));
@@ -240,12 +278,17 @@ fn main() {
         ));
         cx.set_global(LastFrontmostAppGlobal(last_frontmost.clone()));
         #[cfg(feature = "browser")]
-        let live_browser_tabs: rover_browser::LiveBrowserTabsRef =
-            std::sync::Arc::new(std::sync::Mutex::new(rover_browser::LiveBrowserTabs::default()));
+        let live_browser_tabs: rover_browser::LiveBrowserTabsRef = std::sync::Arc::new(
+            std::sync::Mutex::new(rover_browser::LiveBrowserTabs::default()),
+        );
         #[cfg(feature = "browser")]
         cx.set_global(LiveBrowserTabsGlobal(live_browser_tabs.clone()));
-        cx.set_global(PendingBrowserUrlGlobal(Arc::new(std::sync::Mutex::new(None))));
-        cx.set_global(PendingSettingsGlobal(Arc::new(std::sync::Mutex::new(false))));
+        cx.set_global(PendingBrowserUrlGlobal(Arc::new(std::sync::Mutex::new(
+            None,
+        ))));
+        cx.set_global(PendingSettingsGlobal(Arc::new(std::sync::Mutex::new(
+            false,
+        ))));
 
         // Pre-compile WKContentRuleList now so it doesn't block paint() on first browser open.
         #[cfg(feature = "browser")]
@@ -271,10 +314,10 @@ fn main() {
                     // We can't set_global from a non-main thread, so we stash it in a static.
                     *SEMANTIC_INDEX.lock().unwrap() = Some(global.0);
                     log::info!("Semantic index ready");
-                }
+                },
                 Err(e) => {
                     log::warn!("Semantic index init failed: {e}");
-                }
+                },
             }
         });
 
@@ -319,7 +362,9 @@ fn main() {
             let window_open = cx.global::<WindowOpenGlobal>().0.load(Ordering::Relaxed);
             if window_open {
                 // Dismiss the existing window
-                cx.global::<WindowOpenGlobal>().0.store(false, Ordering::Relaxed);
+                cx.global::<WindowOpenGlobal>()
+                    .0
+                    .store(false, Ordering::Relaxed);
                 if let Some(handle) = cx.global::<WindowHandleGlobal>().0 {
                     let _ = handle.update(cx, |_, window, _cx| {
                         window.remove_window();
@@ -327,7 +372,12 @@ fn main() {
                 }
                 cx.global_mut::<WindowHandleGlobal>().0 = None;
             } else {
-                let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
+                let prev_app = cx
+                    .global::<LastFrontmostAppGlobal>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .clone();
                 let db = cx.global::<DbGlobal>().0.clone();
                 open_window(db, prev_app, cx);
             }
@@ -347,77 +397,96 @@ fn main() {
         #[cfg(feature = "browser")]
         cx.on_action::<BrowserNewTab>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
-                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::NewTab);
+                live.0
+                    .lock()
+                    .unwrap()
+                    .action_inbox
+                    .push(rover_browser::BrowserAction::NewTab);
             }
         });
         #[cfg(feature = "browser")]
         cx.on_action::<BrowserCloseTab>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
-                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::CloseTab);
+                live.0
+                    .lock()
+                    .unwrap()
+                    .action_inbox
+                    .push(rover_browser::BrowserAction::CloseTab);
             }
         });
         #[cfg(feature = "browser")]
         cx.on_action::<BrowserReload>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
-                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Reload);
+                live.0
+                    .lock()
+                    .unwrap()
+                    .action_inbox
+                    .push(rover_browser::BrowserAction::Reload);
             }
         });
         #[cfg(feature = "browser")]
         cx.on_action::<BrowserBack>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
-                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Back);
+                live.0
+                    .lock()
+                    .unwrap()
+                    .action_inbox
+                    .push(rover_browser::BrowserAction::Back);
             }
         });
         #[cfg(feature = "browser")]
         cx.on_action::<BrowserForward>(|_, cx| {
             if let Some(live) = cx.try_global::<LiveBrowserTabsGlobal>() {
-                live.0.lock().unwrap().action_inbox.push(rover_browser::BrowserAction::Forward);
+                live.0
+                    .lock()
+                    .unwrap()
+                    .action_inbox
+                    .push(rover_browser::BrowserAction::Forward);
             }
         });
 
         // Load hotkey: prefer custom recorded combo, fall back to preset
-        let (hk_code, hk_mods) = {
-            let key_name = db.get_setting("hotkey_key_name").ok().flatten();
-            let mods = db
-                .get_setting("hotkey_modifiers")
-                .ok()
-                .flatten()
-                .and_then(|v| v.parse::<u32>().ok());
-            match (key_name.as_deref(), mods) {
-                (Some(k), Some(m)) => {
-                    hotkey::key_name_to_vk(k).map(|vk| (vk, m)).unwrap_or_else(|| {
+        let (hk_code, hk_mods) =
+            {
+                let key_name = db.get_setting("hotkey_key_name").ok().flatten();
+                let mods = db
+                    .get_setting("hotkey_modifiers")
+                    .ok()
+                    .flatten()
+                    .and_then(|v| v.parse::<u32>().ok());
+                match (key_name.as_deref(), mods) {
+                    (Some(k), Some(m)) => hotkey::key_name_to_vk(k)
+                        .map(|vk| (vk, m))
+                        .unwrap_or_else(|| {
+                            let preset = db
+                                .get_setting("hotkey_preset")
+                                .ok()
+                                .flatten()
+                                .unwrap_or_else(|| "cmd-space".to_string());
+                            hotkey::preset_to_carbon(&preset)
+                        }),
+                    _ => {
                         let preset = db
                             .get_setting("hotkey_preset")
                             .ok()
                             .flatten()
                             .unwrap_or_else(|| "cmd-space".to_string());
                         hotkey::preset_to_carbon(&preset)
-                    })
+                    },
                 }
-                _ => {
-                    let preset = db
-                        .get_setting("hotkey_preset")
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| "cmd-space".to_string());
-                    hotkey::preset_to_carbon(&preset)
-                }
-            }
-        };
+            };
         hotkey::register_global_hotkey(hk_code, hk_mods);
 
         // Poll frontmost app continuously so we always know the last non-Rover app
         {
             let tracker = last_frontmost.clone();
-            cx.spawn(async move |cx: &mut AsyncApp| {
-                loop {
-                    cx.background_executor()
-                        .timer(std::time::Duration::from_millis(500))
-                        .await;
-                    if let Some(app) = RoverPluginDelegate::detect_frontmost_app() {
-                        if let Ok(mut lock) = tracker.lock() {
-                            *lock = Some(app);
-                        }
+            cx.spawn(async move |cx: &mut AsyncApp| loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(500))
+                    .await;
+                if let Some(app) = RoverPluginDelegate::detect_frontmost_app() {
+                    if let Ok(mut lock) = tracker.lock() {
+                        *lock = Some(app);
                     }
                 }
             })
@@ -433,11 +502,12 @@ fn main() {
 
                 if hotkey::take_toggle_requested() {
                     let _ = cx.update(|cx: &mut App| {
-                        let window_open =
-                            cx.global::<WindowOpenGlobal>().0.load(Ordering::Relaxed);
+                        let window_open = cx.global::<WindowOpenGlobal>().0.load(Ordering::Relaxed);
                         if window_open {
                             // Dismiss the existing window
-                            cx.global::<WindowOpenGlobal>().0.store(false, Ordering::Relaxed);
+                            cx.global::<WindowOpenGlobal>()
+                                .0
+                                .store(false, Ordering::Relaxed);
                             if let Some(handle) = cx.global::<WindowHandleGlobal>().0 {
                                 let _ = handle.update(cx, |_, window, _cx| {
                                     window.remove_window();
@@ -446,7 +516,12 @@ fn main() {
                             cx.global_mut::<WindowHandleGlobal>().0 = None;
                         } else {
                             // Use the continuously tracked last non-Rover frontmost app
-                            let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
+                            let prev_app = cx
+                                .global::<LastFrontmostAppGlobal>()
+                                .0
+                                .lock()
+                                .unwrap()
+                                .clone();
                             let db = cx.global::<DbGlobal>().0.clone();
                             open_window(db, prev_app, cx);
                         }
@@ -458,36 +533,54 @@ fn main() {
 
         // Poll for browser URLs and settings opens queued by the picker.
         // Entity-free task so it survives picker dismissal.
+        // Uses adaptive polling: fast when work is pending, slow when idle.
         cx.spawn(async move |cx: &mut AsyncApp| {
+            let mut idle_count = 0u32;
             loop {
-                cx.background_executor()
-                    .timer(std::time::Duration::from_millis(50))
-                    .await;
-                let _ = cx.update(|cx: &mut App| {
-                    // Browser URL
-                    let pending_arc = cx.global::<PendingBrowserUrlGlobal>().0.clone();
-                    let url = pending_arc.lock().unwrap().take();
-                    if let Some(url) = url {
-                        log::info!("pending_browser_poll: opening browser for url={url}");
-                        #[cfg(feature = "browser")]
-                        {
-                            let db = cx.global::<DbGlobal>().0.clone();
-                            let lt = cx.global::<LiveBrowserTabsGlobal>().0.clone();
-                            rover_browser::navigate_or_open(cx, &url, Some(db), None, Some(lt));
+                let interval = if idle_count > 10 {
+                    // After being idle for a while, poll less frequently
+                    std::time::Duration::from_millis(200)
+                } else {
+                    std::time::Duration::from_millis(50)
+                };
+                cx.background_executor().timer(interval).await;
+
+                let has_work = cx
+                    .update(|cx: &mut App| {
+                        // Browser URL
+                        let pending_arc = cx.global::<PendingBrowserUrlGlobal>().0.clone();
+                        let url = pending_arc.lock().unwrap().take();
+                        if let Some(url) = url {
+                            log::info!("pending_browser_poll: opening browser for url={url}");
+                            #[cfg(feature = "browser")]
+                            {
+                                let db = cx.global::<DbGlobal>().0.clone();
+                                let lt = cx.global::<LiveBrowserTabsGlobal>().0.clone();
+                                rover_browser::navigate_or_open(cx, &url, Some(db), None, Some(lt));
+                            }
+                            return true;
                         }
-                    }
-                    // Settings window
-                    let should_open = {
-                        let mut lock = cx.global::<PendingSettingsGlobal>().0.lock().unwrap();
-                        let v = *lock;
-                        *lock = false;
-                        v
-                    };
-                    if should_open {
-                        let db = cx.global::<DbGlobal>().0.clone();
-                        settings_window::open_settings_window(db, cx);
-                    }
-                });
+                        // Settings window
+                        let should_open = {
+                            let mut lock = cx.global::<PendingSettingsGlobal>().0.lock().unwrap();
+                            let v = *lock;
+                            *lock = false;
+                            v
+                        };
+                        if should_open {
+                            let db = cx.global::<DbGlobal>().0.clone();
+                            settings_window::open_settings_window(db, cx);
+                            return true;
+                        }
+                        false
+                    })
+                    .unwrap_or(false);
+
+                if has_work {
+                    idle_count = 0;
+                } else {
+                    idle_count += 1;
+                }
             }
         })
         .detach();
@@ -496,31 +589,48 @@ fn main() {
             CliCommand::None => {
                 // Just start the menubar app — picker opens via hotkey
                 let db_clone = cx.global::<DbGlobal>().0.clone();
-                let prev_app = cx.global::<LastFrontmostAppGlobal>().0.lock().unwrap().clone();
+                let prev_app = cx
+                    .global::<LastFrontmostAppGlobal>()
+                    .0
+                    .lock()
+                    .unwrap()
+                    .clone();
                 open_window(db_clone, prev_app, cx);
-            }
+            },
             CliCommand::Browser => {
                 #[cfg(feature = "browser")]
                 rover_browser::open_browser_window_with_live_tabs(
-                    cx, rover_browser::DEFAULT_URL, Some(db), None, Some(live_browser_tabs.clone()),
+                    cx,
+                    rover_browser::DEFAULT_URL,
+                    Some(db),
+                    None,
+                    Some(live_browser_tabs.clone()),
                 );
-            }
+            },
             CliCommand::OpenUrl(url) => {
                 #[cfg(feature = "browser")]
                 rover_browser::open_browser_window_with_live_tabs(
-                    cx, &url, Some(db), None, Some(live_browser_tabs.clone()),
+                    cx,
+                    &url,
+                    Some(db),
+                    None,
+                    Some(live_browser_tabs.clone()),
                 );
-            }
+            },
             CliCommand::Search(query) => {
                 #[cfg(feature = "browser")]
                 {
                     let encoded = urlencoding::encode(&query);
                     let url = format!("https://www.perplexity.ai/search?q={encoded}");
                     rover_browser::open_browser_window_with_live_tabs(
-                        cx, &url, Some(db), None, Some(live_browser_tabs.clone()),
+                        cx,
+                        &url,
+                        Some(db),
+                        None,
+                        Some(live_browser_tabs.clone()),
                     );
                 }
-            }
+            },
         }
     });
 }
@@ -528,8 +638,8 @@ fn main() {
 /// Get screen dimensions (width, height) from macOS.
 #[cfg(target_os = "macos")]
 pub(crate) fn screen_size() -> (f32, f32) {
-    use objc::{class, msg_send, sel, sel_impl};
     use cocoa::foundation::NSRect;
+    use objc::{class, msg_send, sel, sel_impl};
     unsafe {
         let main: *mut objc::runtime::Object = msg_send![class!(NSScreen), mainScreen];
         let frame: NSRect = msg_send![main, frame];
@@ -540,8 +650,8 @@ pub(crate) fn screen_size() -> (f32, f32) {
 /// Get current cursor position in GPUI coords (top-left origin).
 #[cfg(target_os = "macos")]
 fn cursor_position() -> (f32, f32) {
-    use objc::{class, msg_send, sel, sel_impl};
     use cocoa::foundation::{NSPoint, NSRect};
+    use objc::{class, msg_send, sel, sel_impl};
     unsafe {
         let loc: NSPoint = msg_send![class!(NSEvent), mouseLocation];
         let main: *mut objc::runtime::Object = msg_send![class!(NSScreen), mainScreen];
@@ -589,7 +699,6 @@ fn configure_borderless_panel(window: &WindowHandle<RoverWindow>, cx: &mut App) 
 }
 
 fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
-
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
 
@@ -614,14 +723,14 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                     origin: point(px(x), px(y)),
                     size: size(px(w), px(h)),
                 }
-            }
+            },
             "top" => {
                 let x = (sw - w) / 2.0;
                 Bounds {
                     origin: point(px(x), px(40.0)),
                     size: size(px(w), px(h)),
                 }
-            }
+            },
             "bottom" => {
                 let x = (sw - w) / 2.0;
                 let y = sh - h - 40.0;
@@ -629,7 +738,7 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                     origin: point(px(x), px(y)),
                     size: size(px(w), px(h)),
                 }
-            }
+            },
             _ => {
                 let x = (sw - w) / 2.0;
                 let y = (sh - h) / 2.0;
@@ -637,7 +746,7 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                     origin: point(px(x), px(y)),
                     size: size(px(w), px(h)),
                 }
-            }
+            },
         }
     };
     #[cfg(not(target_os = "macos"))]
@@ -651,7 +760,11 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
         .flatten()
         .map(|v| v == "true")
         .unwrap_or(false)
-    { ai::is_available() } else { false };
+    {
+        ai::is_available()
+    } else {
+        false
+    };
 
     let ext_runtimes = cx.global::<ExtensionRuntimesGlobal>().0.clone();
     let window = cx
@@ -685,19 +798,33 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
 
                     // Register all builtin plugins
                     #[cfg(feature = "calculator")]
-                    registry.register(Box::new(rover_plugins::builtin::calculator::CalculatorPlugin::new()));
+                    registry.register(Box::new(
+                        rover_plugins::builtin::calculator::CalculatorPlugin::new(),
+                    ));
                     #[cfg(feature = "app-launcher")]
-                    registry.register(Box::new(rover_plugins::builtin::app_launcher::AppLauncherPlugin::new()));
+                    registry.register(Box::new(
+                        rover_plugins::builtin::app_launcher::AppLauncherPlugin::new(),
+                    ));
                     #[cfg(feature = "clipboard")]
-                    registry.register(Box::new(rover_plugins::builtin::clipboard::ClipboardPlugin::new(db.clone())));
+                    registry.register(Box::new(
+                        rover_plugins::builtin::clipboard::ClipboardPlugin::new(db.clone()),
+                    ));
                     #[cfg(feature = "file-search")]
-                    registry.register(Box::new(rover_plugins::builtin::file_search::FileSearchPlugin::new()));
+                    registry.register(Box::new(
+                        rover_plugins::builtin::file_search::FileSearchPlugin::new(),
+                    ));
                     #[cfg(feature = "ai")]
-                    registry.register(Box::new(rover_plugins::builtin::ai::AiPlugin::new(ai_enabled)));
+                    registry.register(Box::new(rover_plugins::builtin::ai::AiPlugin::new(
+                        ai_enabled,
+                    )));
                     #[cfg(feature = "terminal")]
-                    registry.register(Box::new(rover_plugins::builtin::terminal::TerminalPlugin::new()));
+                    registry.register(Box::new(
+                        rover_plugins::builtin::terminal::TerminalPlugin::new(),
+                    ));
                     #[cfg(feature = "browser")]
-                    registry.register(Box::new(rover_plugins::builtin::browser::BrowserPlugin::new()));
+                    registry.register(Box::new(
+                        rover_plugins::builtin::browser::BrowserPlugin::new(),
+                    ));
                     #[cfg(all(feature = "tile", target_os = "macos"))]
                     registry.register(Box::new(rover_plugins::builtin::tile::TilePlugin::new()));
 
@@ -719,23 +846,24 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                                 PickerEvent::Dismiss => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
                                     window.remove_window();
-                                }
+                                },
                                 PickerEvent::OpenSettings => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
                                     *cx.global::<PendingSettingsGlobal>().0.lock().unwrap() = true;
                                     window.remove_window();
-                                }
-                                PickerEvent::ToggleActions => {}
+                                },
+                                PickerEvent::ToggleActions => {},
                                 PickerEvent::OpenTerminal { cmd } => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
                                     window.remove_window();
                                     terminal::open_ghostty(cmd.as_deref(), cx);
-                                }
+                                },
                                 PickerEvent::OpenBrowser { url } => {
                                     dismiss_flag.store(false, Ordering::Relaxed);
-                                    *cx.global::<PendingBrowserUrlGlobal>().0.lock().unwrap() = Some(url.clone());
+                                    *cx.global::<PendingBrowserUrlGlobal>().0.lock().unwrap() =
+                                        Some(url.clone());
                                     window.remove_window();
-                                }
+                                },
                             }
                         },
                     )

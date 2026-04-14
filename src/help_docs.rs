@@ -45,7 +45,6 @@ const HELP_DOCS: &[DocChunk] = &[
         text: "Type a URL (like 'github.com' or 'https://example.com') in the launcher and \
                press Enter to open it in the Rover browser. Rover auto-detects URLs.",
     },
-
     // ── AI ────────────────────────────────────────────────────────────────────
     DocChunk {
         id: "ai-basics",
@@ -68,7 +67,6 @@ const HELP_DOCS: &[DocChunk] = &[
                get weather, control Music.app playback, create notes, and search Wikipedia. \
                It writes its own AppleScript autonomously.",
     },
-
     // ── Browser ──────────────────────────────────────────────────────────────
     DocChunk {
         id: "browser-basics",
@@ -114,7 +112,6 @@ const HELP_DOCS: &[DocChunk] = &[
                WKContentRuleList, cosmetic filtering to hide ad elements, and scriptlet \
                injection to stub tracking SDKs. This is always on.",
     },
-
     // ── Clipboard ────────────────────────────────────────────────────────────
     DocChunk {
         id: "clipboard-history",
@@ -123,7 +120,6 @@ const HELP_DOCS: &[DocChunk] = &[
                or searching for it. In the submenu, search entries by content. Press Enter \
                to paste the selected entry (copies it to clipboard).",
     },
-
     // ── File Search ──────────────────────────────────────────────────────────
     DocChunk {
         id: "file-search",
@@ -132,7 +128,6 @@ const HELP_DOCS: &[DocChunk] = &[
                filename or keyword and results appear in real time. Press Enter to open \
                a file, or use actions to show in Finder or copy the path.",
     },
-
     // ── Settings ─────────────────────────────────────────────────────────────
     DocChunk {
         id: "settings-basics",
@@ -152,7 +147,6 @@ const HELP_DOCS: &[DocChunk] = &[
                Enable it in Settings. This lets you use Caps Lock + another key as a hotkey \
                without conflicting with other shortcuts.",
     },
-
     // ── CLI ──────────────────────────────────────────────────────────────────
     DocChunk {
         id: "cli-usage",
@@ -162,7 +156,6 @@ const HELP_DOCS: &[DocChunk] = &[
                'rover launch <app>' (activate a macOS app), 'rover run <cmd>' (run shell command), \
                'rover screenshot [name]' (take a screenshot), 'rover help', 'rover version'.",
     },
-
     // ── Extensions ───────────────────────────────────────────────────────────
     DocChunk {
         id: "extensions",
@@ -171,7 +164,6 @@ const HELP_DOCS: &[DocChunk] = &[
                system uses the rover_extension_api traits. Place extensions in the extensions \
                directory and they are loaded on startup.",
     },
-
     // ── Keyboard Shortcuts ───────────────────────────────────────────────────
     DocChunk {
         id: "shortcuts-launcher",
@@ -187,7 +179,6 @@ const HELP_DOCS: &[DocChunk] = &[
                Cmd+R (reload), Cmd+Shift+C (copy URL to clipboard). \
                In the transport: Enter (submit), Escape (close transport).",
     },
-
     // ── Help system ──────────────────────────────────────────────────────────
     DocChunk {
         id: "help-system",
@@ -202,14 +193,12 @@ const HELP_DOCS: &[DocChunk] = &[
 /// Call this from a background thread — embedding is CPU-intensive on first run.
 pub fn index_help_docs(index: &mut SemanticIndex) {
     for chunk in HELP_DOCS {
-        if let Err(e) = index.upsert(
-            chunk.id,
-            "help",
-            chunk.text,
-            serde_json::json!({}),
-        ) {
+        if let Err(e) = index.upsert(chunk.id, "help", chunk.text, serde_json::json!({})) {
             log::warn!("Failed to index help doc '{}': {e}", chunk.id);
         }
     }
-    log::info!("help_docs: indexed {} documentation chunks", HELP_DOCS.len());
+    log::info!(
+        "help_docs: indexed {} documentation chunks",
+        HELP_DOCS.len()
+    );
 }

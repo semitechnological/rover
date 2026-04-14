@@ -166,8 +166,8 @@ impl RoverPluginDelegate {
             match update {
                 SearchBarUpdate::ReplaceQuery(new_q) => {
                     self.query = new_q;
-                }
-                SearchBarUpdate::SetPlaceholder(_) => {}
+                },
+                SearchBarUpdate::SetPlaceholder(_) => {},
             }
         }
 
@@ -186,7 +186,7 @@ impl RoverPluginDelegate {
                 let pid = plugin_id.clone();
                 let items = self.registry.submenu_items(&pid, query, &self.plugin_ctx);
                 self.matches = items.into_iter().map(PickerMatch::SubmenuItem).collect();
-            }
+            },
             ViewMode::Main => {
                 self.context_items = self.registry.context_items(&self.plugin_ctx);
                 // 1. Fuzzy match against all registered commands
@@ -237,7 +237,7 @@ impl RoverPluginDelegate {
                         .partial_cmp(&a.score())
                         .unwrap_or(std::cmp::Ordering::Equal)
                 });
-            }
+            },
         }
 
         // Clamp selection
@@ -267,16 +267,16 @@ impl RoverPluginDelegate {
                 self.do_query("");
                 cx.notify();
                 false
-            }
+            },
             ConfirmResult::OpenUrl(url) => {
                 cx.emit(PickerEvent::OpenBrowser { url });
                 true
-            }
+            },
             ConfirmResult::RunShell(cmd) => {
                 // Run via sh -c
                 let _ = std::process::Command::new("sh").arg("-c").arg(&cmd).spawn();
                 true
-            }
+            },
             ConfirmResult::LaunchApp(name) => {
                 let script = format!(
                     r#"tell application "{}" to activate"#,
@@ -287,36 +287,36 @@ impl RoverPluginDelegate {
                     .arg(&script)
                     .spawn();
                 true
-            }
+            },
             ConfirmResult::OpenWindow(req) => {
                 match req {
                     WindowRequest::Browser { url } => {
                         cx.emit(PickerEvent::OpenBrowser {
                             url: url.unwrap_or_else(|| "https://start.duckduckgo.com".to_string()),
                         });
-                    }
+                    },
                     WindowRequest::Terminal { cmd } => {
                         cx.emit(PickerEvent::OpenTerminal { cmd });
-                    }
+                    },
                     WindowRequest::Settings => {
                         cx.emit(PickerEvent::OpenSettings);
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
                 true
-            }
+            },
             ConfirmResult::CopyToClipboard(text) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(text));
                 true
-            }
+            },
             ConfirmResult::OpenTerminal(cmd) => {
                 cx.emit(PickerEvent::OpenTerminal { cmd });
                 true
-            }
+            },
             ConfirmResult::OpenSettings => {
                 cx.emit(PickerEvent::OpenSettings);
                 true
-            }
+            },
             ConfirmResult::Custom(_) => false,
         }
     }
@@ -376,13 +376,13 @@ impl PickerDelegate for RoverPluginDelegate {
                 let pid = plugin_id.clone();
                 self.registry
                     .submenu_confirm(&pid, m.id(), &self.query, &mut self.plugin_ctx)
-            }
+            },
             ViewMode::Main => {
                 let pid = m.plugin_id().to_string();
                 let mid = m.id().to_string();
                 self.registry
                     .confirm(&pid, &mid, &self.query, false, &mut self.plugin_ctx)
-            }
+            },
         };
 
         self.handle_confirm_result(result, cx)

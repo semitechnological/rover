@@ -151,7 +151,7 @@ impl SettingsView {
                 (Some(k), Some(m)) => {
                     let display = hotkey::display_for_combo(m, &k);
                     (k, m, display)
-                }
+                },
                 _ => {
                     let preset = db
                         .get_setting("hotkey_preset")
@@ -165,7 +165,7 @@ impl SettingsView {
                         .unwrap_or(("cmd-space", "⌘ Space", hotkey::K_VK_SPACE, hotkey::CMD_KEY));
                     let display = hotkey::display_for_combo(m, "space");
                     ("space".to_string(), m, display)
-                }
+                },
             }
         };
 
@@ -203,9 +203,15 @@ impl SettingsView {
     fn hotkey_badge_parts(&self) -> (Vec<(&'static str, bool)>, (String, bool)) {
         let mods = self.hotkey_modifiers;
         let mut modifier_parts = Vec::new();
-        if mods & hotkey::CTRL_KEY  != 0 { modifier_parts.push(("⌃", self.pulse_ctrl)); }
-        if mods & hotkey::OPT_KEY   != 0 { modifier_parts.push(("⌥", self.pulse_opt)); }
-        if mods & hotkey::CMD_KEY   != 0 { modifier_parts.push(("⌘", self.pulse_cmd)); }
+        if mods & hotkey::CTRL_KEY != 0 {
+            modifier_parts.push(("⌃", self.pulse_ctrl));
+        }
+        if mods & hotkey::OPT_KEY != 0 {
+            modifier_parts.push(("⌥", self.pulse_opt));
+        }
+        if mods & hotkey::CMD_KEY != 0 {
+            modifier_parts.push(("⌘", self.pulse_cmd));
+        }
         let key_display = match self.hotkey_key_name.as_str() {
             "space" => "Space".to_string(),
             "return" => "↩".to_string(),
@@ -225,7 +231,10 @@ impl SettingsView {
         let key = event.keystroke.key.as_str();
 
         // Ignore bare modifier keys — they don't count as a trigger key
-        if matches!(key, "control" | "alt" | "shift" | "cmd" | "super" | "meta" | "capslock") {
+        if matches!(
+            key,
+            "control" | "alt" | "shift" | "cmd" | "super" | "meta" | "capslock"
+        ) {
             return;
         }
 
@@ -308,15 +317,24 @@ impl SettingsView {
         let mut changed = false;
         if mods & hotkey::CMD_KEY != 0 {
             let v = event.modifiers.platform;
-            if self.pulse_cmd != v { self.pulse_cmd = v; changed = true; }
+            if self.pulse_cmd != v {
+                self.pulse_cmd = v;
+                changed = true;
+            }
         }
         if mods & hotkey::OPT_KEY != 0 {
             let v = event.modifiers.alt;
-            if self.pulse_opt != v { self.pulse_opt = v; changed = true; }
+            if self.pulse_opt != v {
+                self.pulse_opt = v;
+                changed = true;
+            }
         }
         if mods & hotkey::CTRL_KEY != 0 {
             let v = event.modifiers.control;
-            if self.pulse_ctrl != v { self.pulse_ctrl = v; changed = true; }
+            if self.pulse_ctrl != v {
+                self.pulse_ctrl = v;
+                changed = true;
+            }
         }
         if changed {
             cx.notify();
@@ -478,45 +496,41 @@ impl SettingsView {
                         "Where the picker appears on screen",
                         colors,
                     ))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.0))
-                            .children(["Top", "Center", "Bottom", "Cursor"].iter().map(|&pos| {
-                                let selected = picker_position == pos.to_lowercase();
-                                let pos_lower = pos.to_lowercase();
-                                div()
-                                    .id(SharedString::from(format!("picker-pos-{pos_lower}")))
-                                    .px(px(10.0))
-                                    .py(px(4.0))
-                                    .rounded(px(5.0))
-                                    .cursor_pointer()
-                                    .border_1()
-                                    .border_color(if selected {
-                                        colors.text_accent
-                                    } else {
-                                        colors.border_variant
-                                    })
-                                    .bg(if selected {
-                                        colors.element_selected
-                                    } else {
-                                        colors.surface_background
-                                    })
-                                    .text_color(if selected {
-                                        colors.text_accent
-                                    } else {
-                                        colors.text_muted
-                                    })
-                                    .text_size(px(12.0))
-                                    .child(SharedString::from(pos.to_string()))
-                                    .on_click(cx.listener(move |this, _e, _w, cx| {
-                                        this.picker_position = pos_lower.clone();
-                                        let _ = this.db.set_setting("picker_position", &pos_lower);
-                                        cx.notify();
-                                    }))
-                            })),
-                    ),
+                    .child(div().flex().items_center().gap(px(4.0)).children(
+                        ["Top", "Center", "Bottom", "Cursor"].iter().map(|&pos| {
+                            let selected = picker_position == pos.to_lowercase();
+                            let pos_lower = pos.to_lowercase();
+                            div()
+                                .id(SharedString::from(format!("picker-pos-{pos_lower}")))
+                                .px(px(10.0))
+                                .py(px(4.0))
+                                .rounded(px(5.0))
+                                .cursor_pointer()
+                                .border_1()
+                                .border_color(if selected {
+                                    colors.text_accent
+                                } else {
+                                    colors.border_variant
+                                })
+                                .bg(if selected {
+                                    colors.element_selected
+                                } else {
+                                    colors.surface_background
+                                })
+                                .text_color(if selected {
+                                    colors.text_accent
+                                } else {
+                                    colors.text_muted
+                                })
+                                .text_size(px(12.0))
+                                .child(SharedString::from(pos.to_string()))
+                                .on_click(cx.listener(move |this, _e, _w, cx| {
+                                    this.picker_position = pos_lower.clone();
+                                    let _ = this.db.set_setting("picker_position", &pos_lower);
+                                    cx.notify();
+                                }))
+                        }),
+                    )),
             )
             .child(
                 Self::setting_row(colors)
@@ -752,17 +766,15 @@ impl SettingsView {
                     .child(Self::toggle_pill(self.ai_enabled, colors))
                     .on_click(cx.listener(|this, _e, _w, cx| {
                         this.ai_enabled = !this.ai_enabled;
-                        let _ = this.db.set_setting("ai_enabled", &this.ai_enabled.to_string());
+                        let _ = this
+                            .db
+                            .set_setting("ai_enabled", &this.ai_enabled.to_string());
                         cx.notify();
                     })),
             )
             .child(
                 Self::setting_row(colors)
-                    .child(Self::setting_label(
-                        "Availability",
-                        "",
-                        colors,
-                    ))
+                    .child(Self::setting_label("Availability", "", colors))
                     .child(
                         div()
                             .text_size(px(12.0))
@@ -809,7 +821,9 @@ impl SettingsView {
                     .child(Self::toggle_pill(self.yolo_mode, colors))
                     .on_click(cx.listener(|this, _e, _w, cx| {
                         this.yolo_mode = !this.yolo_mode;
-                        let _ = this.db.set_setting("yolo_mode", &this.yolo_mode.to_string());
+                        let _ = this
+                            .db
+                            .set_setting("yolo_mode", &this.yolo_mode.to_string());
                         crate::tools::set_yolo_mode(this.yolo_mode);
                         cx.notify();
                     })),
@@ -878,7 +892,9 @@ impl SettingsView {
     }
 
     fn render_extensions(&self, colors: &rover_theme::ThemeColors, cx: &mut Context<Self>) -> Div {
-        let inbox = rover_extensions::extensions_inbox_dir().display().to_string();
+        let inbox = rover_extensions::extensions_inbox_dir()
+            .display()
+            .to_string();
         let status = self.extension_status.clone();
         div()
             .flex()
@@ -962,23 +978,26 @@ impl SettingsView {
                     )
                     .on_click(cx.listener(|this, _e, _w, cx| {
                         match pick_extension_zip_path() {
-                            Some(path) => match install_extension_zip(std::path::Path::new(&path)) {
-                                Ok(ext) => {
-                                    this.extension_status = Some(format!(
-                                        "Installed '{}'. Restart Rover to load it.",
-                                        ext.manifest.name
-                                    ));
-                                    this.installed_extensions =
-                                        load_extensions().map(|v| v.len()).unwrap_or(this.installed_extensions);
-                                }
-                                Err(err) => {
-                                    this.extension_status =
-                                        Some(format!("Install failed: {err}"));
+                            Some(path) => {
+                                match install_extension_zip(std::path::Path::new(&path)) {
+                                    Ok(ext) => {
+                                        this.extension_status = Some(format!(
+                                            "Installed '{}'. Restart Rover to load it.",
+                                            ext.manifest.name
+                                        ));
+                                        this.installed_extensions = load_extensions()
+                                            .map(|v| v.len())
+                                            .unwrap_or(this.installed_extensions);
+                                    },
+                                    Err(err) => {
+                                        this.extension_status =
+                                            Some(format!("Install failed: {err}"));
+                                    },
                                 }
                             },
                             None => {
                                 this.extension_status = Some("Import cancelled.".to_string());
-                            }
+                            },
                         }
                         cx.notify();
                     })),

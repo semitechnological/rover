@@ -54,18 +54,28 @@ impl FileSearchPlugin {
                 return;
             };
             let files = file_search::build_local_index(3000);
-            for file in files {
-                let id = format!("file:{}", file.path.display());
-                let text = format!("{} {}", file.name, file.path.display());
-                let _ = index.upsert(
-                    &id,
-                    "files",
-                    &text,
-                    serde_json::json!({
+
+            // Build batch of documents for efficient embedding
+            let batch: Vec<(String, String, String, serde_json::Value)> = files
+                .iter()
+                .map(|file| {
+                    let id = format!("file:{}", file.path.display());
+                    let text = format!("{} {}", file.name, file.path.display());
+                    let metadata = serde_json::json!({
                         "name": file.name,
                         "path": file.path.display().to_string()
-                    }),
-                );
+                    });
+                    (id, "files".to_string(), text, metadata)
+                })
+                .collect();
+
+            // Use batch upsert for faster indexing
+            if let Err(e) = index.upsert_batch(&batch) {
+                log::error!("Failed to batch index files: {e}");
+                // Fallback to individual upserts
+                for (id, _, text, metadata) in batch {
+                    let _ = index.upsert(&id, "files", &text, metadata);
+                }
             }
         });
     }
@@ -115,9 +125,15 @@ impl Default for FileSearchPlugin {
 }
 
 impl Plugin for FileSearchPlugin {
-    fn id(&self) -> &str { "builtin.file_search" }
-    fn name(&self) -> &str { "File Search" }
-    fn description(&self) -> &str { "Search for files on your system" }
+    fn id(&self) -> &str {
+        "builtin.file_search"
+    }
+    fn name(&self) -> &str {
+        "File Search"
+    }
+    fn description(&self) -> &str {
+        "Search for files on your system"
+    }
 
     fn on_load(&mut self, _ctx: &mut PluginContext) -> Result<(), PluginError> {
         Self::index_files_once();
@@ -128,9 +144,13 @@ impl Plugin for FileSearchPlugin {
         MatchMode::FuzzyCommand
     }
 
-    fn priority(&self) -> i32 { 5 }
+    fn priority(&self) -> i32 {
+        5
+    }
 
-    fn provides_submenu(&self) -> bool { true }
+    fn provides_submenu(&self) -> bool {
+        true
+    }
 
     fn commands(&self) -> Vec<CommandDescriptor> {
         vec![CommandDescriptor {
@@ -192,9 +212,7 @@ impl Plugin for FileSearchPlugin {
         if let Some(idx_str) = match_id.strip_prefix("file:") {
             if let Ok(idx) = idx_str.parse::<usize>() {
                 if let Some(file) = self.results.get(idx) {
-                    let _ = std::process::Command::new("open")
-                        .arg(&file.path)
-                        .spawn();
+                    let _ = std::process::Command::new("open").arg(&file.path).spawn();
                     return ConfirmResult::Dismiss;
                 }
             }

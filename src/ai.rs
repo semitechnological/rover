@@ -1,7 +1,7 @@
 #[cfg(feature = "ai")]
-use rusty_foundationmodels::Session;
-#[cfg(feature = "ai")]
 use crate::tools::build_os_tools;
+#[cfg(feature = "ai")]
+use rusty_foundationmodels::Session;
 
 const SYSTEM_INSTRUCTIONS: &str = "\
 You are Rover, a macOS assistant embedded in the launcher bar. \

@@ -71,8 +71,7 @@ impl SemanticIndex {
 
         log::info!("rover_semantic: loading embedding model…");
         let model = TextEmbedding::try_new(
-            InitOptions::new(EmbeddingModel::AllMiniLML6V2)
-                .with_show_download_progress(true),
+            InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_show_download_progress(true),
         )
         .context("load embedding model")?;
         log::info!("rover_semantic: model ready");
@@ -115,7 +114,10 @@ impl SemanticIndex {
         if let Some(entry) = self.cache.iter_mut().find(|e| e.id == id) {
             entry.embedding = embedding;
         } else {
-            self.cache.push(CachedDoc { id: id.to_string(), embedding });
+            self.cache.push(CachedDoc {
+                id: id.to_string(),
+                embedding,
+            });
         }
 
         Ok(())
@@ -123,8 +125,56 @@ impl SemanticIndex {
 
     /// Removes a document by id. No-op if not found.
     pub fn remove(&mut self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM documents WHERE id = ?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM documents WHERE id = ?1", params![id])?;
         self.cache.retain(|e| e.id != id);
+        Ok(())
+    }
+
+    /// Batch upsert multiple documents at once.
+    /// More efficient than calling `upsert` repeatedly as it uses batch embedding.
+    pub fn upsert_batch(
+        &mut self,
+        docs: &[(String, String, String, serde_json::Value)],
+    ) -> Result<()>
+    where
+        String: std::convert::AsRef<str>,
+    {
+        if docs.is_empty() {
+            return Ok(());
+        }
+
+        let texts: Vec<&str> = docs.iter().map(|(_, _, text, _)| text.as_ref()).collect();
+        let embeddings = self.embed_batch(&texts)?;
+
+        let mut insert_stmt = self.conn.prepare(
+            "INSERT INTO documents (id, collection, text, embedding, metadata, indexed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, unixepoch())
+             ON CONFLICT(id) DO UPDATE SET
+                 collection = excluded.collection,
+                 text       = excluded.text,
+                 embedding  = excluded.embedding,
+                 metadata   = excluded.metadata,
+                 indexed_at = unixepoch()",
+        )?;
+
+        for (doc, embedding) in docs.iter().zip(embeddings) {
+            let (id, collection, text, metadata) = doc;
+            let blob = serialize(&embedding);
+            let meta_str = metadata.to_string();
+            insert_stmt.execute(params![id, collection, text, blob, meta_str])?;
+
+            // Update cache
+            if let Some(entry) = self.cache.iter_mut().find(|e| e.id == *id) {
+                entry.embedding = embedding;
+            } else {
+                self.cache.push(CachedDoc {
+                    id: id.clone(),
+                    embedding,
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -132,10 +182,11 @@ impl SemanticIndex {
     pub fn clear_collection(&mut self, collection: &str) -> Result<()> {
         // Collect ids first so we can clean the cache.
         let ids: Vec<String> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT id FROM documents WHERE collection = ?1",
-            )?;
-            let ids = stmt.query_map(params![collection], |row| row.get(0))?
+            let mut stmt = self
+                .conn
+                .prepare("SELECT id FROM documents WHERE collection = ?1")?;
+            let ids = stmt
+                .query_map(params![collection], |row| row.get(0))?
                 .collect::<rusqlite::Result<_>>()?;
             ids
         };
@@ -193,11 +244,11 @@ impl SemanticIndex {
                 if let Some(col) = collection {
                     stmt.query_row(params![doc.id, col], |r| {
                         Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                    }).ok()
+                    })
+                    .ok()
                 } else {
-                    stmt.query_row(params![doc.id], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-                    }).ok()
+                    stmt.query_row(params![doc.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                        .ok()
                 }
             };
             if let Some((col, text, meta_str)) = row {
@@ -250,7 +301,10 @@ impl SemanticIndex {
         let mut cache = Vec::new();
         for row in rows {
             let (id, blob) = row?;
-            cache.push(CachedDoc { id, embedding: deserialize(&blob) });
+            cache.push(CachedDoc {
+                id,
+                embedding: deserialize(&blob),
+            });
         }
         Ok(cache)
     }
@@ -265,7 +319,11 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 { 0.0 } else { dot / (norm_a * norm_b) }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        0.0
+    } else {
+        dot / (norm_a * norm_b)
+    }
 }
 
 fn serialize(emb: &[f32]) -> Vec<u8> {

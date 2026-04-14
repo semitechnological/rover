@@ -25,58 +25,140 @@ const HYPER_MODS: u32 = CTRL_KEY | SHIFT_KEY | OPT_KEY | CMD_KEY;
 
 pub const VK_MAP: &[(&str, u32)] = &[
     // Letters (QWERTY layout positions)
-    ("a", 0), ("s", 1), ("d", 2), ("f", 3), ("g", 5), ("h", 4),
-    ("j", 38), ("k", 40), ("l", 37),
-    ("q", 12), ("w", 13), ("e", 14), ("r", 15), ("t", 17),
-    ("y", 16), ("u", 32), ("i", 34), ("o", 31), ("p", 35),
-    ("z", 6), ("x", 7), ("c", 8), ("v", 9), ("b", 11),
-    ("n", 45), ("m", 46),
+    ("a", 0),
+    ("s", 1),
+    ("d", 2),
+    ("f", 3),
+    ("g", 5),
+    ("h", 4),
+    ("j", 38),
+    ("k", 40),
+    ("l", 37),
+    ("q", 12),
+    ("w", 13),
+    ("e", 14),
+    ("r", 15),
+    ("t", 17),
+    ("y", 16),
+    ("u", 32),
+    ("i", 34),
+    ("o", 31),
+    ("p", 35),
+    ("z", 6),
+    ("x", 7),
+    ("c", 8),
+    ("v", 9),
+    ("b", 11),
+    ("n", 45),
+    ("m", 46),
     // Numbers
-    ("0", 29), ("1", 18), ("2", 19), ("3", 20), ("4", 21),
-    ("5", 23), ("6", 22), ("7", 26), ("8", 28), ("9", 25),
+    ("0", 29),
+    ("1", 18),
+    ("2", 19),
+    ("3", 20),
+    ("4", 21),
+    ("5", 23),
+    ("6", 22),
+    ("7", 26),
+    ("8", 28),
+    ("9", 25),
     // Function keys
-    ("f1", 122), ("f2", 120), ("f3", 99), ("f4", 118),
-    ("f5", 96), ("f6", 97), ("f7", 98), ("f8", 100),
-    ("f9", 101), ("f10", 109), ("f11", 103), ("f12", 111),
-    ("f13", 105), ("f14", 107), ("f15", 113), ("f16", 106),
-    ("f17", 64), ("f18", 79), ("f19", 80), ("f20", 90),
+    ("f1", 122),
+    ("f2", 120),
+    ("f3", 99),
+    ("f4", 118),
+    ("f5", 96),
+    ("f6", 97),
+    ("f7", 98),
+    ("f8", 100),
+    ("f9", 101),
+    ("f10", 109),
+    ("f11", 103),
+    ("f12", 111),
+    ("f13", 105),
+    ("f14", 107),
+    ("f15", 113),
+    ("f16", 106),
+    ("f17", 64),
+    ("f18", 79),
+    ("f19", 80),
+    ("f20", 90),
     // Special
-    ("space", 49), ("return", 36), ("tab", 48),
-    ("backspace", 51), ("delete", 51), ("escape", 53),
+    ("space", 49),
+    ("return", 36),
+    ("tab", 48),
+    ("backspace", 51),
+    ("delete", 51),
+    ("escape", 53),
     // Arrows
-    ("left", 123), ("right", 124), ("down", 125), ("up", 126),
+    ("left", 123),
+    ("right", 124),
+    ("down", 125),
+    ("up", 126),
     // Navigation
-    ("home", 115), ("end", 119), ("pageup", 116), ("pagedown", 121),
+    ("home", 115),
+    ("end", 119),
+    ("pageup", 116),
+    ("pagedown", 121),
     // Symbols
-    ("-", 27), ("=", 24), ("[", 33), ("]", 30),
-    ("\\", 42), (";", 41), ("'", 39), (",", 43), (".", 47), ("/", 44),
+    ("-", 27),
+    ("=", 24),
+    ("[", 33),
+    ("]", 30),
+    ("\\", 42),
+    (";", 41),
+    ("'", 39),
+    (",", 43),
+    (".", 47),
+    ("/", 44),
     ("`", 50),
 ];
 
 /// Convert a GPUI key name to a Carbon virtual key code.
 pub fn key_name_to_vk(name: &str) -> Option<u32> {
     let lower = name.to_lowercase();
-    VK_MAP.iter().find(|(k, _)| *k == lower.as_str()).map(|(_, v)| *v)
+    VK_MAP
+        .iter()
+        .find(|(k, _)| *k == lower.as_str())
+        .map(|(_, v)| *v)
 }
 
 /// Build Carbon modifier bits from GPUI Modifiers fields.
 pub fn mods_from_gpui(cmd: bool, opt: bool, ctrl: bool, shift: bool) -> u32 {
     let mut m = 0u32;
-    if cmd   { m |= CMD_KEY; }
-    if opt   { m |= OPT_KEY; }
-    if ctrl  { m |= CTRL_KEY; }
-    if shift { m |= SHIFT_KEY; }
+    if cmd {
+        m |= CMD_KEY;
+    }
+    if opt {
+        m |= OPT_KEY;
+    }
+    if ctrl {
+        m |= CTRL_KEY;
+    }
+    if shift {
+        m |= SHIFT_KEY;
+    }
     m
 }
 
 /// Build a pretty display string for a key combo (e.g. "⌘⌥ F5").
 pub fn display_for_combo(modifiers: u32, key_name: &str) -> String {
     let mut s = String::new();
-    if modifiers & CTRL_KEY  != 0 { s.push('⌃'); }
-    if modifiers & OPT_KEY   != 0 { s.push('⌥'); }
-    if modifiers & SHIFT_KEY != 0 { s.push('⇧'); }
-    if modifiers & CMD_KEY   != 0 { s.push('⌘'); }
-    if !s.is_empty() { s.push(' '); }
+    if modifiers & CTRL_KEY != 0 {
+        s.push('⌃');
+    }
+    if modifiers & OPT_KEY != 0 {
+        s.push('⌥');
+    }
+    if modifiers & SHIFT_KEY != 0 {
+        s.push('⇧');
+    }
+    if modifiers & CMD_KEY != 0 {
+        s.push('⌘');
+    }
+    if !s.is_empty() {
+        s.push(' ');
+    }
     let pretty_key = match key_name {
         "space" => "Space".to_string(),
         "return" => "↩".to_string(),
@@ -211,8 +293,7 @@ pub fn register_global_hotkey(key_code: u32, modifiers: u32) {
             id: 1,
         };
         let mut hotkey_ref: *mut c_void = std::ptr::null_mut();
-        let err =
-            RegisterEventHotKey(key_code, modifiers, hotkey_id, target, 0, &mut hotkey_ref);
+        let err = RegisterEventHotKey(key_code, modifiers, hotkey_id, target, 0, &mut hotkey_ref);
         if err != 0 {
             log::warn!("RegisterEventHotKey failed with error code {err}");
         } else if let Ok(mut guard) = MAIN_HOTKEY_REF.lock() {
@@ -225,14 +306,7 @@ pub fn register_global_hotkey(key_code: u32, modifiers: u32) {
             id: 2,
         };
         let mut hyper_ref: *mut c_void = std::ptr::null_mut();
-        let err = RegisterEventHotKey(
-            K_VK_SPACE,
-            HYPER_MODS,
-            hyper_id,
-            target,
-            0,
-            &mut hyper_ref,
-        );
+        let err = RegisterEventHotKey(K_VK_SPACE, HYPER_MODS, hyper_id, target, 0, &mut hyper_ref);
         if err != 0 {
             log::warn!("RegisterEventHotKey (Hyperkey+Space) failed with error code {err}");
         }
@@ -267,8 +341,7 @@ pub fn register_main_hotkey(key_code: u32, modifiers: u32) {
             id: 1,
         };
         let mut hotkey_ref: *mut c_void = std::ptr::null_mut();
-        let err =
-            RegisterEventHotKey(key_code, modifiers, hotkey_id, target, 0, &mut hotkey_ref);
+        let err = RegisterEventHotKey(key_code, modifiers, hotkey_id, target, 0, &mut hotkey_ref);
         if err == 0 {
             if let Ok(mut guard) = MAIN_HOTKEY_REF.lock() {
                 *guard = Some(HotkeyRefPtr(hotkey_ref));

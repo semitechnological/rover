@@ -37,9 +37,15 @@ impl Default for BrowserPlugin {
 }
 
 impl Plugin for BrowserPlugin {
-    fn id(&self) -> &str { "builtin.browser" }
-    fn name(&self) -> &str { "Browser" }
-    fn description(&self) -> &str { "Keyboard-driven WebKit browser" }
+    fn id(&self) -> &str {
+        "builtin.browser"
+    }
+    fn name(&self) -> &str {
+        "Browser"
+    }
+    fn description(&self) -> &str {
+        "Keyboard-driven WebKit browser"
+    }
 
     fn on_load(&mut self, _ctx: &mut PluginContext) -> Result<(), PluginError> {
         Ok(())
@@ -49,7 +55,9 @@ impl Plugin for BrowserPlugin {
         MatchMode::FuzzyCommand
     }
 
-    fn priority(&self) -> i32 { 5 }
+    fn priority(&self) -> i32 {
+        5
+    }
 
     fn commands(&self) -> Vec<CommandDescriptor> {
         vec![CommandDescriptor {
@@ -57,7 +65,11 @@ impl Plugin for BrowserPlugin {
             name: "Open Browser".to_string(),
             description: "Open the keyboard-driven browser".to_string(),
             icon: Some(IconHint::Emoji("globe".to_string())),
-            keywords: vec!["web".to_string(), "safari".to_string(), "browse".to_string()],
+            keywords: vec![
+                "web".to_string(),
+                "safari".to_string(),
+                "browse".to_string(),
+            ],
             has_submenu: false,
         }]
     }

@@ -43,9 +43,15 @@ impl AiPlugin {
 }
 
 impl Plugin for AiPlugin {
-    fn id(&self) -> &str { "builtin.ai" }
-    fn name(&self) -> &str { "AI Assistant" }
-    fn description(&self) -> &str { "Apple Intelligence powered assistant" }
+    fn id(&self) -> &str {
+        "builtin.ai"
+    }
+    fn name(&self) -> &str {
+        "AI Assistant"
+    }
+    fn description(&self) -> &str {
+        "Apple Intelligence powered assistant"
+    }
 
     fn on_load(&mut self, _ctx: &mut PluginContext) -> Result<(), PluginError> {
         if !self.enabled {
@@ -62,7 +68,9 @@ impl Plugin for AiPlugin {
         MatchMode::Fallback { min_query_len: 6 }
     }
 
-    fn priority(&self) -> i32 { -10 } // Low priority — shown after other results
+    fn priority(&self) -> i32 {
+        -10
+    } // Low priority — shown after other results
 
     fn on_query(&mut self, query: &str, _ctx: &PluginContext) -> Vec<MatchResult> {
         self.last_query = query.to_string();

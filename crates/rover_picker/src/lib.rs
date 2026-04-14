@@ -10,7 +10,16 @@ use std::time::Duration;
 
 actions!(
     rover_picker,
-    [SelectNext, SelectPrev, SelectLeft, SelectRight, Confirm, ShiftConfirm, Cancel, ShowActions]
+    [
+        SelectNext,
+        SelectPrev,
+        SelectLeft,
+        SelectRight,
+        Confirm,
+        ShiftConfirm,
+        Cancel,
+        ShowActions
+    ]
 );
 
 pub fn bind_picker_keys(cx: &mut App) {
@@ -110,8 +119,6 @@ pub trait PickerDelegate: Sized + 'static {
         false
     }
 
-
-
     /// Return sub-actions for the currently selected item (shown on Cmd+K)
     fn actions_for_selected(&self) -> Vec<ItemAction> {
         Vec::new()
@@ -138,6 +145,7 @@ pub struct Picker<D: PickerDelegate> {
     action_selected_ix: usize,
     compact_scroll_offset: usize,
     list_scroll_handle: ScrollHandle,
+    emoji_mode: bool,
 }
 
 impl<D: PickerDelegate> EventEmitter<PickerEvent> for Picker<D> {}
@@ -151,12 +159,32 @@ impl<D: PickerDelegate> Picker<D> {
             &text_input,
             |picker: &mut Self, _input, event: &TextInputEvent, cx| match event {
                 TextInputEvent::Changed { text } => {
+                    // Handle emoji completion: `:something:` → auto-select and copy
+                    if let Some(emoji) = Self::check_emoji_completion(&text) {
+                        let emoji_char = emoji.to_string();
+                        let emoji_str = emoji_char.clone();
+                        // Copy to clipboard and dismiss
+                        std::thread::spawn(move || {
+                            if let Some(mut cb) = arboard::Clipboard::new().ok() {
+                                let _ = cb.set_text(&emoji_str);
+                            }
+                        });
+                        picker.text_input.update(cx, |input, cx| input.clear(cx));
+                        cx.emit(PickerEvent::Dismiss);
+                        return;
+                    }
+
+                    // Enter emoji mode if text starts with `:`
+                    picker.emoji_mode = text.starts_with(':');
+
                     picker.delegate.update_matches(text.clone(), cx).detach();
                     cx.notify();
-                }
+                },
                 TextInputEvent::NavigateLeft => {
                     let count = picker.delegate.match_count();
-                    if count == 0 { return; }
+                    if count == 0 {
+                        return;
+                    }
                     if picker.compact {
                         let ix = picker.delegate.selected_index().saturating_sub(1);
                         picker.delegate.set_selected_index(ix, cx);
@@ -167,14 +195,18 @@ impl<D: PickerDelegate> Picker<D> {
                         if ix > 0 && (ctx == 0 || ix < ctx) {
                             picker.delegate.set_selected_index(ix - 1, cx);
                         } else if ix >= ctx && ctx > 0 {
-                            picker.delegate.set_selected_index(ctx.saturating_sub(1), cx);
+                            picker
+                                .delegate
+                                .set_selected_index(ctx.saturating_sub(1), cx);
                         }
                     }
                     cx.notify();
-                }
+                },
                 TextInputEvent::NavigateRight => {
                     let count = picker.delegate.match_count();
-                    if count == 0 { return; }
+                    if count == 0 {
+                        return;
+                    }
                     if picker.compact {
                         let ix = (picker.delegate.selected_index() + 1).min(count - 1);
                         picker.delegate.set_selected_index(ix, cx);
@@ -189,7 +221,7 @@ impl<D: PickerDelegate> Picker<D> {
                         }
                     }
                     cx.notify();
-                }
+                },
             },
         )
         .detach();
@@ -203,6 +235,7 @@ impl<D: PickerDelegate> Picker<D> {
             action_selected_ix: 0,
             compact_scroll_offset: 0,
             list_scroll_handle: ScrollHandle::new(),
+            emoji_mode: false,
         };
         picker.delegate.update_matches(String::new(), cx).detach();
         picker
@@ -294,7 +327,12 @@ impl<D: PickerDelegate> Picker<D> {
         }
     }
 
-    fn handle_shift_confirm(&mut self, _: &ShiftConfirm, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_shift_confirm(
+        &mut self,
+        _: &ShiftConfirm,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let should_dismiss = self.delegate.shift_confirm(cx);
         if should_dismiss {
             self.clear_and_reset(cx);
@@ -333,7 +371,9 @@ impl<D: PickerDelegate> Picker<D> {
     fn handle_select_left(&mut self, _: &SelectLeft, _window: &mut Window, cx: &mut Context<Self>) {
         if self.compact {
             // In compact mode, left = prev
-            if self.delegate.match_count() == 0 { return; }
+            if self.delegate.match_count() == 0 {
+                return;
+            }
             let ix = self.delegate.selected_index().saturating_sub(1);
             self.delegate.set_selected_index(ix, cx);
             self.adjust_compact_scroll();
@@ -341,7 +381,9 @@ impl<D: PickerDelegate> Picker<D> {
         } else {
             // In non-compact, navigate within context pills only
             let ctx = self.delegate.context_item_count();
-            if ctx == 0 { return; }
+            if ctx == 0 {
+                return;
+            }
             let ix = self.delegate.selected_index();
             if ix < ctx && ix > 0 {
                 self.delegate.set_selected_index(ix - 1, cx);
@@ -354,11 +396,18 @@ impl<D: PickerDelegate> Picker<D> {
         }
     }
 
-    fn handle_select_right(&mut self, _: &SelectRight, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_select_right(
+        &mut self,
+        _: &SelectRight,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.compact {
             // In compact mode, right = next
             let count = self.delegate.match_count();
-            if count == 0 { return; }
+            if count == 0 {
+                return;
+            }
             let ix = (self.delegate.selected_index() + 1).min(count - 1);
             self.delegate.set_selected_index(ix, cx);
             self.adjust_compact_scroll();
@@ -366,7 +415,9 @@ impl<D: PickerDelegate> Picker<D> {
         } else {
             // In non-compact, navigate within context pills only
             let ctx = self.delegate.context_item_count();
-            if ctx == 0 { return; }
+            if ctx == 0 {
+                return;
+            }
             let ix = self.delegate.selected_index();
             if ix < ctx.saturating_sub(1) {
                 self.delegate.set_selected_index(ix + 1, cx);
@@ -413,6 +464,66 @@ impl<D: PickerDelegate> Picker<D> {
             }
         }
         cx.notify();
+    }
+
+    /// Check if text matches `:something:` pattern and return the best emoji match.
+    /// Uses fuzzy matching for typo tolerance - no hardcoded alias tables.
+    fn check_emoji_completion(text: &str) -> Option<&'static emojis::Emoji> {
+        use emojis::{get, get_by_shortcode, iter as emoji_iter};
+
+        // Check if text matches `:something:` pattern (at least :x:)
+        if !text.starts_with(':') || text.len() < 3 {
+            return None;
+        }
+
+        // Find the second `:`
+        let remaining = &text[1..];
+        if let Some(pos) = remaining.find(':') {
+            let shortcode = &remaining[..pos];
+            if shortcode.is_empty() {
+                return None;
+            }
+
+            // 1. Try exact shortcode match first
+            if let Some(emoji) = get_by_shortcode(shortcode) {
+                return Some(emoji);
+            }
+
+            // 2. Try direct emoji lookup (for cases like :heart: where heart is the emoji name)
+            if let Some(emoji) = get(shortcode) {
+                return Some(emoji);
+            }
+
+            // 3. Fall back to fuzzy/prefix matching on shortcodes
+            let lower_shortcode = shortcode.to_lowercase();
+            let mut best_match: Option<(&str, &str)> = None;
+
+            for emoji in emoji_iter() {
+                if let Some(sc) = emoji.shortcode() {
+                    let sc_lower = sc.to_lowercase();
+                    // Check if query is a prefix/substring of shortcode
+                    if sc_lower.starts_with(&lower_shortcode) || sc_lower.contains(&lower_shortcode)
+                    {
+                        match &best_match {
+                            None => best_match = Some((sc, emoji.as_str())),
+                            Some((_, existing_emoji)) => {
+                                if sc_lower.len() < existing_emoji.len() {
+                                    best_match = Some((sc, emoji.as_str()));
+                                }
+                            },
+                        }
+                    }
+                }
+            }
+
+            if let Some((_, emoji_str)) = best_match {
+                return get(emoji_str);
+            }
+
+            None
+        } else {
+            None
+        }
     }
 }
 
@@ -498,13 +609,11 @@ impl<D: PickerDelegate> Render for Picker<D> {
                     }
                 }
 
-                root = root.child(
-                    pills_div.with_animation(
-                        "compact-pills-fade",
-                        Animation::new(Duration::from_millis(120)).with_easing(ease_in_out),
-                        |el, delta| el.opacity(delta),
-                    ),
-                );
+                root = root.child(pills_div.with_animation(
+                    "compact-pills-fade",
+                    Animation::new(Duration::from_millis(120)).with_easing(ease_in_out),
+                    |el, delta| el.opacity(delta),
+                ));
             } else {
                 // ── Non-compact mode: context items as pills, rest as list rows ──
 
@@ -545,13 +654,11 @@ impl<D: PickerDelegate> Render for Picker<D> {
                             );
                         }
                     }
-                    root = root.child(
-                        ctx_pills.with_animation(
-                            "ctx-pills-fade",
-                            Animation::new(Duration::from_millis(120)).with_easing(ease_in_out),
-                            |el, delta| el.opacity(delta),
-                        ),
-                    );
+                    root = root.child(ctx_pills.with_animation(
+                        "ctx-pills-fade",
+                        Animation::new(Duration::from_millis(120)).with_easing(ease_in_out),
+                        |el, delta| el.opacity(delta),
+                    ));
                 }
 
                 // List rows — vertical list with bg
@@ -598,13 +705,11 @@ impl<D: PickerDelegate> Render for Picker<D> {
                             );
                         }
                     }
-                    root = root.child(
-                        list_div.with_animation(
-                            "list-fade",
-                            Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
-                            |el, delta| el.opacity(delta),
-                        ),
-                    );
+                    root = root.child(list_div.with_animation(
+                        "list-fade",
+                        Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
+                        |el, delta| el.opacity(delta),
+                    ));
                 }
             }
         }
@@ -638,12 +743,11 @@ impl<D: PickerDelegate> Render for Picker<D> {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(SharedString::from("AI")),
                         )
-                        .child(
-                            div()
-                                .text_color(colors.text)
-                                .text_size(px(12.0))
-                                .child(SharedString::from(self.delegate.ai_widget_content().unwrap_or("").to_string())),
-                        )
+                        .child(div().text_color(colors.text).text_size(px(12.0)).child(
+                            SharedString::from(
+                                self.delegate.ai_widget_content().unwrap_or("").to_string(),
+                            ),
+                        ))
                         .child(
                             div()
                                 .text_color(text_muted)
@@ -651,13 +755,11 @@ impl<D: PickerDelegate> Render for Picker<D> {
                                 .child(SharedString::from("Click to copy")),
                         ),
                 );
-            root = root.child(
-                ai_widget.with_animation(
-                    "ai-widget-fade",
-                    Animation::new(Duration::from_millis(200)).with_easing(ease_in_out),
-                    |el, delta| el.opacity(delta),
-                ),
-            );
+            root = root.child(ai_widget.with_animation(
+                "ai-widget-fade",
+                Animation::new(Duration::from_millis(200)).with_easing(ease_in_out),
+                |el, delta| el.opacity(delta),
+            ));
         }
 
         // WU-11: Inline terminal output widget
@@ -679,19 +781,19 @@ impl<D: PickerDelegate> Render for Picker<D> {
                         .flex_col()
                         .gap_1()
                         .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap_1()
-                                .child(
-                                    div()
-                                        .text_color(colors.text_accent)
-                                        .text_size(px(10.0))
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child(SharedString::from(
-                                            if self.delegate.terminal_running() { "$ running..." } else { "$" }
-                                        )),
-                                ),
+                            div().flex().items_center().gap_1().child(
+                                div()
+                                    .text_color(colors.text_accent)
+                                    .text_size(px(10.0))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(SharedString::from(
+                                        if self.delegate.terminal_running() {
+                                            "$ running..."
+                                        } else {
+                                            "$"
+                                        },
+                                    )),
+                            ),
                         )
                         .child(
                             div()
@@ -700,13 +802,11 @@ impl<D: PickerDelegate> Render for Picker<D> {
                                 .child(SharedString::from(term_output.to_string())),
                         ),
                 );
-            root = root.child(
-                term_widget.with_animation(
-                    "terminal-fade",
-                    Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
-                    |el, delta| el.opacity(delta),
-                ),
-            );
+            root = root.child(term_widget.with_animation(
+                "terminal-fade",
+                Animation::new(Duration::from_millis(150)).with_easing(ease_in_out),
+                |el, delta| el.opacity(delta),
+            ));
         }
 
         // Action bar (floating between items and input bar)

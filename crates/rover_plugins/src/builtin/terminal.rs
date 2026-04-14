@@ -36,9 +36,15 @@ impl Default for TerminalPlugin {
 }
 
 impl Plugin for TerminalPlugin {
-    fn id(&self) -> &str { "builtin.terminal" }
-    fn name(&self) -> &str { "Terminal" }
-    fn description(&self) -> &str { "Run shell commands or open a terminal window" }
+    fn id(&self) -> &str {
+        "builtin.terminal"
+    }
+    fn name(&self) -> &str {
+        "Terminal"
+    }
+    fn description(&self) -> &str {
+        "Run shell commands or open a terminal window"
+    }
 
     fn on_load(&mut self, _ctx: &mut PluginContext) -> Result<(), PluginError> {
         Ok(())
@@ -48,7 +54,9 @@ impl Plugin for TerminalPlugin {
         MatchMode::Prefix(">".to_string())
     }
 
-    fn priority(&self) -> i32 { 50 }
+    fn priority(&self) -> i32 {
+        50
+    }
 
     fn commands(&self) -> Vec<CommandDescriptor> {
         vec![CommandDescriptor {
@@ -56,7 +64,11 @@ impl Plugin for TerminalPlugin {
             name: "Terminal".to_string(),
             description: "Open floating terminal window".to_string(),
             icon: Some(IconHint::Emoji("terminal".to_string())),
-            keywords: vec!["shell".to_string(), "console".to_string(), "bash".to_string()],
+            keywords: vec![
+                "shell".to_string(),
+                "console".to_string(),
+                "bash".to_string(),
+            ],
             has_submenu: false,
         }]
     }

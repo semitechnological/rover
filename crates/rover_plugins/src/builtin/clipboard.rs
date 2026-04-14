@@ -49,9 +49,15 @@ impl ClipboardPlugin {
 }
 
 impl Plugin for ClipboardPlugin {
-    fn id(&self) -> &str { "builtin.clipboard" }
-    fn name(&self) -> &str { "Clipboard History" }
-    fn description(&self) -> &str { "View and paste from clipboard history" }
+    fn id(&self) -> &str {
+        "builtin.clipboard"
+    }
+    fn name(&self) -> &str {
+        "Clipboard History"
+    }
+    fn description(&self) -> &str {
+        "View and paste from clipboard history"
+    }
 
     fn on_load(&mut self, _ctx: &mut PluginContext) -> Result<(), PluginError> {
         Ok(())
@@ -61,9 +67,13 @@ impl Plugin for ClipboardPlugin {
         MatchMode::FuzzyCommand
     }
 
-    fn priority(&self) -> i32 { 5 }
+    fn priority(&self) -> i32 {
+        5
+    }
 
-    fn provides_submenu(&self) -> bool { true }
+    fn provides_submenu(&self) -> bool {
+        true
+    }
 
     fn commands(&self) -> Vec<CommandDescriptor> {
         vec![CommandDescriptor {
@@ -71,7 +81,11 @@ impl Plugin for ClipboardPlugin {
             name: "Clipboard History".to_string(),
             description: "View and paste from clipboard history".to_string(),
             icon: Some(IconHint::Emoji("clipboard".to_string())),
-            keywords: vec!["paste".to_string(), "copy".to_string(), "clipboard".to_string()],
+            keywords: vec![
+                "paste".to_string(),
+                "copy".to_string(),
+                "clipboard".to_string(),
+            ],
             has_submenu: true,
         }]
     }
@@ -177,7 +191,7 @@ impl Plugin for ClipboardPlugin {
                         if let Some(entry) = self.entries.get(idx) {
                             return ConfirmResult::CopyToClipboard(entry.content.clone());
                         }
-                    }
+                    },
                     "delete" => {
                         if let Some(entry) = self.entries.get(idx) {
                             if let Some(db) = &self.db {
@@ -186,8 +200,8 @@ impl Plugin for ClipboardPlugin {
                             self.load_entries();
                         }
                         return ConfirmResult::Stay;
-                    }
-                    _ => {}
+                    },
+                    _ => {},
                 }
             }
         }

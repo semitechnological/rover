@@ -59,7 +59,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser", "tile"]
+default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser", "tile", "emoji"]
 calculator = ["rover_plugins/calculator"]
 app-launcher = ["rover_plugins/app-launcher"]
 clipboard = ["rover_plugins/clipboard"]
@@ -68,6 +68,7 @@ ai = ["rover_plugins/ai", "rusty_foundationmodels"]
 terminal = ["rover_plugins/terminal"]
 browser = ["rover_plugins/browser", "rover_browser"]
 tile = ["rover_plugins/tile"]
+emoji = ["rover_plugins/emoji"]
 rusty_foundationmodels = ["dep:rusty_foundationmodels"]
 rover_browser = ["dep:rover_browser"]
 
@@ -90,6 +91,8 @@ rover_db.workspace = true
 rusty_foundationmodels = { workspace = true, optional = true }
 rover_browser = { workspace = true, optional = true }
 rover_semantic.workspace = true
+emojis = "0.8.1"
+arboard = "3.4"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

@@ -62,9 +62,15 @@ impl Default for AppLauncherPlugin {
 }
 
 impl Plugin for AppLauncherPlugin {
-    fn id(&self) -> &str { "builtin.app_launcher" }
-    fn name(&self) -> &str { "App Launcher" }
-    fn description(&self) -> &str { "Launch macOS applications" }
+    fn id(&self) -> &str {
+        "builtin.app_launcher"
+    }
+    fn name(&self) -> &str {
+        "App Launcher"
+    }
+    fn description(&self) -> &str {
+        "Launch macOS applications"
+    }
 
     fn on_load(&mut self, _ctx: &mut PluginContext) -> Result<(), PluginError> {
         self.rescan_apps();
@@ -76,7 +82,9 @@ impl Plugin for AppLauncherPlugin {
         MatchMode::FuzzyCommand
     }
 
-    fn priority(&self) -> i32 { 10 }
+    fn priority(&self) -> i32 {
+        10
+    }
 
     fn commands(&self) -> Vec<CommandDescriptor> {
         self.apps
@@ -178,7 +186,7 @@ impl Plugin for AppLauncherPlugin {
                     }
                 }
                 ConfirmResult::Stay
-            }
+            },
             _ => ConfirmResult::Stay,
         }
     }

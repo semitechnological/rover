@@ -25,3 +25,6 @@ pub mod browser;
 
 #[cfg(all(feature = "tile", target_os = "macos"))]
 pub mod tile;
+
+#[cfg(feature = "emoji")]
+pub mod emoji;

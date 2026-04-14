@@ -8,3 +8,5 @@ gpui.workspace = true
 unicode-segmentation.workspace = true
 rover_fuzzy.workspace = true
 rover_theme.workspace = true
+arboard = "3.4"
+emojis = "0.8.1"

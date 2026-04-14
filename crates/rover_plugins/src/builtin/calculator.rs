@@ -49,9 +49,15 @@ impl Default for CalculatorPlugin {
 }
 
 impl Plugin for CalculatorPlugin {
-    fn id(&self) -> &str { "builtin.calculator" }
-    fn name(&self) -> &str { "Calculator" }
-    fn description(&self) -> &str { "Evaluate math expressions inline" }
+    fn id(&self) -> &str {
+        "builtin.calculator"
+    }
+    fn name(&self) -> &str {
+        "Calculator"
+    }
+    fn description(&self) -> &str {
+        "Evaluate math expressions inline"
+    }
 
     fn on_load(&mut self, _ctx: &mut PluginContext) -> Result<(), PluginError> {
         Ok(())
@@ -61,7 +67,9 @@ impl Plugin for CalculatorPlugin {
         MatchMode::AlwaysEvaluate
     }
 
-    fn priority(&self) -> i32 { 100 }
+    fn priority(&self) -> i32 {
+        100
+    }
 
     fn on_query(&mut self, query: &str, _ctx: &PluginContext) -> Vec<MatchResult> {
         self.last_query = query.to_string();
@@ -88,7 +96,7 @@ impl Plugin for CalculatorPlugin {
                     score: 1.0,
                     plugin_id: self.id().to_string(),
                 }]
-            }
+            },
             None => vec![],
         }
     }

@@ -5,7 +5,7 @@ edition = "2021"
 description = "Plugin registry and built-in plugins for Rover launcher"
 
 [features]
-default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser"]
+default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser", "emoji"]
 calculator = []
 app-launcher = []
 clipboard = []
@@ -14,6 +14,7 @@ ai = []
 terminal = []
 browser = []
 tile = ["dep:tile_core", "dep:tile_ax"]
+emoji = ["dep:arboard"]
 
 [dependencies]
 rover_plugin_api = { path = "../rover_plugin_api" }
@@ -26,6 +27,8 @@ serde_json.workspace = true
 log.workspace = true
 dirs.workspace = true
 anyhow.workspace = true
+emojis = "0.8.1"
+arboard = { version = "3.4", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 tile_core = { path = "../tile_core", optional = true }

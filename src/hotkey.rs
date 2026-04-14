@@ -4,9 +4,14 @@ use std::sync::Mutex;
 // ─── Toggle signal ────────────────────────────────────────────────────────────
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static EMOJI_HOTKEY_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 pub fn take_toggle_requested() -> bool {
     TOGGLE_REQUESTED.swap(false, Ordering::Relaxed)
+}
+
+pub fn take_emoji_hotkey_requested() -> bool {
+    EMOJI_HOTKEY_REQUESTED.swap(false, Ordering::Relaxed)
 }
 
 // ─── Carbon modifier bits ─────────────────────────────────────────────────────
@@ -254,6 +259,7 @@ extern "C" fn hotkey_handler(
     _user_data: *mut std::os::raw::c_void,
 ) -> i32 {
     TOGGLE_REQUESTED.store(true, Ordering::Relaxed);
+    EMOJI_HOTKEY_REQUESTED.store(true, Ordering::Relaxed);
     0
 }
 
@@ -380,4 +386,51 @@ pub fn disable_hyperkey_remap() -> std::io::Result<()> {
             .spawn()?;
     }
     Ok(())
+}
+
+/// Register Cmd+Opt+Space as the emoji picker hotkey.
+/// Users should unlink the system emoji picker (Cmd+Opt+Space) in System Preferences first.
+pub fn register_emoji_hotkey() {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        use carbon::*;
+        use std::os::raw::c_void;
+
+        let target = GetApplicationEventTarget();
+
+        let event_type = EventTypeSpec {
+            event_class: 0x6B657962, // kEventClassKeyboard
+            event_kind: 5,           // kEventHotKeyPressed
+        };
+
+        let mut handler_ref: *mut c_void = std::ptr::null_mut();
+        let err = InstallEventHandler(
+            target,
+            hotkey_handler,
+            1,
+            &event_type,
+            std::ptr::null_mut(),
+            &mut handler_ref,
+        );
+        if err != 0 {
+            log::warn!("InstallEventHandler (emoji) failed with error code {err}");
+        }
+
+        let emoji_id = EventHotKeyID {
+            signature: u32::from_be_bytes(*b"ROVR"),
+            id: 3,
+        };
+        let mut emoji_ref: *mut c_void = std::ptr::null_mut();
+        let err = RegisterEventHotKey(
+            K_VK_SPACE,
+            CMD_KEY | OPT_KEY,
+            emoji_id,
+            target,
+            0,
+            &mut emoji_ref,
+        );
+        if err != 0 {
+            log::warn!("RegisterEventHotKey (emoji) failed with error code {err}");
+        }
+    }
 }

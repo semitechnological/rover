@@ -75,6 +75,9 @@ impl Global for PendingBrowserUrlGlobal {}
 struct PendingSettingsGlobal(Arc<std::sync::Mutex<bool>>);
 impl Global for PendingSettingsGlobal {}
 
+struct EmojiPickerRequested(Arc<AtomicBool>);
+impl Global for EmojiPickerRequested {}
+
 // ─── CLI ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug)]
@@ -289,6 +292,7 @@ fn main() {
         cx.set_global(PendingSettingsGlobal(Arc::new(std::sync::Mutex::new(
             false,
         ))));
+        cx.set_global(EmojiPickerRequested(Arc::new(AtomicBool::new(false))));
 
         // Pre-compile WKContentRuleList now so it doesn't block paint() on first browser open.
         #[cfg(feature = "browser")]
@@ -476,6 +480,7 @@ fn main() {
                 }
             };
         hotkey::register_global_hotkey(hk_code, hk_mods);
+        hotkey::register_emoji_hotkey();
 
         // Poll frontmost app continuously so we always know the last non-Rover app
         {
@@ -499,6 +504,35 @@ fn main() {
                 cx.background_executor()
                     .timer(std::time::Duration::from_millis(50))
                     .await;
+
+                if hotkey::take_emoji_hotkey_requested() {
+                    let _ = cx.update(|cx: &mut App| {
+                        cx.global::<EmojiPickerRequested>()
+                            .0
+                            .store(true, Ordering::Relaxed);
+                        let window_open = cx.global::<WindowOpenGlobal>().0.load(Ordering::Relaxed);
+                        if window_open {
+                            cx.global::<WindowOpenGlobal>()
+                                .0
+                                .store(false, Ordering::Relaxed);
+                            if let Some(handle) = cx.global::<WindowHandleGlobal>().0 {
+                                let _ = handle.update(cx, |_, window, _cx| {
+                                    window.remove_window();
+                                });
+                            }
+                            cx.global_mut::<WindowHandleGlobal>().0 = None;
+                        } else {
+                            let prev_app = cx
+                                .global::<LastFrontmostAppGlobal>()
+                                .0
+                                .lock()
+                                .unwrap()
+                                .clone();
+                            let db = cx.global::<DbGlobal>().0.clone();
+                            open_window(db, prev_app, cx);
+                        }
+                    });
+                }
 
                 if hotkey::take_toggle_requested() {
                     let _ = cx.update(|cx: &mut App| {
@@ -827,14 +861,29 @@ fn open_window(db: Arc<RoverDb>, previous_app: Option<String>, cx: &mut App) {
                     ));
                     #[cfg(all(feature = "tile", target_os = "macos"))]
                     registry.register(Box::new(rover_plugins::builtin::tile::TilePlugin::new()));
+                    #[cfg(feature = "emoji")]
+                    registry.register(Box::new(rover_plugins::builtin::emoji::EmojiPlugin::new()));
 
                     // Initialize all plugins
                     registry.init_all(&mut ctx);
+
+                    let emoji_requested = cx
+                        .global::<EmojiPickerRequested>()
+                        .0
+                        .swap(false, Ordering::Relaxed);
+                    let initial_query = if emoji_requested {
+                        Some("emoji ".to_string())
+                    } else {
+                        None
+                    };
 
                     let delegate = RoverPluginDelegate::new(registry, ctx);
                     let picker = cx.new(|cx| {
                         let mut p = Picker::new(delegate, cx);
                         p.compact = compact;
+                        if let Some(query) = initial_query.clone() {
+                            p.set_query(&query, cx);
+                        }
                         p
                     });
 

@@ -315,27 +315,24 @@ impl TilePlugin {
             None => {
                 tile_ax::release_frontmost_window(window_element);
                 return Err("Could not get current window frame".to_string());
-            }
+            },
         };
 
-        let screen = tile_ax::get_usable_screen_frame(0)
-            .ok_or_else(|| {
-                tile_ax::release_frontmost_window(window_element);
-                "Could not get screen frame".to_string()
-            })?;
+        let screen = tile_ax::get_usable_screen_frame(0).ok_or_else(|| {
+            tile_ax::release_frontmost_window(window_element);
+            "Could not get screen frame".to_string()
+        })?;
 
         let result = match action {
             TileAction::Restore => {
-                if let Some(original) =
-                    self.get_original_frame(ax_ref.pid, ax_ref.window_index)
-                {
+                if let Some(original) = self.get_original_frame(ax_ref.pid, ax_ref.window_index) {
                     tile_ax::set_window_frame_raw(window_element, original);
                     self.remove_original_frame(ax_ref.pid, ax_ref.window_index);
                     Ok(())
                 } else {
                     Err("No original frame saved for this window".to_string())
                 }
-            }
+            },
             TileAction::UndoLastAction => {
                 if let Some(ActionSnapshot {
                     pid,
@@ -352,7 +349,7 @@ impl TilePlugin {
                 } else {
                     Err("No action history available".to_string())
                 }
-            }
+            },
             TileAction::ToggleMultiplexerMode => {
                 self.tiling_mode = if self.tiling_mode == TilingMode::Snap {
                     TilingMode::Multiplexer
@@ -360,12 +357,12 @@ impl TilePlugin {
                     TilingMode::Snap
                 };
                 Ok(())
-            }
+            },
             TileAction::SetMultiplexerRegionFromFrontmost => {
                 self.multiplexer_region = Some(current_frame);
                 self.tiling_mode = TilingMode::Multiplexer;
                 Ok(())
-            }
+            },
             TileAction::EqualizeAll => {
                 self.focus_current_window(ax_ref.pid);
                 if self.tree.root.window_count() == 0 {
@@ -375,7 +372,7 @@ impl TilePlugin {
                     self.relayout(self.base_rect(screen));
                     Ok(())
                 }
-            }
+            },
             TileAction::ToggleZoom => {
                 self.focus_current_window(ax_ref.pid);
                 if let Some(pane_id) = self.tree.focused_pane {
@@ -385,7 +382,7 @@ impl TilePlugin {
                 } else {
                     Err("No managed pane is focused".to_string())
                 }
-            }
+            },
             TileAction::MovePaneLeft
             | TileAction::MovePaneRight
             | TileAction::MovePaneUp
@@ -405,7 +402,7 @@ impl TilePlugin {
                     self.focus_active_window_in_focused_pane();
                     Ok(())
                 }
-            }
+            },
             TileAction::SwapPaneLeft
             | TileAction::SwapPaneRight
             | TileAction::SwapPaneUp
@@ -437,7 +434,7 @@ impl TilePlugin {
                         Err("No managed pane is focused".to_string())
                     }
                 }
-            }
+            },
             TileAction::StackNext | TileAction::StackPrev => {
                 self.focus_current_window(ax_ref.pid);
                 if let Some(pane_id) = self.tree.focused_pane {
@@ -459,7 +456,7 @@ impl TilePlugin {
                 } else {
                     Err("No managed pane is focused".to_string())
                 }
-            }
+            },
             TileAction::SnapToNearest => {
                 let windows = tile_ax::list_visible_windows();
                 if let Some(nearest) = find_nearest_window(current_frame, &windows, app_info.pid) {
@@ -477,7 +474,7 @@ impl TilePlugin {
                 } else {
                     Err("No nearby visible window found to snap beside".to_string())
                 }
-            }
+            },
             TileAction::MoveToNextDisplay | TileAction::MoveToPreviousDisplay => {
                 let displays = tile_ax::all_usable_frames();
                 if displays.len() < 2 {
@@ -530,7 +527,7 @@ impl TilePlugin {
                 self.save_original_frame(ax_ref.pid, ax_ref.window_index, current_frame);
                 tile_ax::set_window_frame_raw(window_element, mapped);
                 Ok(())
-            }
+            },
             _ => {
                 self.save_original_frame(ax_ref.pid, ax_ref.window_index, current_frame);
                 let base_rect = self.base_rect(screen);
@@ -551,7 +548,7 @@ impl TilePlugin {
                 } else {
                     Err("Action did not produce a target frame".to_string())
                 }
-            }
+            },
         };
 
         // Release the AX element to avoid memory leaks.
@@ -561,12 +558,7 @@ impl TilePlugin {
     }
 
     /// Save the original frame of a window for later restore.
-    fn save_original_frame(
-        &mut self,
-        pid: i32,
-        window_index: usize,
-        frame: tile_core::Rect,
-    ) {
+    fn save_original_frame(&mut self, pid: i32, window_index: usize, frame: tile_core::Rect) {
         // Only save if we don't already have one for this window.
         if !self
             .original_frames
@@ -578,11 +570,7 @@ impl TilePlugin {
     }
 
     /// Get the saved original frame for a window.
-    fn get_original_frame(
-        &self,
-        pid: i32,
-        window_index: usize,
-    ) -> Option<tile_core::Rect> {
+    fn get_original_frame(&self, pid: i32, window_index: usize) -> Option<tile_core::Rect> {
         self.original_frames
             .iter()
             .find(|(p, i, _)| *p == pid && *i == window_index)
@@ -697,7 +685,10 @@ impl Plugin for TilePlugin {
             // Request the permission prompt.
             tile_ax::request_accessibility_permission();
         }
-        log::info!("Tile Window Manager plugin loaded ({} commands)", TILE_COMMANDS.len());
+        log::info!(
+            "Tile Window Manager plugin loaded ({} commands)",
+            TILE_COMMANDS.len()
+        );
         Ok(())
     }
 
@@ -735,10 +726,7 @@ impl Plugin for TilePlugin {
                 let desc_lower = cmd.description.to_lowercase();
                 name_lower.contains(&query_lower)
                     || desc_lower.contains(&query_lower)
-                    || cmd
-                        .keywords
-                        .iter()
-                        .any(|kw| kw.contains(&query_lower))
+                    || cmd.keywords.iter().any(|kw| kw.contains(&query_lower))
             })
             .map(|cmd| MatchResult {
                 id: cmd.id.to_string(),
@@ -763,11 +751,11 @@ impl Plugin for TilePlugin {
                 Ok(()) => {
                     log::info!("Tile action '{}' executed successfully", cmd.name);
                     ConfirmResult::Dismiss
-                }
+                },
                 Err(e) => {
                     log::warn!("Tile action '{}' failed: {}", cmd.name, e);
                     ConfirmResult::Stay
-                }
+                },
             }
         } else {
             log::warn!("Unknown tile command: {}", match_id);

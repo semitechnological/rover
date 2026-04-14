@@ -28,53 +28,68 @@ impl ExtensionRuntime {
         let mut linker = Linker::new(&engine);
 
         // Host import: host_log(level: i32, msg_ptr: i32, msg_len: i32)
-        linker.func_wrap("env", "host_log", |mut caller: Caller<'_, HostState>, level: i32, ptr: i32, len: i32| {
-            if let Some(memory) = caller.data().memory {
-                let data = memory.data(&caller);
-                if let Some(slice) = data.get(ptr as usize..(ptr as usize + len as usize)) {
-                    let msg = String::from_utf8_lossy(slice);
-                    match level {
-                        0 => log::error!("[ext] {msg}"),
-                        1 => log::warn!("[ext] {msg}"),
-                        2 => log::info!("[ext] {msg}"),
-                        _ => log::debug!("[ext] {msg}"),
+        linker.func_wrap(
+            "env",
+            "host_log",
+            |mut caller: Caller<'_, HostState>, level: i32, ptr: i32, len: i32| {
+                if let Some(memory) = caller.data().memory {
+                    let data = memory.data(&caller);
+                    if let Some(slice) = data.get(ptr as usize..(ptr as usize + len as usize)) {
+                        let msg = String::from_utf8_lossy(slice);
+                        match level {
+                            0 => log::error!("[ext] {msg}"),
+                            1 => log::warn!("[ext] {msg}"),
+                            2 => log::info!("[ext] {msg}"),
+                            _ => log::debug!("[ext] {msg}"),
+                        }
                     }
                 }
-            }
-        })?;
+            },
+        )?;
 
         // Host import: host_clipboard_read() -> i32 (ptr to JSON string in WASM memory)
-        linker.func_wrap("env", "host_clipboard_read", |_caller: Caller<'_, HostState>| -> i32 {
-            // Returns 0 (null) — clipboard access requires main thread coordination
-            // Extensions that need clipboard should use the CommandOutput flow instead.
-            0_i32
-        })?;
+        linker.func_wrap(
+            "env",
+            "host_clipboard_read",
+            |_caller: Caller<'_, HostState>| -> i32 {
+                // Returns 0 (null) — clipboard access requires main thread coordination
+                // Extensions that need clipboard should use the CommandOutput flow instead.
+                0_i32
+            },
+        )?;
 
         // Host import: host_clipboard_write(ptr: i32, len: i32)
-        linker.func_wrap("env", "host_clipboard_write", |mut caller: Caller<'_, HostState>, ptr: i32, len: i32| {
-            if let Some(memory) = caller.data().memory {
-                let data = memory.data(&caller);
-                if let Some(slice) = data.get(ptr as usize..(ptr as usize + len as usize)) {
-                    let text = String::from_utf8_lossy(slice).to_string();
-                    // Best-effort clipboard write via pbcopy
-                    let _ = std::process::Command::new("pbcopy")
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                        .and_then(|mut child| {
-                            use std::io::Write;
-                            if let Some(stdin) = child.stdin.as_mut() {
-                                stdin.write_all(text.as_bytes())?;
-                            }
-                            child.wait()
-                        });
+        linker.func_wrap(
+            "env",
+            "host_clipboard_write",
+            |mut caller: Caller<'_, HostState>, ptr: i32, len: i32| {
+                if let Some(memory) = caller.data().memory {
+                    let data = memory.data(&caller);
+                    if let Some(slice) = data.get(ptr as usize..(ptr as usize + len as usize)) {
+                        let text = String::from_utf8_lossy(slice).to_string();
+                        // Best-effort clipboard write via pbcopy
+                        let _ = std::process::Command::new("pbcopy")
+                            .stdin(std::process::Stdio::piped())
+                            .spawn()
+                            .and_then(|mut child| {
+                                use std::io::Write;
+                                if let Some(stdin) = child.stdin.as_mut() {
+                                    stdin.write_all(text.as_bytes())?;
+                                }
+                                child.wait()
+                            });
+                    }
                 }
-            }
-        })?;
+            },
+        )?;
 
-        let mut store = Store::new(&engine, HostState {
-            memory: None,
-            alloc_fn: None,
-        });
+        let mut store = Store::new(
+            &engine,
+            HostState {
+                memory: None,
+                alloc_fn: None,
+            },
+        );
 
         let instance = linker
             .instantiate(&mut store, &module)
@@ -105,7 +120,9 @@ impl ExtensionRuntime {
             .get_typed_func::<(), i32>(&mut *store, "rover_init")
             .context("WASM module missing `rover_init` export")?;
 
-        let ptr = init_fn.call(&mut *store, ()).context("calling rover_init")?;
+        let ptr = init_fn
+            .call(&mut *store, ())
+            .context("calling rover_init")?;
         let json = self.read_string(&mut store, ptr)?;
         let commands: Vec<ExtensionCommandInfo> =
             serde_json::from_str(&json).context("parsing rover_init JSON")?;
@@ -142,6 +159,16 @@ impl ExtensionRuntime {
             .context("WASM module has no memory export")?;
         let data = memory.data(&*store);
         let start = ptr as usize;
+
+        // Bounds check: ensure start is within memory
+        if start >= data.len() {
+            return Err(anyhow::anyhow!(
+                "WASM memory read: pointer {} is out of bounds (memory size: {})",
+                ptr,
+                data.len()
+            ));
+        }
+
         let mut end = start;
         while end < data.len() && data[end] != 0 {
             end += 1;
@@ -155,20 +182,43 @@ impl ExtensionRuntime {
         let bytes = s.as_bytes();
         let len = bytes.len() as i32 + 1; // +1 for NUL terminator
 
+        // Reject unreasonable allocation sizes to prevent memory exhaustion
+        if len > 1024 * 1024 {
+            return Err(anyhow::anyhow!(
+                "WASM write: allocation size {} bytes exceeds maximum (1 MB)",
+                len
+            ));
+        }
+
         let alloc = store
             .data()
             .alloc_fn
             .clone()
             .context("WASM module has no `rover_alloc` export")?;
 
-        let ptr = alloc.call(&mut *store, len).context("calling rover_alloc")?;
+        let ptr = alloc
+            .call(&mut *store, len)
+            .context("calling rover_alloc")?;
 
         let memory = store
             .data()
             .memory
             .context("WASM module has no memory export")?;
         let data = memory.data_mut(&mut *store);
-        let dest = &mut data[ptr as usize..ptr as usize + len as usize];
+
+        // Bounds check: ensure the entire allocation fits in memory
+        let start = ptr as usize;
+        let end = start + len as usize;
+        if end > data.len() {
+            return Err(anyhow::anyhow!(
+                "WASM memory write: attempted write of {} bytes at offset {} exceeds memory size {}",
+                len,
+                ptr,
+                data.len()
+            ));
+        }
+
+        let dest = &mut data[start..end];
         dest[..bytes.len()].copy_from_slice(bytes);
         dest[bytes.len()] = 0; // NUL terminate
 
@@ -194,7 +244,9 @@ pub fn load_extension_runtimes(
 
         let wasm_path = match &lib_entry.path {
             Some(p) => ext.root.join(p),
-            None => ext.root.join("target/wasm32-wasip1/release")
+            None => ext
+                .root
+                .join("target/wasm32-wasip1/release")
                 .join(format!("{}.wasm", ext.manifest.id)),
         };
 
@@ -208,29 +260,19 @@ pub fn load_extension_runtimes(
         }
 
         match ExtensionRuntime::load(&wasm_path) {
-            Ok(runtime) => {
-                match runtime.init() {
-                    Ok(commands) => {
-                        log::info!(
-                            "Loaded extension '{}' with {} commands",
-                            ext.manifest.name,
-                            commands.len()
-                        );
-                        results.push((
-                            ext.manifest.id.clone(),
-                            Arc::new(runtime),
-                            commands,
-                        ));
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "Extension '{}' init failed: {}",
-                            ext.manifest.name,
-                            e
-                        );
-                    }
+            Ok(runtime) => match runtime.init() {
+                Ok(commands) => {
+                    log::info!(
+                        "Loaded extension '{}' with {} commands",
+                        ext.manifest.name,
+                        commands.len()
+                    );
+                    results.push((ext.manifest.id.clone(), Arc::new(runtime), commands));
                 }
-            }
+                Err(e) => {
+                    log::warn!("Extension '{}' init failed: {}", ext.manifest.name, e);
+                }
+            },
             Err(e) => {
                 log::warn!(
                     "Failed to load WASM for extension '{}': {}",

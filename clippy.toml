@@ -1,0 +1,7 @@
+# Clippy configuration for Rover
+
+# Cognitive complexity threshold for functions
+cognitive-complexity-threshold = 25
+
+# Maximum number of arguments for functions
+too-many-arguments-threshold = 8

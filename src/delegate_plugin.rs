@@ -17,10 +17,7 @@ use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq)]
 enum ViewMode {
     Main,
-    Submenu {
-        plugin_id: String,
-        title: String,
-    },
+    Submenu { plugin_id: String, title: String },
 }
 
 // ─── Unified match entry ─────────────────────────────────────────────────────
@@ -100,6 +97,8 @@ pub struct RoverPluginDelegate {
     selected_ix: usize,
     query: String,
     view_mode: ViewMode,
+    /// Cached AI inline content (if any)
+    ai_inline_content: Option<String>,
     /// Fuzzy candidates built from all plugin commands
     fuzzy_candidates: Vec<StringMatchCandidate>,
     /// Maps candidate index → (plugin_id, CommandDescriptor)
@@ -145,6 +144,7 @@ impl RoverPluginDelegate {
             selected_ix: 0,
             query: String::new(),
             view_mode: ViewMode::Main,
+            ai_inline_content: None,
             fuzzy_candidates,
             fuzzy_command_map,
         };
@@ -159,7 +159,10 @@ impl RoverPluginDelegate {
         self.matches.clear();
         self.context_items.clear();
 
-        if let Some(update) = self.registry.query_input_hook(&self.query, &self.plugin_ctx) {
+        if let Some(update) = self
+            .registry
+            .query_input_hook(&self.query, &self.plugin_ctx)
+        {
             match update {
                 SearchBarUpdate::ReplaceQuery(new_q) => {
                     self.query = new_q;
@@ -167,6 +170,16 @@ impl RoverPluginDelegate {
                 SearchBarUpdate::SetPlaceholder(_) => {}
             }
         }
+
+        // Cache AI inline content
+        self.ai_inline_content = self
+            .registry
+            .get("builtin.ai")
+            .and_then(|ai| ai.inline_content(&self.plugin_ctx))
+            .and_then(|content| match content {
+                rover_plugin_api::InlineContent::Text(text) => Some(text),
+                _ => None,
+            });
 
         match &self.view_mode {
             ViewMode::Submenu { plugin_id, .. } => {
@@ -179,10 +192,7 @@ impl RoverPluginDelegate {
                 // 1. Fuzzy match against all registered commands
                 let fuzzy_matches = match_strings(&self.fuzzy_candidates, &self.query, 50);
                 let has_good_fuzzy = !self.query.is_empty()
-                    && fuzzy_matches
-                        .first()
-                        .map(|m| m.score > 0)
-                        .unwrap_or(false);
+                    && fuzzy_matches.first().map(|m| m.score > 0).unwrap_or(false);
 
                 // 2. Query non-FuzzyCommand plugins (AlwaysEvaluate, Prefix, Fallback)
                 let plugin_results = self.registry.query(
@@ -199,7 +209,9 @@ impl RoverPluginDelegate {
 
                 // Add fuzzy-matched commands
                 for m in fuzzy_matches {
-                    if let Some((plugin_id, descriptor)) = self.fuzzy_command_map.get(m.candidate_id) {
+                    if let Some((plugin_id, descriptor)) =
+                        self.fuzzy_command_map.get(m.candidate_id)
+                    {
                         self.matches.push(PickerMatch::FuzzyCommand {
                             plugin_id: plugin_id.clone(),
                             descriptor: descriptor.clone(),
@@ -221,7 +233,9 @@ impl RoverPluginDelegate {
                         };
                     }
                     // Then by score descending
-                    b.score().partial_cmp(&a.score()).unwrap_or(std::cmp::Ordering::Equal)
+                    b.score()
+                        .partial_cmp(&a.score())
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 });
             }
         }
@@ -232,13 +246,19 @@ impl RoverPluginDelegate {
         }
     }
 
-    fn handle_confirm_result(&mut self, result: ConfirmResult, cx: &mut Context<Picker<Self>>) -> bool {
+    fn handle_confirm_result(
+        &mut self,
+        result: ConfirmResult,
+        cx: &mut Context<Picker<Self>>,
+    ) -> bool {
         match result {
             ConfirmResult::Dismiss => true,
             ConfirmResult::Stay => false,
             ConfirmResult::EnterSubmenu { title } => {
                 let match_ix = self.selected_ix.saturating_sub(self.context_items.len());
-                let plugin_id = self.matches.get(match_ix)
+                let plugin_id = self
+                    .matches
+                    .get(match_ix)
                     .map(|m| m.plugin_id().to_string())
                     .unwrap_or_default();
                 self.view_mode = ViewMode::Submenu { plugin_id, title };
@@ -258,8 +278,14 @@ impl RoverPluginDelegate {
                 true
             }
             ConfirmResult::LaunchApp(name) => {
-                let script = format!(r#"tell application "{}" to activate"#, name.replace('"', "\\\""));
-                let _ = std::process::Command::new("osascript").arg("-e").arg(&script).spawn();
+                let script = format!(
+                    r#"tell application "{}" to activate"#,
+                    name.replace('"', "\\\"")
+                );
+                let _ = std::process::Command::new("osascript")
+                    .arg("-e")
+                    .arg(&script)
+                    .spawn();
                 true
             }
             ConfirmResult::OpenWindow(req) => {
@@ -329,9 +355,13 @@ impl PickerDelegate for RoverPluginDelegate {
     fn confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
         if matches!(self.view_mode, ViewMode::Main) && self.selected_ix < self.context_items.len() {
             let item = self.context_items[self.selected_ix].clone();
-            let result = self
-                .registry
-                .confirm(&item.plugin_id, &item.id, &self.query, false, &mut self.plugin_ctx);
+            let result = self.registry.confirm(
+                &item.plugin_id,
+                &item.id,
+                &self.query,
+                false,
+                &mut self.plugin_ctx,
+            );
             return self.handle_confirm_result(result, cx);
         }
 
@@ -344,12 +374,14 @@ impl PickerDelegate for RoverPluginDelegate {
         let result = match &self.view_mode {
             ViewMode::Submenu { plugin_id, .. } => {
                 let pid = plugin_id.clone();
-                self.registry.submenu_confirm(&pid, m.id(), &self.query, &mut self.plugin_ctx)
+                self.registry
+                    .submenu_confirm(&pid, m.id(), &self.query, &mut self.plugin_ctx)
             }
             ViewMode::Main => {
                 let pid = m.plugin_id().to_string();
                 let mid = m.id().to_string();
-                self.registry.confirm(&pid, &mid, &self.query, false, &mut self.plugin_ctx)
+                self.registry
+                    .confirm(&pid, &mid, &self.query, false, &mut self.plugin_ctx)
             }
         };
 
@@ -359,9 +391,13 @@ impl PickerDelegate for RoverPluginDelegate {
     fn shift_confirm(&mut self, cx: &mut Context<Picker<Self>>) -> bool {
         if matches!(self.view_mode, ViewMode::Main) && self.selected_ix < self.context_items.len() {
             let item = self.context_items[self.selected_ix].clone();
-            let result =
-                self.registry
-                    .confirm(&item.plugin_id, &item.id, &self.query, true, &mut self.plugin_ctx);
+            let result = self.registry.confirm(
+                &item.plugin_id,
+                &item.id,
+                &self.query,
+                true,
+                &mut self.plugin_ctx,
+            );
             return self.handle_confirm_result(result, cx);
         }
 
@@ -373,7 +409,9 @@ impl PickerDelegate for RoverPluginDelegate {
         let m = self.matches[match_ix].clone();
         let pid = m.plugin_id().to_string();
         let mid = m.id().to_string();
-        let result = self.registry.confirm(&pid, &mid, &self.query, true, &mut self.plugin_ctx);
+        let result = self
+            .registry
+            .confirm(&pid, &mid, &self.query, true, &mut self.plugin_ctx);
         self.handle_confirm_result(result, cx)
     }
 
@@ -388,7 +426,11 @@ impl PickerDelegate for RoverPluginDelegate {
         if matches!(self.view_mode, ViewMode::Main) && ix < self.context_items.len() {
             let item = &self.context_items[ix];
             let colors = theme(cx).colors.clone();
-            let text_color = if selected { colors.text_accent } else { colors.text };
+            let text_color = if selected {
+                colors.text_accent
+            } else {
+                colors.text
+            };
             let mut row = div()
                 .px_2()
                 .py(px(4.0))
@@ -399,11 +441,17 @@ impl PickerDelegate for RoverPluginDelegate {
                 .gap_1()
                 .cursor_pointer();
             if selected {
-                row = row.bg(colors.element_selected).border_color(colors.text_accent);
+                row = row
+                    .bg(colors.element_selected)
+                    .border_color(colors.text_accent);
             } else if item.is_active {
-                row = row.bg(colors.elevated_surface_background).border_color(colors.border);
+                row = row
+                    .bg(colors.elevated_surface_background)
+                    .border_color(colors.border);
             } else {
-                row = row.bg(colors.surface_background).border_color(colors.border_variant);
+                row = row
+                    .bg(colors.surface_background)
+                    .border_color(colors.border_variant);
             }
             return Some(
                 row.child(
@@ -420,7 +468,11 @@ impl PickerDelegate for RoverPluginDelegate {
         let m = self.matches.get(match_ix)?;
         let colors = theme(cx).colors.clone();
 
-        let text_color = if selected { colors.text_accent } else { colors.text };
+        let text_color = if selected {
+            colors.text_accent
+        } else {
+            colors.text
+        };
 
         let title = m.title().to_string();
         let _subtitle = m.subtitle().map(|s| s.to_string());
@@ -437,9 +489,13 @@ impl PickerDelegate for RoverPluginDelegate {
             .cursor_pointer();
 
         if selected {
-            row = row.bg(colors.element_selected).border_color(colors.text_accent);
+            row = row
+                .bg(colors.element_selected)
+                .border_color(colors.text_accent);
         } else {
-            row = row.bg(colors.surface_background).border_color(colors.border_variant);
+            row = row
+                .bg(colors.surface_background)
+                .border_color(colors.border_variant);
         }
 
         row = row.child(
@@ -471,8 +527,16 @@ impl PickerDelegate for RoverPluginDelegate {
         let m = self.matches.get(match_ix)?;
         let colors = theme(cx).colors.clone();
 
-        let row_bg = if selected { colors.element_selected } else { gpui::transparent_black() };
-        let text_color = if selected { colors.text_accent } else { colors.text };
+        let row_bg = if selected {
+            colors.element_selected
+        } else {
+            gpui::transparent_black()
+        };
+        let text_color = if selected {
+            colors.text_accent
+        } else {
+            colors.text
+        };
 
         let title = m.title().to_string();
         let sub_text = m.subtitle().map(|s| s.to_string());
@@ -530,15 +594,7 @@ impl PickerDelegate for RoverPluginDelegate {
     }
 
     fn ai_widget_content(&self) -> Option<&str> {
-        // Check if AI plugin has inline content
-        if let Some(ai) = self.registry.get("builtin.ai") {
-            if let Some(InlineContent::Text(ref text)) = ai.inline_content(&self.plugin_ctx) {
-                // We can't return a reference to a temporary, so this is a limitation.
-                // The full integration will need to cache this. For now, return None.
-                let _ = text;
-            }
-        }
-        None
+        self.ai_inline_content.as_deref()
     }
 
     fn terminal_output(&self) -> Option<&str> {
@@ -577,9 +633,13 @@ impl PickerDelegate for RoverPluginDelegate {
     fn execute_action(&mut self, action_ix: usize, cx: &mut Context<Picker<Self>>) -> bool {
         if self.selected_ix < self.context_items.len() && action_ix == 0 {
             let item = self.context_items[self.selected_ix].clone();
-            let result = self
-                .registry
-                .confirm(&item.plugin_id, &item.id, &self.query, false, &mut self.plugin_ctx);
+            let result = self.registry.confirm(
+                &item.plugin_id,
+                &item.id,
+                &self.query,
+                false,
+                &mut self.plugin_ctx,
+            );
             return self.handle_confirm_result(result, cx);
         }
         let match_ix = self.selected_ix.saturating_sub(self.context_items.len());

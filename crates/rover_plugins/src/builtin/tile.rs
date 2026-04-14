@@ -7,7 +7,9 @@
 //! Gated behind the `tile` feature flag.
 
 use rover_plugin_api::*;
-use tile_core::TileAction;
+use tile_core::{
+    AXWindowRef, Direction, ManagedWindow, Node, Rect, SnapSide, TileAction, TileTree, WindowInfo,
+};
 
 /// Descriptor for a tile command: pairs a display name, match keywords,
 /// and the underlying `TileAction`.
@@ -224,21 +226,6 @@ const TILE_COMMANDS: &[TileCommand] = &[
     },
     // ── Stacking ─────────────────────────────────────────────────────
     TileCommand {
-        id: "stack_next",
-        name: "Tile: Stack Next",
-        description: "Cycle to the next window in the current stack",
-        keywords: &["stack", "next", "tab", "cycle"],
-        action: TileAction::StackNext,
-    },
-    TileCommand {
-        id: "stack_prev",
-        name: "Tile: Stack Previous",
-        description: "Cycle to the previous window in the current stack",
-        keywords: &["stack", "previous", "prev", "tab", "cycle"],
-        action: TileAction::StackPrev,
-    },
-    // ── Snap ─────────────────────────────────────────────────────────
-    TileCommand {
         id: "snap_to_nearest",
         name: "Tile: Snap to Nearest",
         description: "Snap the window beside the nearest adjacent window",
@@ -287,31 +274,50 @@ const TILE_COMMANDS: &[TileCommand] = &[
 /// Wraps tile_core's `TileAction` variants as Rover picker commands and
 /// uses tile_ax's Accessibility API to execute them on the frontmost window.
 pub struct TilePlugin {
-    /// Cached original frames for restore functionality.
-    /// Keyed by (pid, window_index) to allow restoring windows.
+    tree: TileTree,
     original_frames: Vec<(i32, usize, tile_core::Rect)>,
-    action_history: Vec<(i32, usize, tile_core::Rect)>,
-    multiplexer_mode: bool,
+    action_history: Vec<ActionSnapshot>,
+    tiling_mode: TilingMode,
     multiplexer_region: Option<tile_core::Rect>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TilingMode {
+    Snap,
+    Multiplexer,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ActionSnapshot {
+    pid: i32,
+    window_index: usize,
+    frame: tile_core::Rect,
 }
 
 impl TilePlugin {
     pub fn new() -> Self {
         Self {
+            tree: TileTree::new(),
             original_frames: Vec::new(),
             action_history: Vec::new(),
-            multiplexer_mode: false,
+            tiling_mode: TilingMode::Snap,
             multiplexer_region: None,
         }
     }
 
     /// Execute a TileAction on the frontmost window.
     fn execute_action(&mut self, action: TileAction) -> Result<(), String> {
-        // Get the frontmost window via tile_ax.
-        let (window_element, ax_ref, _app_info) = tile_ax::get_frontmost_window()
+        let (window_element, ax_ref, app_info) = tile_ax::get_frontmost_window()
             .ok_or_else(|| "No frontmost window found".to_string())?;
 
-        // Get the usable screen frame (primary display, index 0).
+        let current_frame = match tile_ax::get_window_frame_raw(window_element) {
+            Some(frame) => frame,
+            None => {
+                tile_ax::release_frontmost_window(window_element);
+                return Err("Could not get current window frame".to_string());
+            }
+        };
+
         let screen = tile_ax::get_usable_screen_frame(0)
             .ok_or_else(|| {
                 tile_ax::release_frontmost_window(window_element);
@@ -319,43 +325,7 @@ impl TilePlugin {
             })?;
 
         let result = match action {
-            // Actions that compute a target frame from the screen rect.
-            TileAction::LeftHalf
-            | TileAction::RightHalf
-            | TileAction::TopHalf
-            | TileAction::BottomHalf
-            | TileAction::LeftThird
-            | TileAction::CenterThird
-            | TileAction::RightThird
-            | TileAction::LeftTwoThirds
-            | TileAction::CenterTwoThirds
-            | TileAction::RightTwoThirds
-            | TileAction::TopLeftQuarter
-            | TileAction::TopRightQuarter
-            | TileAction::BottomLeftQuarter
-            | TileAction::BottomRightQuarter
-            | TileAction::Maximize
-            | TileAction::Center => {
-                if let Some(frame) = action.compute_frame(screen) {
-                    // Save original frame for potential restore.
-                    if let Some(current_frame) =
-                        tile_ax::get_window_frame_raw(window_element)
-                    {
-                        self.save_original_frame(
-                            ax_ref.pid,
-                            ax_ref.window_index,
-                            current_frame,
-                        );
-                    }
-                    tile_ax::set_window_frame_raw(window_element, frame);
-                    Ok(())
-                } else {
-                    Err("Action did not produce a target frame".to_string())
-                }
-            }
-
             TileAction::Restore => {
-                // Restore the frontmost window to its original frame.
                 if let Some(original) =
                     self.get_original_frame(ax_ref.pid, ax_ref.window_index)
                 {
@@ -367,7 +337,12 @@ impl TilePlugin {
                 }
             }
             TileAction::UndoLastAction => {
-                if let Some((pid, window_index, frame)) = self.action_history.pop() {
+                if let Some(ActionSnapshot {
+                    pid,
+                    window_index,
+                    frame,
+                }) = self.action_history.pop()
+                {
                     if pid == ax_ref.pid && window_index == ax_ref.window_index {
                         tile_ax::set_window_frame_raw(window_element, frame);
                         Ok(())
@@ -379,22 +354,131 @@ impl TilePlugin {
                 }
             }
             TileAction::ToggleMultiplexerMode => {
-                self.multiplexer_mode = !self.multiplexer_mode;
+                self.tiling_mode = if self.tiling_mode == TilingMode::Snap {
+                    TilingMode::Multiplexer
+                } else {
+                    TilingMode::Snap
+                };
                 Ok(())
             }
             TileAction::SetMultiplexerRegionFromFrontmost => {
-                self.multiplexer_region = tile_ax::get_window_frame_raw(window_element);
-                self.multiplexer_mode = self.multiplexer_region.is_some();
+                self.multiplexer_region = Some(current_frame);
+                self.tiling_mode = TilingMode::Multiplexer;
                 Ok(())
             }
-            TileAction::MoveToNextDisplay | TileAction::MoveToPreviousDisplay => {
-                let current_frame = match tile_ax::get_window_frame_raw(window_element) {
-                    Some(f) => f,
-                    None => {
-                        tile_ax::release_frontmost_window(window_element);
-                        return Err("Could not get current frame".to_string());
+            TileAction::EqualizeAll => {
+                self.focus_current_window(ax_ref.pid);
+                if self.tree.root.window_count() == 0 {
+                    Err("No managed Tile session is active yet".to_string())
+                } else {
+                    self.tree.root.equalize_all();
+                    self.relayout(self.base_rect(screen));
+                    Ok(())
+                }
+            }
+            TileAction::ToggleZoom => {
+                self.focus_current_window(ax_ref.pid);
+                if let Some(pane_id) = self.tree.focused_pane {
+                    self.tree.root.toggle_zoom(pane_id);
+                    self.relayout(self.base_rect(screen));
+                    Ok(())
+                } else {
+                    Err("No managed pane is focused".to_string())
+                }
+            }
+            TileAction::MovePaneLeft
+            | TileAction::MovePaneRight
+            | TileAction::MovePaneUp
+            | TileAction::MovePaneDown => {
+                self.focus_current_window(ax_ref.pid);
+                if self.tree.root.window_count() == 0 {
+                    Err("No managed Tile session is active yet".to_string())
+                } else {
+                    let dir = match action {
+                        TileAction::MovePaneLeft => Direction::Left,
+                        TileAction::MovePaneRight => Direction::Right,
+                        TileAction::MovePaneUp => Direction::Up,
+                        TileAction::MovePaneDown => Direction::Down,
+                        _ => unreachable!(),
+                    };
+                    self.tree.navigate_focus(dir, self.base_rect(screen));
+                    self.focus_active_window_in_focused_pane();
+                    Ok(())
+                }
+            }
+            TileAction::SwapPaneLeft
+            | TileAction::SwapPaneRight
+            | TileAction::SwapPaneUp
+            | TileAction::SwapPaneDown => {
+                self.focus_current_window(ax_ref.pid);
+                if self.tree.root.window_count() < 2 {
+                    Err("At least two managed panes are required to swap".to_string())
+                } else {
+                    let dir = match action {
+                        TileAction::SwapPaneLeft => Direction::Left,
+                        TileAction::SwapPaneRight => Direction::Right,
+                        TileAction::SwapPaneUp => Direction::Up,
+                        TileAction::SwapPaneDown => Direction::Down,
+                        _ => unreachable!(),
+                    };
+                    let current_pane = self.tree.focused_pane;
+                    self.tree.navigate_focus(dir, self.base_rect(screen));
+                    let target_pane = self.tree.focused_pane;
+                    if let (Some(a), Some(b)) = (current_pane, target_pane) {
+                        if a != b {
+                            self.tree.swap_panes(a, b);
+                            self.relayout(self.base_rect(screen));
+                            self.focus_active_window_in_focused_pane();
+                            Ok(())
+                        } else {
+                            Err("No adjacent pane found in that direction".to_string())
+                        }
+                    } else {
+                        Err("No managed pane is focused".to_string())
                     }
-                };
+                }
+            }
+            TileAction::StackNext | TileAction::StackPrev => {
+                self.focus_current_window(ax_ref.pid);
+                if let Some(pane_id) = self.tree.focused_pane {
+                    let forward = matches!(action, TileAction::StackNext);
+                    if let Some(new_active) = self.tree.cycle_tab(pane_id, forward) {
+                        if let Some(Node::Pane { tabs, .. }) = self.tree.root.find(pane_id) {
+                            if let Some(active_win) = tabs.get(new_active) {
+                                tile_ax::focus_window(&active_win.ax_ref);
+                                Ok(())
+                            } else {
+                                Err("No active window found after cycling stack".to_string())
+                            }
+                        } else {
+                            Err("Focused pane is no longer available".to_string())
+                        }
+                    } else {
+                        Err("The focused pane does not contain a window stack".to_string())
+                    }
+                } else {
+                    Err("No managed pane is focused".to_string())
+                }
+            }
+            TileAction::SnapToNearest => {
+                let windows = tile_ax::list_visible_windows();
+                if let Some(nearest) = find_nearest_window(current_frame, &windows, app_info.pid) {
+                    let side = if current_frame.center().0 < nearest.frame.center().0 {
+                        SnapSide::Left
+                    } else {
+                        SnapSide::Right
+                    };
+                    let snap_frame =
+                        TileTree::snap_window_beside(nearest.frame, current_frame, side, screen);
+                    self.push_action_snapshot(ax_ref.pid, ax_ref.window_index, current_frame);
+                    self.save_original_frame(ax_ref.pid, ax_ref.window_index, current_frame);
+                    tile_ax::set_window_frame_raw(window_element, snap_frame);
+                    Ok(())
+                } else {
+                    Err("No nearby visible window found to snap beside".to_string())
+                }
+            }
+            TileAction::MoveToNextDisplay | TileAction::MoveToPreviousDisplay => {
                 let displays = tile_ax::all_usable_frames();
                 if displays.len() < 2 {
                     return Err("Only one display detected".to_string());
@@ -442,36 +526,31 @@ impl TilePlugin {
                     dst.width * rw,
                     dst.height * rh,
                 );
-                self.action_history
-                    .push((ax_ref.pid, ax_ref.window_index, current_frame));
+                self.push_action_snapshot(ax_ref.pid, ax_ref.window_index, current_frame);
+                self.save_original_frame(ax_ref.pid, ax_ref.window_index, current_frame);
                 tile_ax::set_window_frame_raw(window_element, mapped);
                 Ok(())
             }
+            _ => {
+                self.save_original_frame(ax_ref.pid, ax_ref.window_index, current_frame);
+                let base_rect = self.base_rect(screen);
+                if self.tiling_mode == TilingMode::Multiplexer {
+                    self.ensure_window_managed(
+                        &ax_ref,
+                        &app_info.name,
+                        current_frame,
+                        window_element,
+                        base_rect,
+                    );
+                }
 
-            // Actions that require BSP tree management. Since we operate on the
-            // frontmost window without a persistent tree, these are no-ops with
-            // a descriptive message for now.
-            TileAction::EqualizeAll
-            | TileAction::ToggleZoom
-            | TileAction::MovePaneLeft
-            | TileAction::MovePaneRight
-            | TileAction::MovePaneUp
-            | TileAction::MovePaneDown
-            | TileAction::SwapPaneLeft
-            | TileAction::SwapPaneRight
-            | TileAction::SwapPaneUp
-            | TileAction::SwapPaneDown
-            | TileAction::StackNext
-            | TileAction::StackPrev
-            | TileAction::SnapToNearest => {
-                log::info!(
-                    "Tile action {:?} requires BSP tree state (not yet wired for single-shot commands)",
-                    action
-                );
-                Err(format!(
-                    "Action {:?} requires a running tile session with managed windows",
-                    action
-                ))
+                if let Some(frame) = action.compute_frame(base_rect) {
+                    self.push_action_snapshot(ax_ref.pid, ax_ref.window_index, current_frame);
+                    tile_ax::set_window_frame_raw(window_element, frame);
+                    Ok(())
+                } else {
+                    Err("Action did not produce a target frame".to_string())
+                }
             }
         };
 
@@ -514,6 +593,68 @@ impl TilePlugin {
     fn remove_original_frame(&mut self, pid: i32, window_index: usize) {
         self.original_frames
             .retain(|(p, i, _)| !(*p == pid && *i == window_index));
+    }
+
+    fn push_action_snapshot(&mut self, pid: i32, window_index: usize, frame: tile_core::Rect) {
+        self.action_history.push(ActionSnapshot {
+            pid,
+            window_index,
+            frame,
+        });
+    }
+
+    fn base_rect(&self, screen: Rect) -> Rect {
+        match (self.tiling_mode, self.multiplexer_region) {
+            (TilingMode::Multiplexer, Some(region)) => region,
+            _ => screen,
+        }
+    }
+
+    fn focus_current_window(&mut self, pid: i32) {
+        self.tree.focused_pane = self.tree.root.find_pane_by_pid(pid);
+    }
+
+    fn ensure_window_managed(
+        &mut self,
+        ax_ref: &AXWindowRef,
+        app_name: &str,
+        current_frame: Rect,
+        raw_element: *const std::ffi::c_void,
+        base_rect: Rect,
+    ) {
+        if self.tree.root.find_pane_by_pid(ax_ref.pid).is_none() {
+            let window = ManagedWindow::new(
+                AXWindowRef::new(ax_ref.pid, ax_ref.window_index, raw_element as usize),
+                ax_ref.pid,
+                app_name.to_string(),
+                app_name.to_string(),
+                current_frame,
+            );
+            self.tree.add_window(window);
+            self.relayout(base_rect);
+        }
+        self.focus_current_window(ax_ref.pid);
+    }
+
+    fn relayout(&self, screen: Rect) {
+        let layout = self.tree.compute_layout(screen);
+        for (pane_id, rect) in &layout {
+            if let Some(Node::Pane { tabs, active, .. }) = self.tree.root.find(*pane_id) {
+                if let Some(window) = tabs.get(*active) {
+                    tile_ax::set_window_frame(&window.ax_ref, *rect);
+                }
+            }
+        }
+    }
+
+    fn focus_active_window_in_focused_pane(&self) {
+        if let Some(pane_id) = self.tree.focused_pane {
+            if let Some(Node::Pane { tabs, active, .. }) = self.tree.root.find(pane_id) {
+                if let Some(window) = tabs.get(*active) {
+                    tile_ax::focus_window(&window.ax_ref);
+                }
+            }
+        }
     }
 
     /// Find a TileCommand by its id string.
@@ -625,8 +766,7 @@ impl Plugin for TilePlugin {
                 }
                 Err(e) => {
                     log::warn!("Tile action '{}' failed: {}", cmd.name, e);
-                    // Stay open so the user sees something went wrong.
-                    ConfirmResult::Dismiss
+                    ConfirmResult::Stay
                 }
             }
         } else {
@@ -649,4 +789,19 @@ impl Plugin for TilePlugin {
         // No sub-actions for tile commands.
         vec![]
     }
+}
+
+fn find_nearest_window(from: Rect, windows: &[WindowInfo], exclude_pid: i32) -> Option<WindowInfo> {
+    let (cx, cy) = from.center();
+    windows
+        .iter()
+        .filter(|w| w.pid != exclude_pid && !w.is_minimized)
+        .min_by(|a, b| {
+            let (ax, ay) = a.frame.center();
+            let (bx, by) = b.frame.center();
+            let da = (ax - cx).powi(2) + (ay - cy).powi(2);
+            let db = (bx - cx).powi(2) + (by - cy).powi(2);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .cloned()
 }

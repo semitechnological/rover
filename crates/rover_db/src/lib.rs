@@ -2,7 +2,7 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Key, Nonce,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::RngCore;
 use rusqlite::Connection;
@@ -10,9 +10,26 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+/// RoverDb initialization options.
+#[derive(Debug, Clone)]
+pub struct RoverDbOptions {
+    /// If true, allow the database to open without encryption (not recommended).
+    /// If false (default), encryption is required and opening without it fails.
+    pub allow_unencrypted: bool,
+}
+
+impl Default for RoverDbOptions {
+    fn default() -> Self {
+        Self {
+            allow_unencrypted: false,
+        }
+    }
+}
+
 pub struct RoverDb {
     conn: Arc<Mutex<Connection>>,
     cipher_key: Option<[u8; 32]>,
+    is_encrypted: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -40,16 +57,46 @@ pub struct BookmarkRow {
 }
 
 impl RoverDb {
+    /// Open the database with default options (encryption required).
     pub fn open() -> Result<Self> {
+        Self::open_with_options(RoverDbOptions::default())
+    }
+
+    /// Open the database with custom options.
+    pub fn open_with_options(options: RoverDbOptions) -> Result<Self> {
         let path = Self::db_path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(&path)?;
-        let cipher_key = Self::load_or_create_db_key().ok();
+
+        let cipher_key = match Self::load_or_create_db_key() {
+            Ok(key) => {
+                log::info!("Encryption key loaded from Keychain");
+                Some(key)
+            }
+            Err(e) => {
+                log::error!(
+                    "Failed to load or create encryption key: {}. Clipboard history will be stored UNENCRYPTED.",
+                    e
+                );
+                if !options.allow_unencrypted {
+                    return Err(anyhow::anyhow!(
+                        "Encryption is required but encryption key is unavailable: {}. \
+                         Set allow_unencrypted=true in RoverDbOptions to allow unencrypted storage (not recommended).",
+                        e
+                    ));
+                }
+                log::warn!("Proceeding without encryption - clipboard history will be stored in plaintext!");
+                None
+            }
+        };
+
+        let is_encrypted = cipher_key.is_some();
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
             cipher_key,
+            is_encrypted,
         };
         db.migrate()?;
         if db.cipher_key.is_some() {
@@ -58,12 +105,18 @@ impl RoverDb {
         Ok(db)
     }
 
+    /// Returns whether this database instance is using encryption.
+    pub fn is_encrypted(&self) -> bool {
+        self.is_encrypted
+    }
+
     #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let db = Self {
             conn: Arc::new(Mutex::new(conn)),
             cipher_key: None,
+            is_encrypted: false,
         };
         db.migrate()?;
         Ok(db)
@@ -104,7 +157,7 @@ impl RoverDb {
         let mut key = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut key);
         let hex: String = key.iter().map(|b| format!("{:02x}", b)).collect();
-        let _ = std::process::Command::new("security")
+        let status = std::process::Command::new("security")
             .args([
                 "add-generic-password",
                 "-s",
@@ -114,7 +167,17 @@ impl RoverDb {
                 "-w",
                 &hex,
             ])
-            .status();
+            .status()
+            .context("failed to execute security command")?;
+
+        if !status.success() {
+            return Err(anyhow::anyhow!(
+                "Failed to store encryption key in Keychain (exit code: {:?}). \
+                 Clipboard history will not be encrypted.",
+                status.code()
+            ));
+        }
+        log::info!("Generated and stored new encryption key in Keychain");
         Ok(key)
     }
 
@@ -265,11 +328,11 @@ impl RoverDb {
 
         let rows: Vec<(i64, String)> = {
             let conn = self.conn.lock().unwrap();
-            let mut stmt = conn.prepare(
-                "SELECT id, content FROM clipboard_history WHERE content_hash = ''",
-            )?;
-            let r: std::result::Result<Vec<(i64, String)>, rusqlite::Error> =
-                stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?.collect();
+            let mut stmt =
+                conn.prepare("SELECT id, content FROM clipboard_history WHERE content_hash = ''")?;
+            let r: std::result::Result<Vec<(i64, String)>, rusqlite::Error> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect();
             r?
         };
 
@@ -363,8 +426,9 @@ impl RoverDb {
         let mut stmt = conn.prepare(
             "SELECT id, content, timestamp FROM clipboard_history ORDER BY timestamp DESC, id DESC",
         )?;
-        let raw: std::result::Result<Vec<(i64, String, i64)>, rusqlite::Error> =
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?.collect();
+        let raw: std::result::Result<Vec<(i64, String, i64)>, rusqlite::Error> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+            .collect();
         let raw = raw?;
         drop(stmt);
         drop(conn);
@@ -524,10 +588,7 @@ impl RoverDb {
 
     pub fn remove_bookmark(&self, id: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
-            "DELETE FROM bookmarks WHERE id = ?1",
-            rusqlite::params![id],
-        )?;
+        conn.execute("DELETE FROM bookmarks WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
     }
 
@@ -555,9 +616,8 @@ impl RoverDb {
 
     pub fn list_bookmarks(&self) -> Result<Vec<BookmarkRow>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT id, url, title, created_at FROM bookmarks ORDER BY created_at DESC",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT id, url, title, created_at FROM bookmarks ORDER BY created_at DESC")?;
         let rows = stmt
             .query_map([], |row| {
                 Ok(BookmarkRow {
@@ -589,9 +649,8 @@ impl RoverDb {
     /// Load the saved session. Returns (url, title, is_active) tuples.
     pub fn load_session(&self) -> Result<Vec<(String, String, bool)>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT url, title, is_active FROM browser_session ORDER BY tab_index ASC",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT url, title, is_active FROM browser_session ORDER BY tab_index ASC")?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((
@@ -687,7 +746,11 @@ mod tests {
         db.add_clipboard_entry("keep").unwrap();
         db.add_clipboard_entry("delete_me").unwrap();
         let entries = db.list_clipboard_history().unwrap();
-        let delete_id = entries.iter().find(|e| e.content == "delete_me").unwrap().id;
+        let delete_id = entries
+            .iter()
+            .find(|e| e.content == "delete_me")
+            .unwrap()
+            .id;
         db.delete_clipboard_entry(delete_id).unwrap();
         let entries = db.list_clipboard_history().unwrap();
         assert_eq!(entries.len(), 1);
@@ -729,9 +792,13 @@ mod tests {
         assert!(urls.contains(&"https://rust-lang.org"));
 
         // Revisit increments count and updates title
-        db.add_history("https://example.com", "Example Updated").unwrap();
+        db.add_history("https://example.com", "Example Updated")
+            .unwrap();
         let recent = db.recent_history(10).unwrap();
-        let example = recent.iter().find(|r| r.url == "https://example.com").unwrap();
+        let example = recent
+            .iter()
+            .find(|r| r.url == "https://example.com")
+            .unwrap();
         assert_eq!(example.visit_count, 2);
         assert_eq!(example.title, "Example Updated");
     }
@@ -739,7 +806,8 @@ mod tests {
     #[test]
     fn test_browser_history_search() {
         let db = RoverDb::open_in_memory().unwrap();
-        db.add_history("https://github.com/rust-lang", "Rust on GitHub").unwrap();
+        db.add_history("https://github.com/rust-lang", "Rust on GitHub")
+            .unwrap();
         db.add_history("https://docs.rs", "Docs.rs").unwrap();
 
         let results = db.search_history("rust", 10).unwrap();
@@ -816,8 +884,10 @@ mod tests {
     #[test]
     fn test_search_escapes_like_wildcards() {
         let db = RoverDb::open_in_memory().unwrap();
-        db.add_history("https://example.com/100%_done", "100% Done").unwrap();
-        db.add_history("https://other.com/safe", "Safe Page").unwrap();
+        db.add_history("https://example.com/100%_done", "100% Done")
+            .unwrap();
+        db.add_history("https://other.com/safe", "Safe Page")
+            .unwrap();
 
         // Searching for "%" should only match the URL/title containing a literal %
         let results = db.search_history("%", 10).unwrap();
@@ -833,7 +903,8 @@ mod tests {
     #[test]
     fn test_bookmark_search_escapes_like_wildcards() {
         let db = RoverDb::open_in_memory().unwrap();
-        db.add_bookmark("https://example.com/100%", "100% Complete").unwrap();
+        db.add_bookmark("https://example.com/100%", "100% Complete")
+            .unwrap();
         db.add_bookmark("https://other.com/safe", "Safe").unwrap();
 
         let results = db.search_bookmarks("%").unwrap();
@@ -858,7 +929,8 @@ mod tests {
     fn test_browser_history_cap() {
         let db = RoverDb::open_in_memory().unwrap();
         for i in 0..5005 {
-            db.add_history(&format!("https://example.com/{i}"), "title").unwrap();
+            db.add_history(&format!("https://example.com/{i}"), "title")
+                .unwrap();
         }
         let conn = db.conn.lock().unwrap();
         let count: i64 = conn

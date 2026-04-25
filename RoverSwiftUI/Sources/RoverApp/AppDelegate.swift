@@ -16,7 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Build plugin registry with all native Swift plugins.
         registry = PluginRegistry()
         registry.register(AppLauncherPlugin())
         registry.register(CalculatorPlugin())
@@ -25,24 +24,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(TerminalPlugin())
         registry.register(EmojiPlugin())
 
-        // Create the launcher panel.
         vm = LauncherViewModel(registry: registry)
         panel = LauncherPanel(vm: vm)
 
-        // Menu bar status item.
         setupStatusItem()
 
-        // Global hotkey: Cmd+Space.
+        // Carbon hotkey: Cmd+Space.
         hotkey = GlobalHotkey { [weak self] in self?.panel.toggle() }
 
-        // Notification observers.
+        // Use `.main` queue so the closure runs on the main thread; then
+        // assert main-actor isolation to safely touch @MainActor properties.
         NotificationCenter.default.addObserver(
             forName: .roverDismiss, object: nil, queue: .main
-        ) { [weak self] _ in self?.panel.hide() }
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.panel.hide() }
+        }
 
         NotificationCenter.default.addObserver(
             forName: .roverOpenSettings, object: nil, queue: .main
-        ) { [weak self] _ in self?.openSettings() }
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.openSettings() }
+        }
     }
 
     // MARK: - Status item
@@ -62,7 +64,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Settings
 
     private func openSettings() {
-        // Placeholder — implement SettingsView in a separate window.
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 }

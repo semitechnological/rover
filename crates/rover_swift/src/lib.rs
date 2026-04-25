@@ -13,7 +13,7 @@ eqswift::setup!();
 // ─── FuzzyEngine ─────────────────────────────────────────────────────────────
 
 /// Skim-algorithm fuzzy scorer. Call from Swift to rank candidates.
-#[derive(eqswift::Object)]
+#[derive(eqswift::Object, Default)]
 pub struct FuzzyEngine;
 
 #[eqswift::export]
@@ -116,11 +116,9 @@ impl RoverDatabase {
 
     /// Read a setting. Returns `nil` if not set.
     pub fn get_setting(&self, key: String) -> Result<Option<String>, DatabaseError> {
-        self.db
-            .get_setting(&key)
-            .map_err(|e| DatabaseError::Query {
-                message: e.to_string(),
-            })
+        self.db.get_setting(&key).map_err(|e| DatabaseError::Query {
+            message: e.to_string(),
+        })
     }
 
     /// Write a setting.

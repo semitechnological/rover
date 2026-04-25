@@ -1,0 +1,7 @@
+module rover_swiftFFI {
+    header "rover_swiftFFI.h"
+    export *
+    use "Darwin"
+    use "_Builtin_stdbool"
+    use "_Builtin_stdint"
+}

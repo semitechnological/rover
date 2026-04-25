@@ -7,12 +7,15 @@ public final class CalculatorPlugin: RoverPlugin {
     public let id = "builtin.calculator"
     public let name = "Calculator"
 
+    /// Characters allowed in an expression — anything else means it's not a math query.
+    private static let allowedChars = CharacterSet.decimalDigits
+        .union(CharacterSet(charactersIn: "+-*/.()^ eE,"))
+
     public init() {}
 
     public func query(_ query: String) -> [PickerItem] { [] }
 
     public func confirm(itemID: String, query: String, secondary: Bool) -> ConfirmAction {
-        // Copy the result to clipboard.
         return .copyToClipboard(itemID)
     }
 
@@ -24,23 +27,29 @@ public final class CalculatorPlugin: RoverPlugin {
     // MARK: - Private
 
     private func evaluate(_ expr: String) -> String? {
-        // NSExpression handles basic arithmetic: +, -, *, /, (), ^, sqrt(), etc.
         let sanitised = expr
             .trimmingCharacters(in: .whitespaces)
             .replacingOccurrences(of: "^", with: "**")
 
-        // Reject pure-word queries so we don't false-positive on app names.
-        let hasDigit = sanitised.contains { $0.isNumber }
-        guard hasDigit else { return nil }
+        // Must contain a digit to be a math expression.
+        guard sanitised.contains(where: \.isNumber) else { return nil }
 
-        guard
-            let nsExpr = try? NSExpression(format: sanitised),
-            let value = nsExpr.expressionValue(with: nil, context: nil) as? NSNumber
-        else { return nil }
+        // Reject anything outside safe math characters to avoid NSExpression exceptions.
+        // NSExpression(format:) raises an ObjC exception on invalid input; we can't
+        // catch those in Swift, so we validate strictly before calling it.
+        guard sanitised.unicodeScalars.allSatisfy({ Self.allowedChars.contains($0) }) else {
+            return nil
+        }
+
+        let nsExpr = NSExpression(format: sanitised)
+        guard let value = nsExpr.expressionValue(with: nil, context: nil) as? NSNumber else {
+            return nil
+        }
 
         let d = value.doubleValue
-        // Prefer integer display when result is whole.
-        if d == d.rounded() && !d.isInfinite, let i = Int(exactly: d) {
+        guard d.isFinite else { return nil }
+
+        if d == d.rounded(), let i = Int(exactly: d) {
             return "\(i)"
         }
         return String(format: "%g", d)

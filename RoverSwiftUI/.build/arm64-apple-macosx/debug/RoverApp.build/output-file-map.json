@@ -1,0 +1,47 @@
+{
+  "": {
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/primary.swiftdeps"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverApp/AppDelegate.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/AppDelegate.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/AppDelegate.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/AppDelegate~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/AppDelegate.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/AppDelegate.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverApp/GlobalHotkey.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/GlobalHotkey.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/GlobalHotkey.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/GlobalHotkey~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/GlobalHotkey.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/GlobalHotkey.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverApp/LauncherPanel.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherPanel.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherPanel.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherPanel~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherPanel.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherPanel.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverApp/LauncherView.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherView.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherView.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherView~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherView.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherView.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverApp/LauncherViewModel.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherViewModel.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherViewModel.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherViewModel~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherViewModel.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/LauncherViewModel.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverApp/main.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/main.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/main.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/main~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/main.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp.build/main.dia"
+  }
+}

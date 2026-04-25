@@ -12,18 +12,11 @@ use std::sync::{Arc, Mutex};
 
 /// RoverDb initialization options.
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct RoverDbOptions {
     /// If true, allow the database to open without encryption (not recommended).
     /// If false (default), encryption is required and opening without it fails.
     pub allow_unencrypted: bool,
-}
-
-impl Default for RoverDbOptions {
-    fn default() -> Self {
-        Self {
-            allow_unencrypted: false,
-        }
-    }
 }
 
 pub struct RoverDb {

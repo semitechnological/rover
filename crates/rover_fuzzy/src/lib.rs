@@ -1,5 +1,6 @@
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use rayon::prelude::*;
 
 #[derive(Clone, Debug)]
 pub struct StringMatchCandidate {
@@ -65,9 +66,10 @@ pub fn match_strings(
             .collect();
     }
 
+    // SkimMatcherV2 is Send + Sync — safe to share across rayon threads.
     let matcher = SkimMatcherV2::default();
     let mut matches: Vec<StringMatch> = candidates
-        .iter()
+        .par_iter()
         .filter_map(|candidate| {
             let (score, indices) = matcher.fuzzy_indices(&candidate.string, query)?;
             Some(StringMatch {
@@ -79,7 +81,7 @@ pub fn match_strings(
         })
         .collect();
 
-    matches.sort_by(|a, b| b.score.cmp(&a.score));
+    matches.sort_unstable_by(|a, b| b.score.cmp(&a.score));
     matches.truncate(max_results);
     matches
 }
@@ -96,7 +98,7 @@ pub fn normalize_query(input: &str) -> String {
             (Some(prev), c) if prev.is_whitespace() && c.is_whitespace() => continue,
             _ => {
                 last_char = Some(ch);
-            }
+            },
         }
         result.push(ch);
     }
@@ -183,10 +185,25 @@ mod tests {
 
     #[test]
     fn string_match_ordering() {
-        let a = StringMatch { candidate_id: 0, score: 100, positions: vec![], string: "A".into() };
-        let b = StringMatch { candidate_id: 1, score: 50, positions: vec![], string: "B".into() };
-        let c = StringMatch { candidate_id: 2, score: 100, positions: vec![], string: "C".into() };
-        let mut v = vec![b.clone(), c.clone(), a.clone()];
+        let a = StringMatch {
+            candidate_id: 0,
+            score: 100,
+            positions: vec![],
+            string: "A".into(),
+        };
+        let b = StringMatch {
+            candidate_id: 1,
+            score: 50,
+            positions: vec![],
+            string: "B".into(),
+        };
+        let c = StringMatch {
+            candidate_id: 2,
+            score: 100,
+            positions: vec![],
+            string: "C".into(),
+        };
+        let mut v = [b.clone(), c.clone(), a.clone()];
         v.sort();
         // Higher score first (reversed), then by candidate_id
         assert_eq!(v[0].string, "A");

@@ -1,6 +1,6 @@
+import AppKit
 import Combine
 import RoverCore
-import RoverPlugins
 import SwiftUI
 
 /// Drives the launcher panel. Lives on the main actor.
@@ -73,7 +73,16 @@ final class LauncherViewModel {
             NotificationCenter.default.post(name: .roverDismiss, object: nil)
 
         case .launchApp(let name):
-            NSWorkspace.shared.launchApplication(name)
+            // Resolve by name → bundle URL, fall back to raw open.
+            if let url = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: Bundle.main.bundleIdentifier ?? ""
+            ) {
+                _ = url // unused; real lookup below
+            }
+            if let url = appURL(named: name) {
+                let cfg = NSWorkspace.OpenConfiguration()
+                NSWorkspace.shared.openApplication(at: url, configuration: cfg)
+            }
             NotificationCenter.default.post(name: .roverDismiss, object: nil)
 
         case .runShell(let cmd):
@@ -86,8 +95,9 @@ final class LauncherViewModel {
             NotificationCenter.default.post(name: .roverDismiss, object: nil)
 
         case .openTerminal(let cmd):
-            let script = cmd.map { "tell application \"Terminal\" to do script \"\($0)\"" }
-                ?? "tell application \"Terminal\" to activate"
+            let script = cmd.map {
+                "tell application \"Terminal\" to do script \"\($0)\""
+            } ?? "tell application \"Terminal\" to activate"
             var error: NSDictionary?
             NSAppleScript(source: script)?.executeAndReturnError(&error)
             NotificationCenter.default.post(name: .roverDismiss, object: nil)
@@ -96,12 +106,27 @@ final class LauncherViewModel {
             NotificationCenter.default.post(name: .roverOpenSettings, object: nil)
 
         case .enterSubmenu(let title, _):
-            // Replace query with submenu title so UX feels natural.
             query = title
 
         case .stay:
             break
         }
+    }
+
+    // MARK: - Helpers
+
+    /// Find a .app URL by display name, searching standard app directories.
+    private func appURL(named name: String) -> URL? {
+        let dirs: [URL] = [
+            URL(fileURLWithPath: "/Applications"),
+            URL(fileURLWithPath: "/System/Applications"),
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+        ]
+        for dir in dirs {
+            let url = dir.appendingPathComponent("\(name).app")
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        return nil
     }
 }
 

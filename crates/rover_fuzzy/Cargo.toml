@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 fuzzy-matcher = { workspace = true }
+rayon = "1"

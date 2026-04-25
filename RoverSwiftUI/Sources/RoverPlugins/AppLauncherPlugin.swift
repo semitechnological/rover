@@ -12,9 +12,12 @@ public final class AppLauncherPlugin: RoverPlugin {
     public init() {}
 
     public func onLoad() {
-        Task.detached(priority: .background) { [weak self] in
-            let found = Self.scanApps()
-            await MainActor.run { self?.apps = found }
+        // Scan on a background thread; nonisolated so it can leave the main actor.
+        Task {
+            let found = await Task.detached(priority: .background) {
+                AppLauncherPlugin.scanApps()
+            }.value
+            self.apps = found
         }
     }
 
@@ -24,7 +27,6 @@ public final class AppLauncherPlugin: RoverPlugin {
             .compactMap { app -> PickerItem? in
                 let lower = app.name.lowercased()
                 guard lower.contains(q) else { return nil }
-                // Simple prefix bonus.
                 let score: Double = lower.hasPrefix(q) ? 1.0 : 0.6
                 return PickerItem(
                     id: app.path,
@@ -49,7 +51,9 @@ public final class AppLauncherPlugin: RoverPlugin {
 
     // MARK: - Private
 
-    private static func scanApps() -> [(name: String, path: String, bundleID: String?)] {
+    /// `nonisolated` so it can be called from any context (Task.detached, background thread).
+    /// Only uses thread-safe Foundation APIs — FileManager and Bundle are safe off-main.
+    private nonisolated static func scanApps() -> [(name: String, path: String, bundleID: String?)] {
         let dirs: [URL] = [
             URL(fileURLWithPath: "/Applications"),
             URL(fileURLWithPath: "/System/Applications"),

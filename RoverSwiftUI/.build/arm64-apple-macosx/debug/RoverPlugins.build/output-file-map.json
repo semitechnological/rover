@@ -1,0 +1,47 @@
+{
+  "": {
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/primary.swiftdeps"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverPlugins/AppLauncherPlugin.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/AppLauncherPlugin.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/AppLauncherPlugin.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/AppLauncherPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/AppLauncherPlugin.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/AppLauncherPlugin.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverPlugins/CalculatorPlugin.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/CalculatorPlugin.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/CalculatorPlugin.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/CalculatorPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/CalculatorPlugin.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/CalculatorPlugin.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverPlugins/ClipboardPlugin.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/ClipboardPlugin.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/ClipboardPlugin.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/ClipboardPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/ClipboardPlugin.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/ClipboardPlugin.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverPlugins/EmojiPlugin.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/EmojiPlugin.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/EmojiPlugin.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/EmojiPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/EmojiPlugin.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/EmojiPlugin.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverPlugins/FileSearchPlugin.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/FileSearchPlugin.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/FileSearchPlugin.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/FileSearchPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/FileSearchPlugin.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/FileSearchPlugin.dia"
+  },
+  "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/Sources/RoverPlugins/TerminalPlugin.swift": {
+    "dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/TerminalPlugin.d",
+    "object": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/TerminalPlugin.swift.o",
+    "swiftmodule": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/TerminalPlugin~partial.swiftmodule",
+    "swift-dependencies": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/TerminalPlugin.swiftdeps",
+    "diagnostics": "/Users/undivisible/projects/rover/.claude/worktrees/mystifying-pascal/RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverPlugins.build/TerminalPlugin.dia"
+  }
+}

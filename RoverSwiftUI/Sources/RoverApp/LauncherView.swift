@@ -1,3 +1,4 @@
+import AppKit
 import RoverCore
 import SwiftUI
 
@@ -20,7 +21,7 @@ struct LauncherView: View {
                 Divider()
             }
 
-            // ── Inline cards (calculator, AI, etc.) ──────────────────────
+            // ── Inline cards ─────────────────────────────────────────────
             if !vm.cards.isEmpty {
                 VStack(spacing: 6) {
                     ForEach(vm.cards.indices, id: \.self) { i in
@@ -86,9 +87,7 @@ private struct SearchBar: View {
                 .onSubmit(onSubmit)
 
             if !text.isEmpty {
-                Button {
-                    text = ""
-                } label: {
+                Button { text = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .foregroundStyle(.secondary)
                 }
@@ -106,27 +105,9 @@ private struct ResultRowView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // Icon
-            Group {
-                if let icon = item.iconName {
-                    // Try as SF Symbol first; fall back to generic doc icon.
-                    if icon.count < 50, Image(systemName: icon) != nil {
-                        Image(systemName: icon)
-                            .imageScale(.large)
-                            .frame(width: 28, height: 28)
-                    } else {
-                        // App bundle icon.
-                        AppIconView(bundleID: icon)
-                    }
-                } else {
-                    Image(systemName: "square.grid.2x2")
-                        .imageScale(.large)
-                        .frame(width: 28, height: 28)
-                }
-            }
-            .foregroundStyle(isSelected ? .white : .primary)
+            ItemIconView(iconName: item.iconName)
+                .foregroundStyle(isSelected ? .white : .primary)
 
-            // Text
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.title)
                     .font(.system(size: 14, weight: .medium))
@@ -147,6 +128,38 @@ private struct ResultRowView: View {
         .padding(.vertical, 7)
         .background(isSelected ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 6))
         .padding(.horizontal, 4)
+    }
+}
+
+// MARK: - ItemIconView
+
+/// Resolves icon: SF Symbol if NSImage finds a match, otherwise app bundle icon.
+private struct ItemIconView: View {
+    let iconName: String?
+
+    var body: some View {
+        Group {
+            if let name = iconName {
+                if isSFSymbol(name) {
+                    Image(systemName: name)
+                        .imageScale(.large)
+                        .frame(width: 28, height: 28)
+                } else {
+                    AppIconView(bundleID: name)
+                        .frame(width: 28, height: 28)
+                }
+            } else {
+                Image(systemName: "square.grid.2x2")
+                    .imageScale(.large)
+                    .frame(width: 28, height: 28)
+            }
+        }
+    }
+
+    /// NSImage can reliably tell us whether a symbol exists.
+    private func isSFSymbol(_ name: String) -> Bool {
+        guard name.count < 60 else { return false }
+        return NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
     }
 }
 
@@ -180,7 +193,7 @@ private struct InlineCardView: View {
 
 // MARK: - AppIconView
 
-/// Loads the NSImage for a bundle id and wraps it in an Image.
+/// Renders the icon for a given bundle ID using the modern NSWorkspace API.
 private struct AppIconView: NSViewRepresentable {
     let bundleID: String
 
@@ -191,8 +204,8 @@ private struct AppIconView: NSViewRepresentable {
     }
 
     func updateNSView(_ view: NSImageView, context: Context) {
-        if let path = NSWorkspace.shared.absolutePathForApplication(withBundleIdentifier: bundleID) {
-            view.image = NSWorkspace.shared.icon(forFile: path)
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            view.image = NSWorkspace.shared.icon(forFile: url.path)
         } else {
             view.image = NSImage(systemSymbolName: "app", accessibilityDescription: nil)
         }

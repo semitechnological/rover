@@ -2,68 +2,73 @@ import Foundation
 import RoverCore
 
 /// Spotlight-powered file search via `MDQuery`.
+///
+/// Activated by `/` or `file:` prefix. Runs Spotlight asynchronously on a
+/// background task so the main thread is never blocked.
 @MainActor
 public final class FileSearchPlugin: RoverPlugin {
     public let id = "builtin.file_search"
     public let name = "File Search"
 
-    private var currentQuery: MDQuery?
     private var latestResults: [PickerItem] = []
+    private var searchTask: Task<Void, Never>?
 
     public init() {}
 
     public func query(_ query: String) -> [PickerItem] {
-        // Activate on explicit "/" prefix or "file:" prefix.
-        guard query.hasPrefix("/") || query.lowercased().hasPrefix("file:") else {
-            return []
-        }
-        let term = query
-            .replacingOccurrences(of: "^file:", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "^/", with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespaces)
-
+        guard query.hasPrefix("/") || query.lowercased().hasPrefix("file:") else { return [] }
+        let term = extractTerm(from: query)
         guard term.count >= 2 else { return [] }
 
-        runSpotlight(term)
+        // Cancel any previous search and kick off a new one.
+        searchTask?.cancel()
+        searchTask = Task { [weak self] in
+            let results = await Self.runSpotlight(term: term)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { self?.latestResults = results }
+        }
+
+        // Return current (possibly one keystroke stale) results immediately.
         return latestResults
     }
 
     public func confirm(itemID: String, query: String, secondary: Bool) -> ConfirmAction {
-        // Open the file with the default app.
         return .runShell("open \"\(itemID)\"")
     }
 
-    // MARK: - Spotlight
+    // MARK: - Helpers
 
-    private func runSpotlight(_ term: String) {
-        currentQuery.map { MDQueryStop($0) }
+    private func extractTerm(from query: String) -> String {
+        query
+            .replacingOccurrences(of: "^file:", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "^/", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+    }
 
-        let predicate = "kMDItemDisplayName == '*\(term)*'cdw"
-        guard let mdQuery = MDQueryCreate(nil, predicate as CFString, nil, nil) else { return }
+    /// Runs `MDQueryExecute` off the main thread so we don't block the UI.
+    private static func runSpotlight(term: String) async -> [PickerItem] {
+        await Task.detached(priority: .userInitiated) {
+            let predicate = "kMDItemDisplayName == '*\(term)*'cdw"
+            guard let q = MDQueryCreate(nil, predicate as CFString, nil, nil) else { return [] }
+            MDQuerySetMaxCount(q, 12)
+            MDQueryExecute(q, CFOptionFlags(kMDQuerySynchronous.rawValue))
 
-        MDQuerySetMaxCount(mdQuery, 12)
-        MDQueryExecute(mdQuery, CFOptionFlags(kMDQuerySynchronous.rawValue))
-
-        let count = MDQueryGetResultCount(mdQuery)
-        var items: [PickerItem] = []
-        for i in 0 ..< count {
-            guard let rawPtr = MDQueryGetResultAtIndex(mdQuery, i) else { continue }
-            let item = Unmanaged<MDItem>.fromOpaque(rawPtr).takeUnretainedValue()
-            guard
-                let path = MDItemCopyAttribute(item, kMDItemPath) as? String,
-                let name = MDItemCopyAttribute(item, kMDItemDisplayName) as? String
-            else { continue }
-            items.append(PickerItem(
-                id: path,
-                pluginID: id,
-                title: name,
-                subtitle: path,
-                iconName: "doc",
-                score: 0.5
-            ))
-        }
-
-        currentQuery = mdQuery
-        latestResults = items
+            let count = MDQueryGetResultCount(q)
+            var items: [PickerItem] = []
+            for i in 0 ..< count {
+                guard let raw = MDQueryGetResultAtIndex(q, i) else { continue }
+                let item = Unmanaged<MDItem>.fromOpaque(raw).takeUnretainedValue()
+                guard
+                    let path = MDItemCopyAttribute(item, kMDItemPath) as? String,
+                    let name = MDItemCopyAttribute(item, kMDItemDisplayName) as? String
+                else { continue }
+                items.append(PickerItem(
+                    id: path, pluginID: "builtin.file_search",
+                    title: name, subtitle: path, iconName: "doc",
+                    score: 0.5
+                ))
+            }
+            return items
+        }.value
     }
 }

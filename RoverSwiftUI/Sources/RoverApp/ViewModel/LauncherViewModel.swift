@@ -1,16 +1,12 @@
 import AppKit
-import Combine
 import RoverCore
 import SwiftUI
 
-/// Drives the launcher panel. Lives on the main actor.
+/// Drives the launcher panel. All state lives here; views are stateless renderers.
 @MainActor
 @Observable
 final class LauncherViewModel {
-    var query: String = "" {
-        didSet { runQuery() }
-    }
-
+    var query: String = "" { didSet { runQuery() } }
     var items: [PickerItem] = []
     var cards: [InlineCard] = []
     var selectedIndex: Int = 0
@@ -33,8 +29,7 @@ final class LauncherViewModel {
     // MARK: - Selection
 
     var selectedItem: PickerItem? {
-        guard items.indices.contains(selectedIndex) else { return nil }
-        return items[selectedIndex]
+        items.indices.contains(selectedIndex) ? items[selectedIndex] : nil
     }
 
     func moveDown() {
@@ -66,41 +61,34 @@ final class LauncherViewModel {
     private func execute(_ action: ConfirmAction) {
         switch action {
         case .dismiss:
-            NotificationCenter.default.post(name: .roverDismiss, object: nil)
+            dismiss()
 
         case .openURL(let url):
             NSWorkspace.shared.open(url)
-            NotificationCenter.default.post(name: .roverDismiss, object: nil)
+            dismiss()
 
         case .launchApp(let name):
-            // Resolve by name → bundle URL, fall back to raw open.
-            if let url = NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: Bundle.main.bundleIdentifier ?? ""
-            ) {
-                _ = url // unused; real lookup below
-            }
             if let url = appURL(named: name) {
-                let cfg = NSWorkspace.OpenConfiguration()
-                NSWorkspace.shared.openApplication(at: url, configuration: cfg)
+                NSWorkspace.shared.openApplication(at: url, configuration: .init())
             }
-            NotificationCenter.default.post(name: .roverDismiss, object: nil)
+            dismiss()
 
         case .runShell(let cmd):
-            Process.launchedProcess(launchPath: "/bin/sh", arguments: ["-c", cmd])
-            NotificationCenter.default.post(name: .roverDismiss, object: nil)
+            // Process() replaces the deprecated launchedProcess(launchPath:arguments:).
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/sh")
+            proc.arguments = ["-c", cmd]
+            try? proc.run()
+            dismiss()
 
         case .copyToClipboard(let text):
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
-            NotificationCenter.default.post(name: .roverDismiss, object: nil)
+            dismiss()
 
         case .openTerminal(let cmd):
-            let script = cmd.map {
-                "tell application \"Terminal\" to do script \"\($0)\""
-            } ?? "tell application \"Terminal\" to activate"
-            var error: NSDictionary?
-            NSAppleScript(source: script)?.executeAndReturnError(&error)
-            NotificationCenter.default.post(name: .roverDismiss, object: nil)
+            openTerminalApp(command: cmd)
+            dismiss()
 
         case .openSettings:
             NotificationCenter.default.post(name: .roverOpenSettings, object: nil)
@@ -115,12 +103,25 @@ final class LauncherViewModel {
 
     // MARK: - Helpers
 
-    /// Find a .app URL by display name, searching standard app directories.
+    private func dismiss() {
+        NotificationCenter.default.post(name: .roverDismiss, object: nil)
+    }
+
+    private func openTerminalApp(command: String?) {
+        let script = command.map {
+            "tell application \"Terminal\" to do script \"\($0)\""
+        } ?? "tell application \"Terminal\" to activate"
+        var err: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&err)
+    }
+
+    /// Locate a .app bundle by display name in standard application directories.
     private func appURL(named name: String) -> URL? {
         let dirs: [URL] = [
             URL(fileURLWithPath: "/Applications"),
             URL(fileURLWithPath: "/System/Applications"),
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
+            FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Applications"),
         ]
         for dir in dirs {
             let url = dir.appendingPathComponent("\(name).app")
@@ -129,6 +130,8 @@ final class LauncherViewModel {
         return nil
     }
 }
+
+// MARK: - Notification names
 
 extension Notification.Name {
     static let roverDismiss = Notification.Name("dev.undivisible.rover.dismiss")

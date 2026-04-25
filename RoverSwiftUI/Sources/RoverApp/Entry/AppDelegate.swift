@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(ClipboardPlugin())
         registry.register(FileSearchPlugin())
         registry.register(TerminalPlugin())
+        registry.register(BrowserPlugin())
         registry.register(EmojiPlugin())
 
         vm = LauncherViewModel(registry: registry)

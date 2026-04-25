@@ -11,8 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 /// RoverDb initialization options.
-#[derive(Debug, Clone)]
-#[derive(Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RoverDbOptions {
     /// If true, allow the database to open without encryption (not recommended).
     /// If false (default), encryption is required and opening without it fails.
@@ -67,7 +66,7 @@ impl RoverDb {
             Ok(key) => {
                 log::info!("Encryption key loaded from Keychain");
                 Some(key)
-            }
+            },
             Err(e) => {
                 log::error!(
                     "Failed to load or create encryption key: {}. Clipboard history will be stored UNENCRYPTED.",
@@ -82,7 +81,7 @@ impl RoverDb {
                 }
                 log::warn!("Proceeding without encryption - clipboard history will be stored in plaintext!");
                 None
-            }
+            },
         };
 
         let is_encrypted = cipher_key.is_some();
@@ -190,12 +189,12 @@ impl RoverDb {
                 let mut combined = nonce_bytes.to_vec();
                 combined.extend(ciphertext);
                 BASE64.encode(&combined)
-            }
+            },
             Err(e) => {
                 log::error!("clipboard encryption failed, storing encrypted marker: {e}");
                 // Never store plaintext on encryption failure — use a placeholder
                 "[encryption failed]".to_string()
-            }
+            },
         }
     }
 

@@ -1,0 +1,18 @@
+[package]
+name = "rover_swift"
+version = "0.1.0"
+edition = "2021"
+description = "SwiftUI bridge — fuzzy engine + DB exported to Swift via eqswift/UniFFI"
+
+[lib]
+name = "rover_swift"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+eqswift = { path = "../../../../../../eqswift/eq-swift" }
+uniffi = { version = "0.31", features = ["cli"] }
+rover_db = { path = "../rover_db" }
+rover_fuzzy = { path = "../rover_fuzzy" }
+anyhow.workspace = true
+thiserror = "2"
+log.workspace = true

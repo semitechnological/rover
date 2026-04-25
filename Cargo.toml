@@ -16,7 +16,7 @@ members = [
     "crates/tile_ax",
     "crates/tile_hotkeys",
     "crates/tile_overlay",
-
+    "crates/rover_swift",
 ]
 resolver = "2"
 

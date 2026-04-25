@@ -1,4 +1,6 @@
 /target/
+RoverSwiftUI/.build/
+RoverSwiftUI/lib/
 *.rs.bk
 *.pdb
 .DS_Store

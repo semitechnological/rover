@@ -4,8 +4,10 @@ import RoverCore
 
 /// Clipboard history backed by `RoverDatabase`.
 ///
-/// Monitors the system pasteboard every 500 ms. The monitor task is cancelled
-/// on deinit so there are no stray background tasks after the plugin is removed.
+/// Monitors the system pasteboard with **adaptive polling** — matches the main
+/// Rover app's strategy: 500 ms fast interval while the clipboard is changing,
+/// backing off to 2 s after 8 consecutive idle cycles (~4 s quiet).
+/// The monitor task is cancelled on deinit so there are no stray background tasks.
 @MainActor
 public final class ClipboardPlugin: RoverPlugin {
     public let id = "builtin.clipboard"
@@ -13,6 +15,11 @@ public final class ClipboardPlugin: RoverPlugin {
 
     private let db: RoverDatabase?
     private var monitorTask: Task<Void, Never>?
+
+    // Adaptive polling tuning (matches rover main).
+    private static let fastIntervalNs: UInt64  =   500_000_000  // 0.5 s
+    private static let slowIntervalNs: UInt64  = 2_000_000_000  // 2.0 s
+    private static let idleThreshold: Int = 8  // cycles before backing off
 
     public init() {
         db = try? RoverDatabase.open()
@@ -28,7 +35,6 @@ public final class ClipboardPlugin: RoverPlugin {
 
     public func query(_ query: String) -> [PickerItem] {
         let q = query.lowercased()
-        // Surface clipboard history on: empty query, "clip…" prefix, or "history" match.
         guard q.isEmpty || "clipboard".hasPrefix(q) || "history".hasPrefix(q) else { return [] }
         guard let entries = try? db?.clipboardHistory() else { return [] }
 
@@ -65,13 +71,25 @@ public final class ClipboardPlugin: RoverPlugin {
     private var lastChangeCount = NSPasteboard.general.changeCount
 
     private func runMonitor() async {
+        var idleCount = 0
+
         while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5 s
+            // Adaptive interval: fast when active, slow when idle.
+            let interval = idleCount >= Self.idleThreshold
+                ? Self.slowIntervalNs
+                : Self.fastIntervalNs
+            try? await Task.sleep(nanoseconds: interval)
             guard !Task.isCancelled else { return }
 
             let count = NSPasteboard.general.changeCount
-            guard count != lastChangeCount else { continue }
+            guard count != lastChangeCount else {
+                idleCount += 1
+                continue
+            }
+
+            // Clipboard changed — reset idle counter and record entry.
             lastChangeCount = count
+            idleCount = 0
 
             if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
                 try? db?.pushClipboard(text: text)

@@ -35,7 +35,10 @@ public struct PickerItem: Identifiable, Sendable {
 /// What the launcher should do after the user confirms an item.
 public enum ConfirmAction: Sendable {
     case dismiss
+    /// Open a URL in the user's default browser (NSWorkspace).
     case openURL(URL)
+    /// Open a URL in Rover's built-in WebKit browser window.
+    case openBrowser(URL)
     case launchApp(String)
     case runShell(String)
     case copyToClipboard(String)

@@ -16,18 +16,23 @@ extension View {
         self.glassEffect(in: RoundedRectangle(cornerRadius: RoverGlass.cardRadius, style: .continuous))
     }
 
-    /// Row selection highlight. Glass tinted with accent at low opacity.
+    /// Row selection highlight.
+    ///
+    /// Uses a solid fill only — no nested glassEffect. Stacking glassEffect inside
+    /// GlassEffectContainer causes vibrancy conflicts that wash out text.
     func selectedRowBackground() -> some View {
         self.background(
             RoundedRectangle(cornerRadius: RoverGlass.rowRadius, style: .continuous)
-                .fill(Color.accentColor.opacity(0.18))
+                .fill(Color.accentColor.opacity(0.22))
         )
-        .glassEffect(in: RoundedRectangle(cornerRadius: RoverGlass.rowRadius, style: .continuous))
     }
 
     /// Hover highlight for unselected rows.
     func hoverRowBackground() -> some View {
-        self.glassEffect(in: RoundedRectangle(cornerRadius: RoverGlass.rowRadius, style: .continuous))
+        self.background(
+            RoundedRectangle(cornerRadius: RoverGlass.rowRadius, style: .continuous)
+                .fill(Color.primary.opacity(0.06))
+        )
     }
 }
 

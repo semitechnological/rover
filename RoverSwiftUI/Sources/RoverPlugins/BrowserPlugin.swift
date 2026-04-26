@@ -54,12 +54,12 @@ public final class BrowserPlugin: RoverPlugin {
 
     public func confirm(itemID: String, query: String, secondary: Bool) -> ConfirmAction {
         if itemID == "__open_browser__" {
-            return .openURL(URL(string: "https://")!)
+            return .openBrowser(URL(string: "https://")!)
         }
         if itemID.hasPrefix("url:"),
             let url = URL(string: String(itemID.dropFirst(4)))
         {
-            return .openURL(url)
+            return .openBrowser(url)
         }
         return .dismiss
     }

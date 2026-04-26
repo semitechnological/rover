@@ -6,20 +6,50 @@ import SwiftUI
 @MainActor
 @Observable
 final class LauncherViewModel {
-    var query: String = "" { didSet { runQuery() } }
+    var query: String = "" { didSet { scheduleQuery() } }
     var items: [PickerItem] = []
     var cards: [InlineCard] = []
     var selectedIndex: Int = 0
 
     private let registry: PluginRegistry
 
+    // ── Debounce ──────────────────────────────────────────────────────────────
+    // Mirrors the main Rover app's input coalescing: fire immediately on empty
+    // query (instant clear), otherwise wait 60 ms so rapid keystrokes coalesce
+    // into one query pass — particularly important when AI streaming is active.
+    private var debounceTask: Task<Void, Never>?
+    private static let debounceNs: UInt64 = 60_000_000  // 60 ms
+
     init(registry: PluginRegistry) {
         self.registry = registry
+        // Refresh results whenever AIPlugin pushes a streaming update.
+        for name in [Notification.Name.roverAIUpdate, .roverSemanticUpdate] {
+            NotificationCenter.default.addObserver(
+                forName: name, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.runQuery() }
+            }
+        }
     }
 
     // MARK: - Query
 
-    private func runQuery() {
+    private func scheduleQuery() {
+        // Empty query → execute immediately so the panel clears without lag.
+        if query.isEmpty {
+            debounceTask?.cancel()
+            runQuery()
+            return
+        }
+        debounceTask?.cancel()
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.debounceNs)
+            guard !Task.isCancelled else { return }
+            self?.runQuery()
+        }
+    }
+
+    func runQuery() {
         let (newItems, newCards) = registry.query(query)
         items = newItems
         cards = newCards
@@ -67,6 +97,10 @@ final class LauncherViewModel {
             NSWorkspace.shared.open(url)
             dismiss()
 
+        case .openBrowser(let url):
+            NotificationCenter.default.post(name: .roverOpenBrowser, object: url)
+            dismiss()
+
         case .launchApp(let name):
             if let url = appURL(named: name) {
                 NSWorkspace.shared.openApplication(at: url, configuration: .init())
@@ -74,7 +108,6 @@ final class LauncherViewModel {
             dismiss()
 
         case .runShell(let cmd):
-            // Process() replaces the deprecated launchedProcess(launchPath:arguments:).
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/bin/sh")
             proc.arguments = ["-c", cmd]
@@ -115,7 +148,6 @@ final class LauncherViewModel {
         NSAppleScript(source: script)?.executeAndReturnError(&err)
     }
 
-    /// Locate a .app bundle by display name in standard application directories.
     private func appURL(named name: String) -> URL? {
         let dirs: [URL] = [
             URL(fileURLWithPath: "/Applications"),
@@ -136,5 +168,6 @@ final class LauncherViewModel {
 extension Notification.Name {
     static let roverDismiss = Notification.Name("dev.undivisible.rover.dismiss")
     static let roverOpenSettings = Notification.Name("dev.undivisible.rover.openSettings")
+    static let roverOpenBrowser = Notification.Name("dev.undivisible.rover.openBrowser")
     static let roverToggle = Notification.Name("dev.undivisible.rover.toggle")
 }

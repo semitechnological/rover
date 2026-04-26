@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registry = PluginRegistry()
+        // Order matters: higher-priority plugins are queried first.
+        registry.register(BuiltinCommandsPlugin())   // always-visible rover commands
         registry.register(AppLauncherPlugin())
         registry.register(CalculatorPlugin())
         registry.register(ClipboardPlugin())
@@ -24,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(TerminalPlugin())
         registry.register(BrowserPlugin())
         registry.register(EmojiPlugin())
+        registry.register(AIPlugin())                // on-device Apple Intelligence
+        registry.register(SemanticPlugin())          // fastembed semantic search
 
         vm = LauncherViewModel(registry: registry)
         panel = LauncherPanel(vm: vm)
@@ -46,6 +50,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.openSettings() }
         }
+
+        NotificationCenter.default.addObserver(
+            forName: .roverOpenBrowser, object: nil, queue: .main
+        ) { [weak self] note in
+            let url = note.object as? URL
+            MainActor.assumeIsolated { self?.openBrowser(url: url) }
+        }
     }
 
     // MARK: - Status item
@@ -65,6 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Settings
 
     private func openSettings() {
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        SettingsWindowController.shared.show()
+    }
+
+    // MARK: - Browser
+
+    private func openBrowser(url: URL?) {
+        BrowserWindowController.shared.navigate(to: url)
     }
 }

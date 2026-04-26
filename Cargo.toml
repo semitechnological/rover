@@ -1,101 +1,42 @@
+# Rover — SwiftUI branch
+#
+# This branch uses a native SwiftUI frontend (RoverSwiftUI/) linked to a single
+# Rust dylib (crates/rover_swift). GPUI and all GPUI-dependent crates are not
+# included here.
+#
+# Workspace members:
+#   rover_db       — SQLite storage (clipboard, settings, browser history)
+#   rover_fuzzy    — rayon-parallel skim fuzzy scorer
+#   rover_semantic — fastembed vector search (AllMiniLML6V2)
+#   rover_swift    — unified FFI crate that Swift links to (the only dylib)
+#
+# Apple Intelligence: provided by rs_ai_local (foundationmodels feature) from
+# the rs_ai workspace at /Users/undivisible/projects/rs_ai.
+
 [workspace]
 members = [
-    "crates/rover_fuzzy",
-    "crates/rover_theme",
-    "crates/rover_picker",
-    "crates/rover_commands",
-    "crates/rover_extensions",
-    "crates/rover_extension_api",
-    "crates/rover_plugin_api",
-    "crates/rover_plugins",
     "crates/rover_db",
-    "crates/rover_browser",
+    "crates/rover_fuzzy",
     "crates/rover_semantic",
-    "crates/rusty_foundationmodels",
-    "crates/tile_core",
-    "crates/tile_ax",
-    "crates/tile_hotkeys",
-    "crates/tile_overlay",
     "crates/rover_swift",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-gpui = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-anyhow = "1"
-thiserror = "2"
-log = "0.4"
-dirs = "6"
-toml = "0.8"
-wasmtime = "29"
-libloading = "0.8"
+serde       = { version = "1", features = ["derive"] }
+serde_json  = "1"
+anyhow      = "1"
+thiserror   = "2"
+log         = "0.4"
+dirs        = "5"
+aes-gcm     = "0.10"
+rand        = "0.8"
+sha2        = "0.10"
+base64      = "0.22"
 fuzzy-matcher = "0.3"
-unicode-segmentation = "1"
-aes-gcm = "0.10"
-rand = "0.8"
-sha2 = "0.10"
-base64 = "0.22"
-rusty_foundationmodels = { path = "crates/rusty_foundationmodels" }
+rayon       = "1"
 
-rover_fuzzy = { path = "crates/rover_fuzzy" }
-rover_theme = { path = "crates/rover_theme" }
-rover_picker = { path = "crates/rover_picker" }
-rover_commands = { path = "crates/rover_commands" }
-rover_extensions = { path = "crates/rover_extensions" }
-rover_extension_api = { path = "crates/rover_extension_api" }
-rover_plugin_api = { path = "crates/rover_plugin_api" }
-rover_plugins = { path = "crates/rover_plugins" }
-rover_db = { path = "crates/rover_db" }
-rover_browser = { path = "crates/rover_browser" }
+rover_db       = { path = "crates/rover_db" }
+rover_fuzzy    = { path = "crates/rover_fuzzy" }
 rover_semantic = { path = "crates/rover_semantic" }
-tile_hotkeys = { path = "crates/tile_hotkeys" }
-tile_overlay = { path = "crates/tile_overlay" }
-
-[package]
-name = "rover"
-version = "0.1.0"
-edition = "2021"
-
-[features]
-default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser", "tile", "emoji"]
-calculator = ["rover_plugins/calculator"]
-app-launcher = ["rover_plugins/app-launcher"]
-clipboard = ["rover_plugins/clipboard"]
-file-search = ["rover_plugins/file-search"]
-ai = ["rover_plugins/ai", "rusty_foundationmodels"]
-terminal = ["rover_plugins/terminal"]
-browser = ["rover_plugins/browser", "rover_browser"]
-tile = ["rover_plugins/tile"]
-emoji = ["rover_plugins/emoji"]
-rusty_foundationmodels = ["dep:rusty_foundationmodels"]
-rover_browser = ["dep:rover_browser"]
-
-[dependencies]
-gpui.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-anyhow.workspace = true
-log.workspace = true
-env_logger = "0.11"
-dirs.workspace = true
-urlencoding = "2"
-rover_fuzzy.workspace = true
-rover_theme.workspace = true
-rover_picker.workspace = true
-rover_extensions.workspace = true
-rover_plugin_api.workspace = true
-rover_plugins.workspace = true
-rover_db.workspace = true
-rusty_foundationmodels = { workspace = true, optional = true }
-rover_browser = { workspace = true, optional = true }
-rover_semantic.workspace = true
-emojis = "0.8.1"
-arboard = "3.4"
-
-
-[target.'cfg(target_os = "macos")'.dependencies]
-cocoa = "0.26"
-objc = "0.2"
-raw-window-handle = "0.6"
+rs_ai_local    = { path = "/Users/undivisible/projects/rs_ai/crates/rs_ai_local", features = ["foundationmodels"] }

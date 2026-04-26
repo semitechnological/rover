@@ -61,6 +61,10 @@ impl RoverDb {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(&path)?;
+        // WAL mode: faster concurrent reads, no blocking on writes.
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA cache_size = -4096;",
+        )?;
 
         let cipher_key = match Self::load_or_create_db_key() {
             Ok(key) => {

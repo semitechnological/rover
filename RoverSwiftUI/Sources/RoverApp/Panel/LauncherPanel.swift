@@ -4,12 +4,17 @@ import SwiftUI
 
 /// Non-activating NSPanel that hosts the SwiftUI launcher.
 ///
-/// Stays above all windows, does not steal key status from the frontmost app
-/// (LSUIElement = YES is set in Info.plist — no Dock icon, menu-bar only).
+/// Matches Raycast behaviour:
+/// - Click anywhere outside the panel → dismiss
+/// - Global event monitor installed while visible
+/// - Smooth fade + height animations
 @MainActor
 final class LauncherPanel: NSPanel {
     private var hostingView: NSHostingView<LauncherView>?
     private let vm: LauncherViewModel
+
+    /// Global mouse-down monitor — active only while the panel is visible.
+    private var clickOutsideMonitor: Any?
 
     init(vm: LauncherViewModel) {
         self.vm = vm
@@ -31,13 +36,14 @@ final class LauncherPanel: NSPanel {
         titleVisibility = .hidden
         titlebarAppearsTransparent = true
 
-        let view = LauncherView(vm: vm)
+        let view = LauncherView(vm: vm) { [weak self] height in
+            self?.animateToHeight(height)
+        }
         let hosting = NSHostingView(rootView: view)
         hosting.translatesAutoresizingMaskIntoConstraints = false
         contentView = hosting
         hostingView = hosting
 
-        // Size to fit, then center on screen.
         hosting.setFrameSize(hosting.fittingSize)
         center()
     }
@@ -49,18 +55,85 @@ final class LauncherPanel: NSPanel {
 
     func show() {
         vm.query = ""
-        // Re-center every time (active space / display may have changed).
         center()
+
+        // Start transparent, animate in.
+        alphaValue = 0
         makeKeyAndOrderFront(nil)
-        // Focus the text field inside the SwiftUI view.
         makeFirstResponder(contentView)
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 1
+        }
+
+        installClickOutsideMonitor()
     }
 
     func hide() {
-        orderOut(nil)
+        removeClickOutsideMonitor()
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.12
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            self?.orderOut(nil)
+            self?.alphaValue = 1  // reset for next show
+        }
     }
 
     func toggle() {
         if isVisible { hide() } else { show() }
+    }
+
+    // MARK: - Smooth height resize
+
+    /// Animate the panel height while anchoring the top edge.
+    ///
+    /// Called by `LauncherView` whenever its natural height changes (items
+    /// appear / disappear). Only runs while the panel is visible to avoid
+    /// jarring flashes during a show/hide cycle.
+    private func animateToHeight(_ height: CGFloat) {
+        guard isVisible, height > 0 else { return }
+        let current = self.frame
+        guard abs(height - current.height) > 1 else { return }
+
+        // Anchor the top edge (maxY), grow/shrink downward.
+        let newFrame = NSRect(
+            x: current.minX,
+            y: current.maxY - height,
+            width: current.width,
+            height: height
+        )
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.2
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().setFrame(newFrame, display: true, animate: true)
+        }
+    }
+
+    // MARK: - Click-outside monitor
+
+    private func installClickOutsideMonitor() {
+        guard clickOutsideMonitor == nil else { return }
+        clickOutsideMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            guard let self, self.isVisible else { return }
+            // If the click landed outside our frame → dismiss.
+            let screenPoint = NSEvent.mouseLocation
+            if !self.frame.contains(screenPoint) {
+                Task { @MainActor in self.hide() }
+            }
+        }
+    }
+
+    private func removeClickOutsideMonitor() {
+        if let monitor = clickOutsideMonitor {
+            NSEvent.removeMonitor(monitor)
+            clickOutsideMonitor = nil
+        }
     }
 }

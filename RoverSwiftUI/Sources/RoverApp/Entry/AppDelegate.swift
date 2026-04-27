@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(TerminalPlugin())
         registry.register(BrowserPlugin())
         registry.register(EmojiPlugin())
+        registry.register(HelpPlugin())
         registry.register(AIPlugin())                // on-device Apple Intelligence
         registry.register(SemanticPlugin())          // fastembed semantic search
 
@@ -63,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let button = statusItem.button!
+        guard let button = statusItem.button else { return }
         button.image = NSImage(systemSymbolName: "magnifyingglass", accessibilityDescription: "Rover")
         button.action = #selector(statusItemClicked)
         button.target = self

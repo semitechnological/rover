@@ -22,12 +22,24 @@ final class LauncherViewModel {
 
     init(registry: PluginRegistry) {
         self.registry = registry
-        // Refresh results whenever AIPlugin pushes a streaming update.
+
+        // AI streaming update — only re-query AI + Semantic plugins (not all 10).
         for name in [Notification.Name.roverAIUpdate, .roverSemanticUpdate] {
             NotificationCenter.default.addObserver(
                 forName: name, object: nil, queue: .main
             ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.runQuery() }
+                MainActor.assumeIsolated {
+                    self?.runQuery(pluginIDs: ["builtin.ai", "builtin.semantic"])
+                }
+            }
+        }
+
+        // File search result ready — only re-query file search plugin.
+        NotificationCenter.default.addObserver(
+            forName: .roverFileSearchUpdate, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.runQuery(pluginIDs: ["builtin.file_search"])
             }
         }
     }
@@ -49,11 +61,27 @@ final class LauncherViewModel {
         }
     }
 
-    func runQuery() {
-        let (newItems, newCards) = registry.query(query)
-        items = newItems
-        cards = newCards
-        selectedIndex = 0
+    /// Run all plugins against the current query and update results.
+    /// - Parameter pluginIDs: If non-nil, only re-run the listed plugin IDs and
+    ///   merge their fresh results into the existing list (cheaper partial refresh).
+    func runQuery(pluginIDs: [String]? = nil) {
+        if let ids = pluginIDs {
+            // Partial refresh: keep results from other plugins, replace these ones.
+            let (freshItems, freshCards) = registry.query(query, pluginIDs: ids)
+            let kept = items.filter { !ids.contains($0.pluginID) }
+            let merged = (kept + freshItems).sorted { $0.score > $1.score }
+            items = merged
+            // Replace cards from the specified plugins.
+            let keptCards = cards.filter { card in
+                !freshCards.contains { $0.kind == card.kind }
+            }
+            cards = keptCards + freshCards
+        } else {
+            let (newItems, newCards) = registry.query(query)
+            items = newItems
+            cards = newCards
+            selectedIndex = 0
+        }
     }
 
     // MARK: - Selection
@@ -130,7 +158,8 @@ final class LauncherViewModel {
             query = title
 
         case .stay:
-            break
+            // Re-run the query so the list reflects any state change (e.g. item deleted).
+            runQuery()
         }
     }
 
@@ -141,11 +170,7 @@ final class LauncherViewModel {
     }
 
     private func openTerminalApp(command: String?) {
-        let script = command.map {
-            "tell application \"Terminal\" to do script \"\($0)\""
-        } ?? "tell application \"Terminal\" to activate"
-        var err: NSDictionary?
-        NSAppleScript(source: script)?.executeAndReturnError(&err)
+        TerminalWindowController.shared.show(command: command)
     }
 
     private func appURL(named name: String) -> URL? {

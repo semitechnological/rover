@@ -12,3 +12,5 @@ RoverSwiftUI/lib/
 *.log
 .fastembed_cache/
 docs/
+Rover.xcodeproj
+XcodeStub/

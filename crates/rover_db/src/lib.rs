@@ -295,6 +295,14 @@ impl RoverDb {
                 title TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS ai_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                args_json TEXT NOT NULL,
+                result TEXT NOT NULL,
+                created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
             ",
         )?;
         // Add content_hash column to existing databases that pre-date this schema
@@ -389,6 +397,47 @@ impl RoverDb {
             .query_map([], |row| row.get(0))?
             .collect::<std::result::Result<Vec<String>, _>>()?;
         Ok(rows)
+    }
+
+    /// Push a query to history (max 100 entries, oldest auto-pruned).
+    pub fn push_query_history(&self, query: &str) -> Result<()> {
+        if query.trim().is_empty() {
+            return Ok(());
+        }
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO query_history (query) VALUES (?1)",
+            rusqlite::params![query],
+        )?;
+        conn.execute(
+            "DELETE FROM query_history WHERE id NOT IN (
+                SELECT id FROM query_history ORDER BY id DESC LIMIT 100
+            )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Return the last `limit` queries, newest first.
+    pub fn list_query_history_limited(&self, limit: usize) -> Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT query FROM query_history ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(rusqlite::params![limit as i64], |row| row.get(0))?
+            .collect::<std::result::Result<Vec<String>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Log an AI tool call for audit purposes.
+    pub fn log_ai_audit(&self, tool_name: &str, args_json: &str, result: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO ai_audit (tool_name, args_json, result) VALUES (?1, ?2, ?3)",
+            rusqlite::params![tool_name, args_json, result],
+        )?;
+        Ok(())
     }
 
     // --- Clipboard History ---

@@ -128,6 +128,34 @@ impl RoverDatabase {
     pub fn set_setting(&self, key: String, value: String) -> Result<(), RoverError> {
         self.db.set_setting(&key, &value).map_err(RoverError::from_anyhow)
     }
+
+    // ── Query history ─────────────────────────────────────────────────────────
+
+    /// Push a query to history (max 100 entries, oldest auto-pruned).
+    pub fn push_query_history(&self, query: String) -> Result<(), RoverError> {
+        self.db.push_query_history(&query).map_err(RoverError::from_anyhow)
+    }
+
+    /// Return the last `limit` queries, newest first.
+    pub fn list_query_history(&self, limit: u32) -> Result<Vec<String>, RoverError> {
+        self.db
+            .list_query_history_limited(limit as usize)
+            .map_err(RoverError::from_anyhow)
+    }
+
+    // ── AI audit log ──────────────────────────────────────────────────────────
+
+    /// Log an AI tool call for audit purposes.
+    pub fn log_ai_audit(
+        &self,
+        tool_name: String,
+        args_json: String,
+        result: String,
+    ) -> Result<(), RoverError> {
+        self.db
+            .log_ai_audit(&tool_name, &args_json, &result)
+            .map_err(RoverError::from_anyhow)
+    }
 }
 
 /// One clipboard history entry.

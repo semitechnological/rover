@@ -14,23 +14,30 @@ public final class PluginRegistry: ObservableObject {
 
     // MARK: - Query
 
-    /// Run all plugins against `query` and return sorted, deduplicated results.
+    /// Run all plugins against `query` and return sorted results.
     ///
-    /// Plugins receive the query even when it is empty so that always-active plugins
+    /// Plugins receive the query even when it is empty so always-active plugins
     /// (e.g. `BuiltinCommandsPlugin`) can surface items on an empty launcher.
     /// Each plugin is responsible for returning `[]` when it has nothing to show.
     public func query(_ query: String) -> (items: [PickerItem], cards: [InlineCard]) {
+        return self.query(query, pluginIDs: nil)
+    }
+
+    /// Run a subset of plugins (by ID) against `query`. Used for partial refreshes
+    /// triggered by background completions (AI stream, Spotlight, semantic search).
+    public func query(_ query: String, pluginIDs: [String]?) -> (items: [PickerItem], cards: [InlineCard]) {
         var items: [PickerItem] = []
         var cards: [InlineCard] = []
 
-        for plugin in plugins {
+        let targets = pluginIDs.map { ids in plugins.filter { ids.contains($0.id) } } ?? plugins
+
+        for plugin in targets {
             items.append(contentsOf: plugin.query(query))
             if let card = plugin.inlineCard(for: query) {
                 cards.append(card)
             }
         }
 
-        // Sort by score descending, stable.
         items.sort { $0.score > $1.score }
         return (items, cards)
     }

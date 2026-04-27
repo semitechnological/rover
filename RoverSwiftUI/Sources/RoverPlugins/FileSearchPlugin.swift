@@ -25,7 +25,11 @@ public final class FileSearchPlugin: RoverPlugin {
         searchTask = Task { [weak self] in
             let results = await Self.runSpotlight(term: term)
             guard !Task.isCancelled else { return }
-            await MainActor.run { self?.latestResults = results }
+            await MainActor.run {
+                self?.latestResults = results
+                // Notify the ViewModel to re-run the query now that fresh results are ready.
+                NotificationCenter.default.post(name: .roverFileSearchUpdate, object: nil)
+            }
         }
 
         // Return current (possibly one keystroke stale) results immediately.
@@ -71,4 +75,10 @@ public final class FileSearchPlugin: RoverPlugin {
             return items
         }.value
     }
+}
+
+// MARK: - Notification name
+
+extension Notification.Name {
+    public static let roverFileSearchUpdate = Notification.Name("dev.undivisible.rover.fileSearchUpdate")
 }

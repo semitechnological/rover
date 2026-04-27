@@ -22,6 +22,8 @@ public final class SemanticPlugin: RoverPlugin {
     // Cached results for the last query — updated off-thread.
     private var cachedQuery   = ""
     private var cachedResults: [PickerItem] = []
+    private var searchTask: Task<Void, Never>?
+    private static let debounceNs: UInt64 = 300_000_000   // 300 ms
 
     public init() {}
 
@@ -121,7 +123,13 @@ public final class SemanticPlugin: RoverPlugin {
     }
 
     private func kickSearch(term: String, index: SemanticSearch) {
-        Task { [weak self] in
+        // Cancel any in-flight search before starting a new one.
+        searchTask?.cancel()
+        searchTask = Task { [weak self] in
+            // 300ms debounce — coalesce rapid keystrokes.
+            try? await Task.sleep(nanoseconds: Self.debounceNs)
+            guard !Task.isCancelled else { return }
+
             let results = await Task.detached(priority: .userInitiated) {
                 (try? index.search(query: term, collection: "", topK: 6)) ?? []
             }.value

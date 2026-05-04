@@ -1,61 +1,35 @@
-# Emoji Picker — Implementation Summary
+# Rover SwiftUI Frontend Status
 
-## Goal
-Build an emoji picker for Rover macOS menu bar app that:
-1. Replaces system emoji picker, triggered by Cmd+Opt+Space
-2. Allows typing `:emoji_name:` to search and auto-complete emojis
-3. Uses fuzzy/ML-based matching (no hardcoded alias tables)
+## Completed
 
-## What Was Done
+- `CLAUDE.md` points to `AGENTS.md`; `AGENTS.md` is the source instruction file.
+- SwiftUI frontend has launcher parity plugins for app launcher, calculator, clipboard, file search, terminal, browser, web search, Google integrations, macOS tools, emoji, help, AI, and semantic search.
+- Cmd+Opt+Space opens the SwiftUI launcher in emoji search mode.
+- Settings now has General, Hotkeys, AI, Data, and About sections.
+- Settings-backed behavior is wired for built-in commands on empty query, bar position, launcher hotkey preset, and AI enable/disable.
+- SwiftPM test target exists for SwiftUI plugin behavior.
+- Stable `rustfmt.toml` works with stable rustfmt.
+- SwiftUI Rust bridge outputs were regenerated so the runtime UniFFI checksum matches the dylib.
 
-### 1. Added Dependencies
-- `emojis` crate (v0.8.1) for emoji data source
-- `arboard` for clipboard operations
-- `rover_fuzzy` (already existed) for fuzzy matching
-- `rover_semantic` (already existed) for potential future ML matching
+## Verified
 
-### 2. Created EmojiPlugin (`crates/rover_plugins/src/builtin/emoji.rs`)
-- Indexes all emojis with search variants:
-  - Shortcode (e.g., `joy`, `smile`, `heart`)
-  - Name (e.g., `smiling face with tears of joy`)
-  - Name without underscores/hyphens
-  - First word of name
-- Uses `rover_fuzzy::match_strings` for fuzzy matching
-- Copies selected emoji to clipboard via arboard
+- `cargo fmt --check`
+- `cargo check`
+- `cargo test`
+- `cargo clippy --all-targets --all-features`
+- `swift test --package-path RoverSwiftUI`
+- `swift build --package-path RoverSwiftUI -Xswiftc -warnings-as-errors`
+- `swift package --package-path RoverSwiftUI plugin --allow-writing-to-package-directory rust-build`
+- `RoverSwiftUI/.build/arm64-apple-macosx/debug/RoverApp` starts without the UniFFI checksum crash.
 
-### 3. Added `:emoji_name:` Completion in Picker (`crates/rover_picker/src/lib.rs`)
-- Removed hardcoded `get_semantic_alias()` function (~350 lines)
-- Added fuzzy prefix/substring matching fallback
-- Checks for `:something:` pattern and finds best emoji match
+## Remaining Manual QA
 
-### 4. Added Cmd+Opt+Space Hotkey (`src/hotkey.rs`)
-- Added `register_emoji_hotkey()` function
-- Added `take_emoji_hotkey_requested()` flag
+- Verify global launcher hotkey presets on a signed app bundle.
+- Verify Cmd+Opt+Space does not conflict with the system emoji picker on the target machine.
+- Verify Notes, Reminders, Calendar, and file search permissions on a fresh macOS account.
+- Verify full Raycast-style keyboard flow in the running UI: selection movement, Enter, Cmd+Enter, Cmd+1 through Cmd+9, Escape, outside-click dismissal, settings window, browser window, and terminal window.
+- Verify Apple Intelligence availability on macOS 26 hardware with the FoundationModels bridge available.
 
-### 5. Integrated in Main (`src/main.rs`)
-- Added `EmojiPickerRequested` global flag
-- Registers emoji hotkey on startup
-- Pre-populates emoji query when hotkey fires
+## External Dependency Note
 
-## Files Modified
-- `crates/rover_picker/Cargo.toml` — Added emojis, arboard deps
-- `crates/rover_picker/src/lib.rs` — Added emoji completion logic
-- `crates/rover_plugins/Cargo.toml` — Added emoji feature, emojis, arboard
-- `crates/rover_plugins/src/builtin/emoji.rs` — New EmojiPlugin
-- `crates/rover_plugins/src/builtin/mod.rs` — Module export
-- `src/main.rs` — Plugin registration, hotkey setup
-- `src/hotkey.rs` — Emoji hotkey registration
-
-## Testing
-- Build: ✅ Passes (warnings only)
-- Tests: ✅ 21/21 passed
-- Commit: ✅ Pushed to main (b23a013)
-
-## ⚠️ Known Issue: Does Not Work Yet
-- The emoji hotkey trigger isn't fully wired up — the picker doesn't actually open when pressing Cmd+Opt+Space
-- Need to connect the hotkey to actually show the emoji picker UI
-
-## Notes
-- No hardcoded alias tables — uses fuzzy matching via `rover_fuzzy`
-- User must unbind Cmd+Opt+Space in System Preferences → Keyboard → Shortcuts → App Shortcuts first
-- Works alongside built-in fuzzy search in EmojiPlugin
+The Rust gates currently depend on the local path dependency `/Users/undivisible/projects/rs_ai`. That checkout needed `futures_channel::mpsc` imported outside the `foundation_models_bridge` cfg so Rover can compile when the bridge is unavailable.

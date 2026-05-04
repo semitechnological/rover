@@ -79,5 +79,12 @@ let package = Package(
             ),
             dependencies: ["RustBuilder"]
         ),
+
+        .testTarget(
+            name: "RoverSwiftUITests",
+            dependencies: ["RoverCore", "RoverPlugins"],
+            path: "Tests/RoverSwiftUITests",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
     ]
 )

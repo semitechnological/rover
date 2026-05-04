@@ -1,5 +1,6 @@
 /target/
 RoverSwiftUI/.build/
+RoverSwiftUI/.rust-target/
 RoverSwiftUI/lib/
 *.rs.bk
 *.pdb

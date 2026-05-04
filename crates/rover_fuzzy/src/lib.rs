@@ -98,7 +98,7 @@ pub fn normalize_query(input: &str) -> String {
             (Some(prev), c) if prev.is_whitespace() && c.is_whitespace() => continue,
             _ => {
                 last_char = Some(ch);
-            },
+            }
         }
         result.push(ch);
     }

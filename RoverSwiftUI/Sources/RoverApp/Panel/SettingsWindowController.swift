@@ -39,6 +39,7 @@ private struct SettingsView: View {
 
     enum Section: String, CaseIterable, Identifiable {
         case general  = "General"
+        case hotkeys  = "Hotkeys"
         case ai       = "AI"
         case data     = "Data"
         case about    = "About"
@@ -47,6 +48,7 @@ private struct SettingsView: View {
         var icon: String {
             switch self {
             case .general: "gear"
+            case .hotkeys: "keyboard"
             case .ai:      "sparkles"
             case .data:    "externaldrive"
             case .about:   "info.circle"
@@ -67,6 +69,7 @@ private struct SettingsView: View {
             Group {
                 switch selectedSection {
                 case .general: GeneralSection()
+                case .hotkeys: HotkeysSection()
                 case .ai:      AISection()
                 case .data:    DataSection()
                 case .about:   AboutSection()
@@ -83,7 +86,7 @@ private struct SettingsView: View {
 
 private struct GeneralSection: View {
     @AppStorage("rover.show_builtin_commands_on_empty") private var showBuiltinOnEmpty = true
-    @AppStorage("rover.hotkey")                         private var hotkeyHint = "⌘ Space"
+    @AppStorage("rover.bar_position") private var barPosition = "center"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -105,18 +108,21 @@ private struct GeneralSection: View {
 
             settingRow {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Global Hotkey")
+                    Text("Bar Position")
                         .font(.system(size: 13))
-                    Text("Press this key combination to open Rover from anywhere.")
+                    Text("Choose where the launcher panel appears.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
             } control: {
-                Text(hotkeyHint)
-                    .font(.system(size: 12, design: .monospaced))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.08)))
+                Picker("", selection: $barPosition) {
+                    Text("Top").tag("top")
+                    Text("Center").tag("center")
+                    Text("Bottom").tag("bottom")
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 220)
             }
 
             settingRow {
@@ -133,6 +139,69 @@ private struct GeneralSection: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
                     .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.08)))
+            }
+        }
+    }
+}
+
+// MARK: - Hotkeys Section
+
+private struct HotkeysSection: View {
+    @AppStorage("rover.hotkeyPreset") private var hotkeyPreset = HotkeyPreset.commandSpace.rawValue
+
+    var selectedPreset: Binding<String> {
+        Binding {
+            hotkeyPreset
+        } set: { value in
+            hotkeyPreset = value
+            NotificationCenter.default.post(name: .roverHotkeyChanged, object: nil)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            sectionHeader("Hotkeys")
+
+            settingRow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Global Hotkey")
+                        .font(.system(size: 13))
+                    Text("Press this key combination to open Rover from anywhere.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } control: {
+                Picker("", selection: selectedPreset) {
+                    ForEach(HotkeyPreset.allCases) { preset in
+                        Text(preset.display).tag(preset.rawValue)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 180)
+            }
+
+            settingRow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Emoji Picker")
+                        .font(.system(size: 13))
+                    Text("Opens Rover directly in emoji search mode.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } control: {
+                kbdBadge("⌘⌥ Space")
+            }
+
+            settingRow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Item Actions")
+                        .font(.system(size: 13))
+                    Text("Show secondary action for the selected item.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } control: {
+                kbdBadge("⌘K")
             }
         }
     }

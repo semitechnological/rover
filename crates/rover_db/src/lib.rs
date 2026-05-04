@@ -70,7 +70,7 @@ impl RoverDb {
             Ok(key) => {
                 log::info!("Encryption key loaded from Keychain");
                 Some(key)
-            },
+            }
             Err(e) => {
                 log::error!(
                     "Failed to load or create encryption key: {}. Clipboard history will be stored UNENCRYPTED.",
@@ -85,7 +85,7 @@ impl RoverDb {
                 }
                 log::warn!("Proceeding without encryption - clipboard history will be stored in plaintext!");
                 None
-            },
+            }
         };
 
         let is_encrypted = cipher_key.is_some();
@@ -193,12 +193,12 @@ impl RoverDb {
                 let mut combined = nonce_bytes.to_vec();
                 combined.extend(ciphertext);
                 BASE64.encode(&combined)
-            },
+            }
             Err(e) => {
                 log::error!("clipboard encryption failed, storing encrypted marker: {e}");
                 // Never store plaintext on encryption failure — use a placeholder
                 "[encryption failed]".to_string()
-            },
+            }
         }
     }
 
@@ -421,9 +421,7 @@ impl RoverDb {
     /// Return the last `limit` queries, newest first.
     pub fn list_query_history_limited(&self, limit: usize) -> Result<Vec<String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT query FROM query_history ORDER BY id DESC LIMIT ?1",
-        )?;
+        let mut stmt = conn.prepare("SELECT query FROM query_history ORDER BY id DESC LIMIT ?1")?;
         let rows = stmt
             .query_map(rusqlite::params![limit as i64], |row| row.get(0))?
             .collect::<std::result::Result<Vec<String>, _>>()?;

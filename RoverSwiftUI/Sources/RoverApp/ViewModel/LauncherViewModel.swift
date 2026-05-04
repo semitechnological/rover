@@ -195,4 +195,5 @@ extension Notification.Name {
     static let roverOpenSettings = Notification.Name("dev.undivisible.rover.openSettings")
     static let roverOpenBrowser = Notification.Name("dev.undivisible.rover.openBrowser")
     static let roverToggle = Notification.Name("dev.undivisible.rover.toggle")
+    static let roverHotkeyChanged = Notification.Name("dev.undivisible.rover.hotkeyChanged")
 }

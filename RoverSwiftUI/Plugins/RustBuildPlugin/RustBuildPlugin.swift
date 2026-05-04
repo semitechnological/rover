@@ -14,12 +14,14 @@ import Foundation
 @main struct RustBuildPlugin: CommandPlugin {
     func performCommand(context: PluginContext, arguments: [String]) async throws {
         let tool = try context.tool(named: "RustBuilder")
-        let packageDir = context.package.directoryURL.path(percentEncoded: false)
+        let repoRoot = context.package.directoryURL
+            .deletingLastPathComponent()
+            .path(percentEncoded: false)
 
         print("▶ RustBuildPlugin: invoking RustBuilder…")
         let process = Process()
         process.executableURL = tool.url
-        process.arguments = [packageDir]
+        process.arguments = [repoRoot]
         try process.run()
         process.waitUntilExit()
 

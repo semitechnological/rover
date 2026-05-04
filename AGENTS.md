@@ -17,7 +17,10 @@ Rover is a macOS launcher/assistant bar built with `gpui = "0.2"` (crates.io, no
 
 - `swiftui-frontend` is the active branch in this checkout.
 - The main GPUI app is still the reference implementation for feature parity.
-- Validate Rust changes with `cargo test` and SwiftUI changes with `swift build --package-path RoverSwiftUI` before merging or pushing.
+- Validate Rust changes with `cargo fmt --check`, `cargo check`, `cargo test`, and `cargo clippy --all-targets --all-features`.
+- Validate SwiftUI changes with `swift test --package-path RoverSwiftUI` and `swift build --package-path RoverSwiftUI -Xswiftc -warnings-as-errors`.
+- Regenerate SwiftUI Rust bridge outputs with `bash build-swiftui.sh` or `swift package --package-path RoverSwiftUI plugin --allow-writing-to-package-directory rust-build` after Rust FFI changes.
+- Rust AI integration depends on local path dependency `/Users/undivisible/projects/rs_ai`.
 
 ## Architecture
 
@@ -55,6 +58,8 @@ RoverSwiftUI/
 ```
 
 SwiftUI plugin registration lives in `RoverSwiftUI/Sources/RoverApp/Entry/AppDelegate.swift`. Keep it aligned with the GPUI plugin set where practical: app launcher, calculator, clipboard, file search, terminal, browser, web search, Google integrations, macOS tools, emoji, help, AI, and semantic search.
+
+SwiftUI settings live in `RoverSwiftUI/Sources/RoverApp/Panel/SettingsWindowController.swift`. Settings currently drive command visibility on empty query, bar position, launcher hotkey preset, and AI enable/disable.
 
 ## GPUI Notes
 

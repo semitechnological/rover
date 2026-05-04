@@ -4,7 +4,7 @@ This document describes the Rover plugin system: how plugins work, how to create
 
 ## Overview
 
-Every feature in Rover (calculator, app launcher, clipboard history, AI, browser, terminal, file search, window tiling, editor) is implemented as a **plugin**. Plugins implement the `rover_plugin_api::Plugin` trait and are managed by the `PluginRegistry` in the `rover_plugins` crate.
+Every feature in Rover (calculator, app launcher, clipboard history, AI, browser, terminal, file search, emoji, web search, Google integrations, macOS tools, window tiling, editor) is implemented as a **plugin**. Plugins implement the `rover_plugin_api::Plugin` trait and are managed by the `PluginRegistry` in the `rover_plugins` crate.
 
 The architecture has three layers:
 
@@ -107,6 +107,10 @@ When a user confirms a match, the plugin returns a `ConfirmResult`:
 | AI Assistant | `builtin.ai` | Fallback(6) | `ai` |
 | Terminal | `builtin.terminal` | Prefix(">") | `terminal` |
 | Browser | `builtin.browser` | FuzzyCommand | `browser` |
+| Emoji | `builtin.emoji` | FuzzyCommand / `:` prefix in SwiftUI | `emoji` |
+| Web Search | `builtin.web_search` | Prefix search shortcuts | `web-search` |
+| Google Integrations | `builtin.google` | Prefix("?") | `google` |
+| macOS Tools | `builtin.macos_tools` | Prefix("/") | `macos-tools` |
 | Window Tiling | `builtin.tile` | FuzzyCommand | `tile` |
 | Editor | `builtin.editor` | FuzzyCommand | `editor` |
 
@@ -116,7 +120,7 @@ Each built-in plugin is gated on a Cargo feature flag. The rover binary's `Cargo
 
 ```toml
 [features]
-default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser", "tile", "editor"]
+default = ["calculator", "app-launcher", "clipboard", "file-search", "ai", "terminal", "browser", "emoji", "macos-tools", "web-search", "google", "tile", "editor"]
 calculator = ["rover_plugins/calculator"]
 app-launcher = ["rover_plugins/app-launcher"]
 clipboard = ["rover_plugins/clipboard"]
@@ -124,6 +128,10 @@ file-search = ["rover_plugins/file-search"]
 ai = ["rover_plugins/ai", "dep:rusty_foundationmodels"]
 terminal = ["rover_plugins/terminal"]
 browser = ["rover_plugins/browser", "dep:rover_browser"]
+emoji = ["rover_plugins/emoji"]
+macos-tools = ["rover_plugins/macos-tools"]
+web-search = ["rover_plugins/web-search"]
+google = ["rover_plugins/google"]
 tile = ["rover_plugins/tile"]
 editor = ["rover_plugins/editor"]
 ```

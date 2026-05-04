@@ -59,6 +59,12 @@ public final class BuiltinCommandsPlugin: RoverPlugin {
 
     public func query(_ query: String) -> [PickerItem] {
         let q = query.lowercased().trimmingCharacters(in: .whitespaces)
+        if q.isEmpty,
+           UserDefaults.standard.object(forKey: "rover.show_builtin_commands_on_empty") != nil,
+           !UserDefaults.standard.bool(forKey: "rover.show_builtin_commands_on_empty")
+        {
+            return []
+        }
         return commands.compactMap { cmd -> PickerItem? in
             let score: Double
             if q.isEmpty {

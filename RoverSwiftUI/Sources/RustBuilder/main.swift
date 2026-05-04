@@ -51,6 +51,8 @@ guard args.count >= 2 else {
 let repoRoot = args[1]
 let profile = ProcessInfo.processInfo.environment["RELEASE"] != nil ? "release" : "debug"
 let profileFlag = profile == "release" ? "--release" : ""
+let cargoTargetDir = "\(repoRoot)/RoverSwiftUI/.rust-target"
+let cargoEnv = ["CARGO_TARGET_DIR": cargoTargetDir]
 
 // Resolve eqswift (sibling of the rover checkout inside projects/)
 // Repo is typically at: ~/projects/rover/.claude/worktrees/<name>/
@@ -75,10 +77,10 @@ guard FileManager.default.fileExists(atPath: eqswiftCargo) else {
 
 // ── 1. Build Rust cdylib ────────────────────────────────────────────────────
 print("▶ cargo build -p rover_swift (\(profile))…")
-let cargoStatus = run("cargo build -p rover_swift \(profileFlag)", cwd: repoRoot)
+let cargoStatus = run("cargo build -p rover_swift \(profileFlag)", cwd: repoRoot, env: cargoEnv)
 guard cargoStatus == 0 else { fail("cargo build failed (exit \(cargoStatus))") }
 
-let dylib = "\(repoRoot)/target/\(profile)/librover_swift.dylib"
+let dylib = "\(cargoTargetDir)/\(profile)/librover_swift.dylib"
 guard FileManager.default.fileExists(atPath: dylib) else {
     fail("dylib not found at \(dylib)")
 }
@@ -106,7 +108,7 @@ cargo run \
   --library '\(dylib)' \
   --language swift \
   --out-dir '\(tmp)'
-""", cwd: repoRoot)
+""", cwd: repoRoot, env: cargoEnv)
 guard bindgenStatus == 0 else { fail("uniffi-bindgen failed (exit \(bindgenStatus))") }
 
 // ── 4. Copy generated files into SPM source tree ─────────────────────────────

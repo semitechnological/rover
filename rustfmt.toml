@@ -5,35 +5,4 @@ max_width = 100
 tab_spaces = 4
 hard_tabs = false
 
-# Import organization (requires nightly: cargo +nightly fmt)
-imports_granularity = "Crate"
-group_imports = "StdExternalCrate"
 reorder_imports = true
-
-# Formatting options
-blank_lines_upper_bound = 1
-blank_lines_lower_bound = 0
-format_strings = true
-normalize_comments = true
-wrap_comments = true
-comment_width = 80
-format_macro_matchers = true
-format_macro_bodies = true
-
-# Match arms
-match_block_trailing_comma = true
-trailing_comma = "Vertical"
-trailing_semicolon = true
-
-# Control flow
-indent_style = "Block"
-brace_style = "SameLineWhere"
-
-# Other
-reorder_items = true
-remove_nested_parens = true
-singleton_comma = true
-struct_lit_single_line = true
-struct_field_align_threshold = 20
-type_ref_implicit_shorthand = true
-unstable_features = false

@@ -262,6 +262,12 @@ public final class AIPlugin: RoverPlugin {
     public init() {}
 
     public func query(_ query: String) -> [PickerItem] {
+        if UserDefaults.standard.object(forKey: "rover.ai_enabled") != nil,
+           !UserDefaults.standard.bool(forKey: "rover.ai_enabled")
+        {
+            cancelAI()
+            return []
+        }
         let q = query.trimmingCharacters(in: .whitespaces)
         let isExplicit = q.hasPrefix("?") || q.lowercased().hasPrefix("ai ")
         let isLong = q.count >= 6

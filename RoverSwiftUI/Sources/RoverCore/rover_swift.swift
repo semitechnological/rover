@@ -352,7 +352,7 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-// Initial value and increment amount for handles. 
+// Initial value and increment amount for handles.
 // These ensure that SWIFT handles always have the lowest bit set
 fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
 fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
@@ -419,6 +419,22 @@ fileprivate final class UniffiHandleMap<T>: @unchecked Sendable {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
+    typealias FfiType = UInt32
+    typealias SwiftType = UInt32
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> UInt32 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
     typealias FfiType = Int64
     typealias SwiftType = Int64
@@ -428,6 +444,46 @@ fileprivate struct FfiConverterInt64: FfiConverterPrimitive {
     }
 
     public static func write(_ value: Int64, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
+    typealias FfiType = Float
+    typealias SwiftType = Float
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Float {
+        return try lift(readFloat(&buf))
+    }
+
+    public static func write(_ value: Float, into buf: inout [UInt8]) {
+        writeFloat(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterBool : FfiConverter {
+    typealias FfiType = Int8
+    typealias SwiftType = Bool
+
+    public static func lift(_ value: Int8) throws -> Bool {
+        return value != 0
+    }
+
+    public static func lower(_ value: Bool) -> Int8 {
+        return value ? 1 : 0
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Bool {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Bool, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
     }
 }
@@ -477,19 +533,25 @@ fileprivate struct FfiConverterString: FfiConverter {
 
 
 /**
- * Skim-algorithm fuzzy scorer. Call from Swift to rank candidates.
+ * Parallel skim-algorithm fuzzy scorer.
+ *
+ * Backed by rayon so all available cores are used when ranking candidates.
+ * Allocate once and reuse — `FuzzyEngine` is stateless.
  */
 public protocol FuzzyEngineProtocol: AnyObject, Sendable {
-    
+
     /**
-     * Score and rank `candidates` against `query`.
-     * Returns items sorted best-first; non-matching candidates are excluded.
+     * Score and rank `candidates` against `query`, best-first.
+     * Non-matching candidates are excluded from the result.
      */
     func rank(query: String, candidates: [String])  -> [RankedItem]
-    
+
 }
 /**
- * Skim-algorithm fuzzy scorer. Call from Swift to rank candidates.
+ * Parallel skim-algorithm fuzzy scorer.
+ *
+ * Backed by rayon so all available cores are used when ranking candidates.
+ * Allocate once and reuse — `FuzzyEngine` is stateless.
  */
 open class FuzzyEngine: FuzzyEngineProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -548,12 +610,12 @@ public convenience init() {
         try! rustCall { uniffi_rover_swift_fn_free_fuzzyengine(handle, $0) }
     }
 
-    
 
-    
+
+
     /**
-     * Score and rank `candidates` against `query`.
-     * Returns items sorted best-first; non-matching candidates are excluded.
+     * Score and rank `candidates` against `query`, best-first.
+     * Non-matching candidates are excluded from the result.
      */
 open func rank(query: String, candidates: [String]) -> [RankedItem]  {
     return try!  FfiConverterSequenceTypeRankedItem.lift(try! rustCall() {
@@ -564,9 +626,9 @@ open func rank(query: String, candidates: [String]) -> [RankedItem]  {
     )
 })
 }
-    
 
-    
+
+
 }
 
 
@@ -616,38 +678,64 @@ public func FfiConverterTypeFuzzyEngine_lower(_ value: FuzzyEngine) -> UInt64 {
 
 
 /**
- * SQLite-backed storage: clipboard history and key-value settings.
+ * SQLite-backed storage for clipboard history and key-value settings.
+ *
+ * Uses WAL journal mode for fast concurrent access.
+ * Opens (or creates) the database in `~/Library/Application Support/dev.undivisible.Rover/`.
  */
 public protocol RoverDatabaseProtocol: AnyObject, Sendable {
-    
+
+    /**
+     * Delete all clipboard entries.
+     */
+    func clearClipboard() throws
+
     /**
      * Return all clipboard entries, newest first.
      */
     func clipboardHistory() throws  -> [ClipboardEntry]
-    
+
     /**
-     * Delete a clipboard entry by its id.
+     * Delete one clipboard entry by id.
      */
-    func deleteClipboard(id: Int64) throws 
-    
+    func deleteClipboard(id: Int64) throws
+
     /**
      * Read a setting. Returns `nil` if not set.
      */
     func getSetting(key: String) throws  -> String?
-    
+
     /**
-     * Append a clipboard entry. Deduplication is handled by the DB layer.
+     * Return the last `limit` queries, newest first.
      */
-    func pushClipboard(text: String) throws 
-    
+    func listQueryHistory(limit: UInt32) throws  -> [String]
+
+    /**
+     * Log an AI tool call for audit purposes.
+     */
+    func logAiAudit(toolName: String, argsJson: String, result: String) throws
+
+    /**
+     * Append a clipboard entry (deduplication handled by the DB layer).
+     */
+    func pushClipboard(text: String) throws
+
+    /**
+     * Push a query to history (max 100 entries, oldest auto-pruned).
+     */
+    func pushQueryHistory(query: String) throws
+
     /**
      * Write a setting.
      */
-    func setSetting(key: String, value: String) throws 
-    
+    func setSetting(key: String, value: String) throws
+
 }
 /**
- * SQLite-backed storage: clipboard history and key-value settings.
+ * SQLite-backed storage for clipboard history and key-value settings.
+ *
+ * Uses WAL journal mode for fast concurrent access.
+ * Opens (or creates) the database in `~/Library/Application Support/dev.undivisible.Rover/`.
  */
 open class RoverDatabase: RoverDatabaseProtocol, @unchecked Sendable {
     fileprivate let handle: UInt64
@@ -699,69 +787,114 @@ open class RoverDatabase: RoverDatabaseProtocol, @unchecked Sendable {
         try! rustCall { uniffi_rover_swift_fn_free_roverdatabase(handle, $0) }
     }
 
-    
+
     /**
-     * Open (or create) the Rover database. Allows unencrypted fallback so
-     * Swift code doesn't need Keychain setup during development.
+     * Open or create the Rover database.
      */
 public static func `open`()throws  -> RoverDatabase  {
-    return try  FfiConverterTypeRoverDatabase_lift(try rustCallWithError(FfiConverterTypeDatabaseError_lift) {
+    return try  FfiConverterTypeRoverDatabase_lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
     uniffi_rover_swift_fn_constructor_roverdatabase_open($0
     )
 })
 }
-    
 
-    
+
+
+    /**
+     * Delete all clipboard entries.
+     */
+open func clearClipboard()throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_roverdatabase_clear_clipboard(
+            self.uniffiCloneHandle(),$0
+    )
+}
+}
+
     /**
      * Return all clipboard entries, newest first.
      */
 open func clipboardHistory()throws  -> [ClipboardEntry]  {
-    return try  FfiConverterSequenceTypeClipboardEntry.lift(try rustCallWithError(FfiConverterTypeDatabaseError_lift) {
+    return try  FfiConverterSequenceTypeClipboardEntry.lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
     uniffi_rover_swift_fn_method_roverdatabase_clipboard_history(
             self.uniffiCloneHandle(),$0
     )
 })
 }
-    
+
     /**
-     * Delete a clipboard entry by its id.
+     * Delete one clipboard entry by id.
      */
-open func deleteClipboard(id: Int64)throws   {try rustCallWithError(FfiConverterTypeDatabaseError_lift) {
+open func deleteClipboard(id: Int64)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
     uniffi_rover_swift_fn_method_roverdatabase_delete_clipboard(
             self.uniffiCloneHandle(),
         FfiConverterInt64.lower(id),$0
     )
 }
 }
-    
+
     /**
      * Read a setting. Returns `nil` if not set.
      */
 open func getSetting(key: String)throws  -> String?  {
-    return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeDatabaseError_lift) {
+    return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
     uniffi_rover_swift_fn_method_roverdatabase_get_setting(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(key),$0
     )
 })
 }
-    
+
     /**
-     * Append a clipboard entry. Deduplication is handled by the DB layer.
+     * Return the last `limit` queries, newest first.
      */
-open func pushClipboard(text: String)throws   {try rustCallWithError(FfiConverterTypeDatabaseError_lift) {
+open func listQueryHistory(limit: UInt32)throws  -> [String]  {
+    return try  FfiConverterSequenceString.lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_roverdatabase_list_query_history(
+            self.uniffiCloneHandle(),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
+}
+
+    /**
+     * Log an AI tool call for audit purposes.
+     */
+open func logAiAudit(toolName: String, argsJson: String, result: String)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_roverdatabase_log_ai_audit(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(toolName),
+        FfiConverterString.lower(argsJson),
+        FfiConverterString.lower(result),$0
+    )
+}
+}
+
+    /**
+     * Append a clipboard entry (deduplication handled by the DB layer).
+     */
+open func pushClipboard(text: String)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
     uniffi_rover_swift_fn_method_roverdatabase_push_clipboard(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(text),$0
     )
 }
 }
-    
+
+    /**
+     * Push a query to history (max 100 entries, oldest auto-pruned).
+     */
+open func pushQueryHistory(query: String)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_roverdatabase_push_query_history(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(query),$0
+    )
+}
+}
+
     /**
      * Write a setting.
      */
-open func setSetting(key: String, value: String)throws   {try rustCallWithError(FfiConverterTypeDatabaseError_lift) {
+open func setSetting(key: String, value: String)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
     uniffi_rover_swift_fn_method_roverdatabase_set_setting(
             self.uniffiCloneHandle(),
         FfiConverterString.lower(key),
@@ -769,9 +902,9 @@ open func setSetting(key: String, value: String)throws   {try rustCallWithError(
     )
 }
 }
-    
 
-    
+
+
 }
 
 
@@ -818,8 +951,260 @@ public func FfiConverterTypeRoverDatabase_lower(_ value: RoverDatabase) -> UInt6
 
 
 
+
+
 /**
- * A clipboard history entry.
+ * On-device semantic search using fastembed embeddings (AllMiniLML6V2, ~33 MB).
+ *
+ * Documents are stored in a WAL-mode SQLite DB alongside 384-dim f32 embeddings.
+ * An in-memory cache keeps all embeddings resident so searches are O(n) cosine
+ * similarity with zero disk I/O.
+ *
+ * **Initialisation blocks** while the model loads (~1–3 s on first run, instant
+ * on subsequent runs once weights are cached). Always call `SemanticSearch.open()`
+ * from a background thread, never from the main actor.
+ */
+public protocol SemanticSearchProtocol: AnyObject, Sendable {
+
+    /**
+     * Remove all documents in a collection.
+     */
+    func clearCollection(collection: String) throws
+
+    /**
+     * Number of indexed documents.
+     */
+    func count()  -> UInt32
+
+    /**
+     * Remove a document by id.
+     */
+    func remove(id: String) throws
+
+    /**
+     * Return the `top_k` most semantically similar documents to `query`.
+     * Pass an empty string for `collection` to search all collections.
+     */
+    func search(query: String, collection: String, topK: UInt32) throws  -> [SemanticResult]
+
+    /**
+     * Index (or re-index) a single document.
+     *
+     * - `id`: stable unique key (e.g. app bundle ID, file path, clipboard entry ID).
+     * - `collection`: logical group: `"apps"`, `"files"`, `"clipboard"`, `"commands"`.
+     * - `text`: the content to embed.
+     */
+    func upsert(id: String, collection: String, text: String) throws
+
+    /**
+     * Batch-index multiple documents in one embedding call (more efficient than
+     * calling `upsert` in a loop).
+     */
+    func upsertBatch(docs: [SemanticDoc]) throws
+
+}
+/**
+ * On-device semantic search using fastembed embeddings (AllMiniLML6V2, ~33 MB).
+ *
+ * Documents are stored in a WAL-mode SQLite DB alongside 384-dim f32 embeddings.
+ * An in-memory cache keeps all embeddings resident so searches are O(n) cosine
+ * similarity with zero disk I/O.
+ *
+ * **Initialisation blocks** while the model loads (~1–3 s on first run, instant
+ * on subsequent runs once weights are cached). Always call `SemanticSearch.open()`
+ * from a background thread, never from the main actor.
+ */
+open class SemanticSearch: SemanticSearchProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_rover_swift_fn_clone_semanticsearch(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_rover_swift_fn_free_semanticsearch(handle, $0) }
+    }
+
+
+    /**
+     * Open or create the semantic index.
+     * Blocks while the embedding model loads — call off the main thread.
+     */
+public static func `open`()throws  -> SemanticSearch  {
+    return try  FfiConverterTypeSemanticSearch_lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_constructor_semanticsearch_open($0
+    )
+})
+}
+
+
+
+    /**
+     * Remove all documents in a collection.
+     */
+open func clearCollection(collection: String)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_semanticsearch_clear_collection(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(collection),$0
+    )
+}
+}
+
+    /**
+     * Number of indexed documents.
+     */
+open func count() -> UInt32  {
+    return try!  FfiConverterUInt32.lift(try! rustCall() {
+    uniffi_rover_swift_fn_method_semanticsearch_count(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+
+    /**
+     * Remove a document by id.
+     */
+open func remove(id: String)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_semanticsearch_remove(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(id),$0
+    )
+}
+}
+
+    /**
+     * Return the `top_k` most semantically similar documents to `query`.
+     * Pass an empty string for `collection` to search all collections.
+     */
+open func search(query: String, collection: String, topK: UInt32)throws  -> [SemanticResult]  {
+    return try  FfiConverterSequenceTypeSemanticResult.lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_semanticsearch_search(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(query),
+        FfiConverterString.lower(collection),
+        FfiConverterUInt32.lower(topK),$0
+    )
+})
+}
+
+    /**
+     * Index (or re-index) a single document.
+     *
+     * - `id`: stable unique key (e.g. app bundle ID, file path, clipboard entry ID).
+     * - `collection`: logical group: `"apps"`, `"files"`, `"clipboard"`, `"commands"`.
+     * - `text`: the content to embed.
+     */
+open func upsert(id: String, collection: String, text: String)throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_semanticsearch_upsert(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(id),
+        FfiConverterString.lower(collection),
+        FfiConverterString.lower(text),$0
+    )
+}
+}
+
+    /**
+     * Batch-index multiple documents in one embedding call (more efficient than
+     * calling `upsert` in a loop).
+     */
+open func upsertBatch(docs: [SemanticDoc])throws   {try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_semanticsearch_upsert_batch(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceTypeSemanticDoc.lower(docs),$0
+    )
+}
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSemanticSearch: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = SemanticSearch
+
+    public static func lift(_ handle: UInt64) throws -> SemanticSearch {
+        return SemanticSearch(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: SemanticSearch) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SemanticSearch {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: SemanticSearch, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticSearch_lift(_ handle: UInt64) throws -> SemanticSearch {
+    return try FfiConverterTypeSemanticSearch.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticSearch_lower(_ value: SemanticSearch) -> UInt64 {
+    return FfiConverterTypeSemanticSearch.lower(value)
+}
+
+
+
+
+/**
+ * One clipboard history entry.
  */
 public struct ClipboardEntry: Equatable, Hashable {
     public var id: Int64
@@ -831,7 +1216,7 @@ public struct ClipboardEntry: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: Int64, content: String, 
+    public init(id: Int64, content: String,
         /**
          * Unix timestamp (seconds since epoch).
          */timestamp: Int64) {
@@ -840,9 +1225,9 @@ public struct ClipboardEntry: Equatable, Hashable {
         self.timestamp = timestamp
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -856,8 +1241,8 @@ public struct FfiConverterTypeClipboardEntry: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClipboardEntry {
         return
             try ClipboardEntry(
-                id: FfiConverterInt64.read(from: &buf), 
-                content: FfiConverterString.read(from: &buf), 
+                id: FfiConverterInt64.read(from: &buf),
+                content: FfiConverterString.read(from: &buf),
                 timestamp: FfiConverterInt64.read(from: &buf)
         )
     }
@@ -886,28 +1271,28 @@ public func FfiConverterTypeClipboardEntry_lower(_ value: ClipboardEntry) -> Rus
 
 
 /**
- * One ranked result from `FuzzyEngine::rank`.
+ * One scored result from `FuzzyEngine.rank`.
  */
 public struct RankedItem: Equatable, Hashable {
     public var candidate: String
     /**
-     * Skim score — higher is better match.
+     * Skim score — higher is better. Typical range 0–10 000.
      */
     public var score: Int64
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(candidate: String, 
+    public init(candidate: String,
         /**
-         * Skim score — higher is better match.
+         * Skim score — higher is better. Typical range 0–10 000.
          */score: Int64) {
         self.candidate = candidate
         self.score = score
     }
 
-    
 
-    
+
+
 }
 
 #if compiler(>=6)
@@ -921,7 +1306,7 @@ public struct FfiConverterTypeRankedItem: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RankedItem {
         return
             try RankedItem(
-                candidate: FfiConverterString.read(from: &buf), 
+                candidate: FfiConverterString.read(from: &buf),
                 score: FfiConverterInt64.read(from: &buf)
         )
     }
@@ -949,49 +1334,176 @@ public func FfiConverterTypeRankedItem_lower(_ value: RankedItem) -> RustBuffer 
 
 
 /**
- * Errors from `RoverDatabase`.
+ * A document to batch-index via `SemanticSearch.upsertBatch`.
  */
-public enum DatabaseError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+public struct SemanticDoc: Equatable, Hashable {
+    public var id: String
+    public var collection: String
+    public var text: String
 
-    
-    
-    case Open(message: String
-    )
-    case Query(message: String
-    )
-
-    
-
-    
-
-    
-    public var errorDescription: String? {
-        String(reflecting: self)
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, collection: String, text: String) {
+        self.id = id
+        self.collection = collection
+        self.text = text
     }
-    
+
+
+
+
 }
 
 #if compiler(>=6)
-extension DatabaseError: Sendable {}
+extension SemanticDoc: Sendable {}
 #endif
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public struct FfiConverterTypeDatabaseError: FfiConverterRustBuffer {
-    typealias SwiftType = DatabaseError
+public struct FfiConverterTypeSemanticDoc: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SemanticDoc {
+        return
+            try SemanticDoc(
+                id: FfiConverterString.read(from: &buf),
+                collection: FfiConverterString.read(from: &buf),
+                text: FfiConverterString.read(from: &buf)
+        )
+    }
 
-    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> DatabaseError {
+    public static func write(_ value: SemanticDoc, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.collection, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticDoc_lift(_ buf: RustBuffer) throws -> SemanticDoc {
+    return try FfiConverterTypeSemanticDoc.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticDoc_lower(_ value: SemanticDoc) -> RustBuffer {
+    return FfiConverterTypeSemanticDoc.lower(value)
+}
+
+
+/**
+ * One semantic search hit.
+ */
+public struct SemanticResult: Equatable, Hashable {
+    public var id: String
+    public var collection: String
+    public var text: String
+    /**
+     * Cosine similarity score in [-1, 1]. Higher is more relevant.
+     */
+    public var score: Float
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, collection: String, text: String,
+        /**
+         * Cosine similarity score in [-1, 1]. Higher is more relevant.
+         */score: Float) {
+        self.id = id
+        self.collection = collection
+        self.text = text
+        self.score = score
+    }
+
+
+
+
+}
+
+#if compiler(>=6)
+extension SemanticResult: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeSemanticResult: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SemanticResult {
+        return
+            try SemanticResult(
+                id: FfiConverterString.read(from: &buf),
+                collection: FfiConverterString.read(from: &buf),
+                text: FfiConverterString.read(from: &buf),
+                score: FfiConverterFloat.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: SemanticResult, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.collection, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterFloat.write(value.score, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticResult_lift(_ buf: RustBuffer) throws -> SemanticResult {
+    return try FfiConverterTypeSemanticResult.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeSemanticResult_lower(_ value: SemanticResult) -> RustBuffer {
+    return FfiConverterTypeSemanticResult.lower(value)
+}
+
+
+/**
+ * Unified error type for all fallible Rover backend operations.
+ */
+public enum RoverError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
+
+
+
+    case Internal(message: String
+    )
+
+
+
+
+
+
+    public var errorDescription: String? {
+        String(reflecting: self)
+    }
+
+}
+
+#if compiler(>=6)
+extension RoverError: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeRoverError: FfiConverterRustBuffer {
+    typealias SwiftType = RoverError
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RoverError {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
-        
 
-        
-        case 1: return .Open(
-            message: try FfiConverterString.read(from: &buf)
-            )
-        case 2: return .Query(
+
+
+        case 1: return .Internal(
             message: try FfiConverterString.read(from: &buf)
             )
 
@@ -999,22 +1511,17 @@ public struct FfiConverterTypeDatabaseError: FfiConverterRustBuffer {
         }
     }
 
-    public static func write(_ value: DatabaseError, into buf: inout [UInt8]) {
+    public static func write(_ value: RoverError, into buf: inout [UInt8]) {
         switch value {
 
-        
 
-        
-        
-        case let .Open(message):
+
+
+
+        case let .Internal(message):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(message, into: &buf)
-            
-        
-        case let .Query(message):
-            writeInt(&buf, Int32(2))
-            FfiConverterString.write(message, into: &buf)
-            
+
         }
     }
 }
@@ -1023,15 +1530,15 @@ public struct FfiConverterTypeDatabaseError: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeDatabaseError_lift(_ buf: RustBuffer) throws -> DatabaseError {
-    return try FfiConverterTypeDatabaseError.lift(buf)
+public func FfiConverterTypeRoverError_lift(_ buf: RustBuffer) throws -> RoverError {
+    return try FfiConverterTypeRoverError.lift(buf)
 }
 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
-public func FfiConverterTypeDatabaseError_lower(_ value: DatabaseError) -> RustBuffer {
-    return FfiConverterTypeDatabaseError.lower(value)
+public func FfiConverterTypeRoverError_lower(_ value: RoverError) -> RustBuffer {
+    return FfiConverterTypeRoverError.lower(value)
 }
 
 #if swift(>=5.8)
@@ -1133,6 +1640,66 @@ fileprivate struct FfiConverterSequenceTypeRankedItem: FfiConverterRustBuffer {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSemanticDoc: FfiConverterRustBuffer {
+    typealias SwiftType = [SemanticDoc]
+
+    public static func write(_ value: [SemanticDoc], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSemanticDoc.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SemanticDoc] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SemanticDoc]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSemanticDoc.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeSemanticResult: FfiConverterRustBuffer {
+    typealias SwiftType = [SemanticResult]
+
+    public static func write(_ value: [SemanticResult], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeSemanticResult.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [SemanticResult] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [SemanticResult]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeSemanticResult.read(from: &buf))
+        }
+        return seq
+    }
+}
+/**
+ * Returns `true` if Apple Intelligence (FoundationModels) is available and ready
+ * on this device. Cheap synchronous check — safe to call on any thread.
+ */
+public func aiIsAvailable() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_rover_swift_fn_func_ai_is_available($0
+    )
+})
+}
+
 private enum InitializationResult {
     case ok
     case contractVersionMismatch
@@ -1148,28 +1715,64 @@ private let initializationResult: InitializationResult = {
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
     }
-    if (uniffi_rover_swift_checksum_method_fuzzyengine_rank() != 53008) {
+    if (uniffi_rover_swift_checksum_func_ai_is_available() != 52319) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rover_swift_checksum_method_roverdatabase_clipboard_history() != 25701) {
+    if (uniffi_rover_swift_checksum_method_fuzzyengine_rank() != 29813) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rover_swift_checksum_method_roverdatabase_delete_clipboard() != 6232) {
+    if (uniffi_rover_swift_checksum_method_roverdatabase_clear_clipboard() != 18459) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rover_swift_checksum_method_roverdatabase_get_setting() != 38863) {
+    if (uniffi_rover_swift_checksum_method_roverdatabase_clipboard_history() != 29458) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rover_swift_checksum_method_roverdatabase_push_clipboard() != 51336) {
+    if (uniffi_rover_swift_checksum_method_roverdatabase_delete_clipboard() != 25423) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rover_swift_checksum_method_roverdatabase_set_setting() != 24626) {
+    if (uniffi_rover_swift_checksum_method_roverdatabase_get_setting() != 43796) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_roverdatabase_list_query_history() != 21885) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_roverdatabase_log_ai_audit() != 32196) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_roverdatabase_push_clipboard() != 49506) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_roverdatabase_push_query_history() != 55886) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_roverdatabase_set_setting() != 7127) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_semanticsearch_clear_collection() != 65520) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_semanticsearch_count() != 46345) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_semanticsearch_remove() != 63420) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_semanticsearch_search() != 57342) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_semanticsearch_upsert() != 47860) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_semanticsearch_upsert_batch() != 51083) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_rover_swift_checksum_constructor_fuzzyengine_new() != 3987) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_rover_swift_checksum_constructor_roverdatabase_open() != 12604) {
+    if (uniffi_rover_swift_checksum_constructor_roverdatabase_open() != 63501) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_constructor_semanticsearch_open() != 63876) {
         return InitializationResult.apiChecksumMismatch
     }
 

@@ -8,6 +8,7 @@ A macOS launcher and AI assistant bar. Sits in the menu bar and pops up system-w
 - **Calculator** — type any math expression to evaluate it inline
 - **Clipboard history** — search and paste from your clipboard history
 - **File search** — find files on your Mac
+- **Emoji picker** — Cmd+Opt+Space opens emoji search; `:rocket` style queries copy emoji
 - **AI assistant** — on-device Apple Intelligence (macOS 26+, Apple Silicon)
   - Asks calendar, reminders, weather, music, and more
   - Writes and runs AppleScript autonomously
@@ -15,11 +16,14 @@ A macOS launcher and AI assistant bar. Sits in the menu bar and pops up system-w
   - Falls back to AI when no app matches your query
 - **Browser** — keyboard-driven WebKit browser window (Cmd+\ for address bar)
 - **Terminal** — built-in terminal suggestions; type `> command` to run shell commands
+- **Web and Google shortcuts** — search web engines, Google Maps, Calendar, Gmail, Drive, Docs, Sheets, and Slides
+- **macOS tools** — search/open Notes, Reminders, and Calendar items
 
 ## Current status
 
-- The current checkout is on main and has the tile-plugin merge plus build cleanup work in progress.
-- cargo test currently passes locally.
+- The SwiftUI frontend branch is active and builds with SwiftPM.
+- The GPUI frontend remains the reference implementation for remaining parity checks.
+- Rust and Swift quality gates pass locally. The Rust gates depend on the local `rs_ai` checkout at `/Users/undivisible/projects/rs_ai`.
 
 ## Input
 
@@ -28,6 +32,10 @@ A macOS launcher and AI assistant bar. Sits in the menu bar and pops up system-w
 | _(none)_ | Fuzzy match apps/commands; AI fires automatically when nothing matches |
 | `> cmd` or `! cmd` | Run shell command directly |
 | `? query` or `ai query` | Force AI response |
+| `:emoji` | Search emoji |
+| `search query`, `web query`, `google query`, `ddg query`, `yt query`, `wiki query` | Search the web |
+| `?gmaps query`, `?gcal`, `?gmail query`, `?gdrive query`, `?gdocs query`, `?gsheets`, `?gslides` | Open Google integrations |
+| `/notes query`, `/reminders query`, `/calendar query`, `/events query` | Search macOS native apps |
 
 Math expressions are always evaluated alongside matches.
 
@@ -42,6 +50,13 @@ Math expressions are always evaluated alongside matches.
 
 ```sh
 cargo build
+swift build --package-path RoverSwiftUI
+```
+
+Regenerate the SwiftUI Rust bridge after Rust FFI changes:
+
+```sh
+bash build-swiftui.sh
 ```
 
 ## Running
@@ -56,8 +71,9 @@ DYLD_LIBRARY_PATH="/path/to/Xcode.app/Contents/Developer/Toolchains/XcodeDefault
 
 Open via the menu bar (Rover → Settings) or press Cmd+, after activation.
 
-- **General** — hotkey, bar position (Top / Center / Bottom)
-- **AI** — enable/disable Apple Intelligence, AI in terminal
+- **General** — command visibility, bar position (Top / Center / Bottom)
+- **Hotkeys** — global launcher hotkey preset and emoji picker hotkey reference
+- **AI** — enable/disable Apple Intelligence
 - **Data** — clear clipboard history, query history
 
 ## Architecture

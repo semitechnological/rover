@@ -45,7 +45,7 @@ final class LauncherPanel: NSPanel {
         hostingView = hosting
 
         hosting.setFrameSize(hosting.fittingSize)
-        center()
+        place()
     }
 
     override var canBecomeKey: Bool { true }
@@ -53,9 +53,9 @@ final class LauncherPanel: NSPanel {
 
     // MARK: - Show / Hide
 
-    func show() {
-        vm.query = ""
-        center()
+    func show(initialQuery: String = "") {
+        vm.query = initialQuery
+        place()
 
         // Start transparent, animate in.
         alphaValue = 0
@@ -87,6 +87,10 @@ final class LauncherPanel: NSPanel {
         if isVisible { hide() } else { show() }
     }
 
+    func showEmojiPicker() {
+        show(initialQuery: ":")
+    }
+
     // MARK: - Smooth height resize
 
     /// Animate the panel height while anchoring the top edge.
@@ -99,13 +103,7 @@ final class LauncherPanel: NSPanel {
         let current = self.frame
         guard abs(height - current.height) > 1 else { return }
 
-        // Anchor the top edge (maxY), grow/shrink downward.
-        let newFrame = NSRect(
-            x: current.minX,
-            y: current.maxY - height,
-            width: current.width,
-            height: height
-        )
+        let newFrame = frame(forHeight: height)
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.2
@@ -135,5 +133,26 @@ final class LauncherPanel: NSPanel {
             NSEvent.removeMonitor(monitor)
             clickOutsideMonitor = nil
         }
+    }
+
+    private func place() {
+        setFrame(frame(forHeight: max(frame.height, hostingView?.fittingSize.height ?? 80)), display: true)
+    }
+
+    private func frame(forHeight height: CGFloat) -> NSRect {
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let width = RoverGlass.panelWidth
+        let x = visible.midX - width / 2
+        let position = UserDefaults.standard.string(forKey: "rover.bar_position") ?? "center"
+        let y: CGFloat
+        switch position {
+        case "top":
+            y = visible.maxY - height - 96
+        case "bottom":
+            y = visible.minY + 96
+        default:
+            y = visible.midY - height / 2
+        }
+        return NSRect(x: x, y: y, width: width, height: height)
     }
 }

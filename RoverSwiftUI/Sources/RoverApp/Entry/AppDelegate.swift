@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var panel: LauncherPanel!
     private var hotkey: GlobalHotkey!
+    private var emojiHotkey: GlobalHotkey!
     private var statusItem: NSStatusItem!
     private var registry: PluginRegistry!
     private var vm: LauncherViewModel!
@@ -38,8 +39,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
 
-        // Carbon hotkey: Cmd+Space.
-        hotkey = GlobalHotkey { [weak self] in self?.panel.toggle() }
+        let preset = HotkeyPreset(rawValue: UserDefaults.standard.string(forKey: "rover.hotkeyPreset") ?? "")
+            ?? .commandSpace
+        hotkey = GlobalHotkey(id: 1, modifiers: preset.carbonModifiers) { [weak self] in self?.panel.toggle() }
+        emojiHotkey = GlobalHotkey(id: 2, modifiers: HotkeyPreset.commandOptionSpace.carbonModifiers) { [weak self] in
+            self?.panel.showEmojiPicker()
+        }
 
         // Use `.main` queue so the closure runs on the main thread; then
         // assert main-actor isolation to safely touch @MainActor properties.
@@ -60,6 +65,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] note in
             let url = note.object as? URL
             MainActor.assumeIsolated { self?.openBrowser(url: url) }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .roverHotkeyChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reloadHotkey() }
         }
     }
 
@@ -87,5 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func openBrowser(url: URL?) {
         BrowserWindowController.shared.navigate(to: url)
+    }
+
+    private func reloadHotkey() {
+        let preset = HotkeyPreset(rawValue: UserDefaults.standard.string(forKey: "rover.hotkeyPreset") ?? "")
+            ?? .commandSpace
+        hotkey.update(modifiers: preset.carbonModifiers)
     }
 }

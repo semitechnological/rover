@@ -83,7 +83,9 @@ impl RoverDatabase {
     /// Open or create the Rover database.
     #[uniffi::constructor]
     pub fn open() -> Result<Arc<Self>, RoverError> {
-        let opts = RoverDbOptions { allow_unencrypted: true };
+        let opts = RoverDbOptions {
+            allow_unencrypted: true,
+        };
         let db = RoverDb::open_with_options(opts).map_err(RoverError::from_anyhow)?;
         Ok(Arc::new(Self { db: Arc::new(db) }))
     }
@@ -92,7 +94,9 @@ impl RoverDatabase {
 
     /// Append a clipboard entry (deduplication handled by the DB layer).
     pub fn push_clipboard(&self, text: String) -> Result<(), RoverError> {
-        self.db.add_clipboard_entry(&text).map_err(RoverError::from_anyhow)
+        self.db
+            .add_clipboard_entry(&text)
+            .map_err(RoverError::from_anyhow)
     }
 
     /// Return all clipboard entries, newest first.
@@ -102,19 +106,27 @@ impl RoverDatabase {
             .map_err(RoverError::from_anyhow)
             .map(|rows| {
                 rows.into_iter()
-                    .map(|e| ClipboardEntry { id: e.id, content: e.content, timestamp: e.timestamp })
+                    .map(|e| ClipboardEntry {
+                        id: e.id,
+                        content: e.content,
+                        timestamp: e.timestamp,
+                    })
                     .collect()
             })
     }
 
     /// Delete one clipboard entry by id.
     pub fn delete_clipboard(&self, id: i64) -> Result<(), RoverError> {
-        self.db.delete_clipboard_entry(id).map_err(RoverError::from_anyhow)
+        self.db
+            .delete_clipboard_entry(id)
+            .map_err(RoverError::from_anyhow)
     }
 
     /// Delete all clipboard entries.
     pub fn clear_clipboard(&self) -> Result<(), RoverError> {
-        self.db.clear_clipboard_history().map_err(RoverError::from_anyhow)
+        self.db
+            .clear_clipboard_history()
+            .map_err(RoverError::from_anyhow)
     }
 
     // ── Settings ─────────────────────────────────────────────────────────────
@@ -126,14 +138,18 @@ impl RoverDatabase {
 
     /// Write a setting.
     pub fn set_setting(&self, key: String, value: String) -> Result<(), RoverError> {
-        self.db.set_setting(&key, &value).map_err(RoverError::from_anyhow)
+        self.db
+            .set_setting(&key, &value)
+            .map_err(RoverError::from_anyhow)
     }
 
     // ── Query history ─────────────────────────────────────────────────────────
 
     /// Push a query to history (max 100 entries, oldest auto-pruned).
     pub fn push_query_history(&self, query: String) -> Result<(), RoverError> {
-        self.db.push_query_history(&query).map_err(RoverError::from_anyhow)
+        self.db
+            .push_query_history(&query)
+            .map_err(RoverError::from_anyhow)
     }
 
     /// Return the last `limit` queries, newest first.
@@ -193,7 +209,9 @@ impl SemanticSearch {
     pub fn open() -> Result<Arc<Self>, RoverError> {
         let path = semantic_db_path().map_err(RoverError::from_anyhow)?;
         let index = rover_semantic::SemanticIndex::new(&path).map_err(RoverError::from_anyhow)?;
-        Ok(Arc::new(Self { index: Arc::new(Mutex::new(index)) }))
+        Ok(Arc::new(Self {
+            index: Arc::new(Mutex::new(index)),
+        }))
     }
 
     // ── Indexing ─────────────────────────────────────────────────────────────
@@ -203,12 +221,7 @@ impl SemanticSearch {
     /// - `id`: stable unique key (e.g. app bundle ID, file path, clipboard entry ID).
     /// - `collection`: logical group: `"apps"`, `"files"`, `"clipboard"`, `"commands"`.
     /// - `text`: the content to embed.
-    pub fn upsert(
-        &self,
-        id: String,
-        collection: String,
-        text: String,
-    ) -> Result<(), RoverError> {
+    pub fn upsert(&self, id: String, collection: String, text: String) -> Result<(), RoverError> {
         self.index
             .lock()
             .unwrap()
@@ -232,7 +245,11 @@ impl SemanticSearch {
 
     /// Remove a document by id.
     pub fn remove(&self, id: String) -> Result<(), RoverError> {
-        self.index.lock().unwrap().remove(&id).map_err(RoverError::from_anyhow)
+        self.index
+            .lock()
+            .unwrap()
+            .remove(&id)
+            .map_err(RoverError::from_anyhow)
     }
 
     /// Remove all documents in a collection.
@@ -254,7 +271,11 @@ impl SemanticSearch {
         collection: String,
         top_k: u32,
     ) -> Result<Vec<SemanticResult>, RoverError> {
-        let col = if collection.is_empty() { None } else { Some(collection.as_str()) };
+        let col = if collection.is_empty() {
+            None
+        } else {
+            Some(collection.as_str())
+        };
         self.index
             .lock()
             .unwrap()
@@ -336,6 +357,8 @@ pub enum RoverError {
 
 impl RoverError {
     fn from_anyhow(e: impl std::fmt::Display) -> Self {
-        Self::Internal { message: e.to_string() }
+        Self::Internal {
+            message: e.to_string(),
+        }
     }
 }

@@ -25,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         registry.register(FileSearchPlugin())
         registry.register(TerminalPlugin())
         registry.register(BrowserPlugin())
+        registry.register(WebSearchPlugin())
+        registry.register(GoogleIntegrationsPlugin())
+        registry.register(MacOSToolsPlugin())
         registry.register(EmojiPlugin())
         registry.register(HelpPlugin())
         registry.register(AIPlugin())                // on-device Apple Intelligence

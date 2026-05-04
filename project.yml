@@ -1,0 +1,108 @@
+# XcodeGen project definition for Rover
+#
+# Generates Rover.xcodeproj (git-ignored) which Xcode / xcodebuild use.
+# The Rust cdylib is compiled automatically via a pre-build script phase.
+#
+# One-time setup:
+#   wax install xcodegen
+#   xcodegen generate             # produces Rover.xcodeproj
+#
+# Then open Rover.xcodeproj in Xcode and build normally (⌘B).
+# xcodebuild -scheme Rover build  also works from the repo root.
+
+name: Rover
+
+options:
+  bundleIdPrefix: dev.undivisible
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "16.3"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+  # Keep Xcode's derived data outside the repo
+  carthageBuildPath: ""
+
+# Local SPM package — Xcode links all Swift targets from here
+packages:
+  RoverSwiftUI:
+    path: RoverSwiftUI
+
+targets:
+  Rover:
+    type: application
+    platform: macOS
+
+    # All Swift source lives in the SPM package; this Xcode target wraps it
+    # to produce a proper .app bundle with Info.plist and entitlements.
+    sources:
+      # Empty stub so Xcode doesn't complain about missing sources.
+      # Real code is compiled via the SPM package dependency below.
+      - path: XcodeStub
+        optional: true
+
+    dependencies:
+      - package: RoverSwiftUI
+        product: RoverApp
+
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.undivisible.Rover
+        PRODUCT_NAME: Rover
+        INFOPLIST_FILE: RoverSwiftUI/Resources/Info.plist
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        SWIFT_VERSION: "6.2"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        # Ensure the Rust dylib rpath is set so the app bundle finds it
+        LD_RUNPATH_SEARCH_PATHS: >-
+          $(inherited)
+          @executable_path/../Frameworks
+          $(SRCROOT)/RoverSwiftUI/lib
+        OTHER_LDFLAGS: >-
+          $(inherited)
+          -L$(SRCROOT)/RoverSwiftUI/lib
+          -lrover_swift
+      configs:
+        Debug:
+          DEBUG_INFORMATION_FORMAT: dwarf
+          ONLY_ACTIVE_ARCH: YES
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+        Release:
+          DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          ENABLE_BITCODE: NO
+
+    preBuildScripts:
+      - name: "⚙️ Build Rust rover_swift dylib"
+        script: |
+          #!/usr/bin/env bash
+          # Compile the Rust cdylib and regenerate UniFFI Swift bindings.
+          # Runs before every Xcode build; `cargo build` is incremental so
+          # unchanged Rust code compiles in < 1 second.
+          set -euo pipefail
+          cd "$SRCROOT"
+          if [ "${CONFIGURATION}" = "Release" ]; then
+            RELEASE=1 bash build-swiftui.sh
+          else
+            bash build-swiftui.sh
+          fi
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+
+    scheme:
+      testTargets: []
+
+schemes:
+  Rover:
+    build:
+      targets:
+        Rover: all
+    run:
+      config: Debug
+      commandLineArguments: {}
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

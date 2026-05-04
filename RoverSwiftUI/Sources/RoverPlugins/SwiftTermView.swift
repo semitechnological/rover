@@ -2,18 +2,20 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 
-struct SwiftTermView: NSViewRepresentable {
+public struct SwiftTermView: NSViewRepresentable {
     let initialCommand: String?
 
-    func makeNSView(context: Context) -> LocalProcessTerminalView {
+    public init(initialCommand: String?) {
+        self.initialCommand = initialCommand
+    }
+
+    public func makeNSView(context: Context) -> LocalProcessTerminalView {
         let tv = LocalProcessTerminalView(frame: .zero)
 
         // Metal rendering is automatic in LocalProcessTerminalView
         // Apply system colors
-        let bg = NSColor.textBackgroundColor
-        let fg = NSColor.textColor
-        tv.terminal.backgroundColor = bg
-        tv.terminal.foregroundColor = fg
+        tv.nativeBackgroundColor = .textBackgroundColor
+        tv.nativeForegroundColor = .textColor
 
         // Start the shell
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
@@ -28,5 +30,5 @@ struct SwiftTermView: NSViewRepresentable {
         return tv
     }
 
-    func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {}
+    public func updateNSView(_ nsView: LocalProcessTerminalView, context: Context) {}
 }

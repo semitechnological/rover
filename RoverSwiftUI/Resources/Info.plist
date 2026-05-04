@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>dev.undivisible.Rover</string>
+    <key>CFBundleName</key>
+    <string>Rover</string>
+    <key>CFBundleDisplayName</key>
+    <string>Rover</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleExecutable</key>
+    <string>$(EXECUTABLE_NAME)</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <!-- No Dock icon — pure menu-bar agent -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Allow AppleScript access to other applications -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Rover uses AppleScript to control apps and run commands on your behalf.</string>
+    <!-- Calendar access for AI tools -->
+    <key>NSCalendarsUsageDescription</key>
+    <string>Rover's AI assistant can read your calendar events.</string>
+    <!-- Reminders access for AI tools -->
+    <key>NSRemindersUsageDescription</key>
+    <string>Rover's AI assistant can read and add reminders.</string>
+    <!-- File access for file search -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Rover searches your files to surface results in the launcher.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Rover searches your files to surface results in the launcher.</string>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Rover searches your files to surface results in the launcher.</string>
+    <!-- Minimum macOS version -->
+    <key>LSMinimumSystemVersion</key>
+    <string>26.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+</dict>
+</plist>

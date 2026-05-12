@@ -256,7 +256,7 @@ void uniffi_rover_swift_fn_free_fuzzyengine(uint64_t handle, RustCallStatus *_No
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_FUZZYENGINE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_FUZZYENGINE_NEW
 uint64_t uniffi_rover_swift_fn_constructor_fuzzyengine_new(RustCallStatus *_Nonnull out_status
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_FUZZYENGINE_RANK
@@ -277,7 +277,7 @@ void uniffi_rover_swift_fn_free_roverdatabase(uint64_t handle, RustCallStatus *_
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_ROVERDATABASE_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_ROVERDATABASE_OPEN
 uint64_t uniffi_rover_swift_fn_constructor_roverdatabase_open(RustCallStatus *_Nonnull out_status
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_ROVERDATABASE_CLEAR_CLIPBOARD
@@ -338,7 +338,7 @@ void uniffi_rover_swift_fn_free_semanticsearch(uint64_t handle, RustCallStatus *
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_SEMANTICSEARCH_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_SEMANTICSEARCH_OPEN
 uint64_t uniffi_rover_swift_fn_constructor_semanticsearch_open(RustCallStatus *_Nonnull out_status
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_SEMANTICSEARCH_CLEAR_COLLECTION
@@ -371,10 +371,51 @@ void uniffi_rover_swift_fn_method_semanticsearch_upsert(uint64_t ptr, RustBuffer
 void uniffi_rover_swift_fn_method_semanticsearch_upsert_batch(uint64_t ptr, RustBuffer docs, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CLONE_TILEBACKEND
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CLONE_TILEBACKEND
+uint64_t uniffi_rover_swift_fn_clone_tilebackend(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_FREE_TILEBACKEND
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_FREE_TILEBACKEND
+void uniffi_rover_swift_fn_free_tilebackend(uint64_t handle, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_TILEBACKEND_NEW
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_CONSTRUCTOR_TILEBACKEND_NEW
+uint64_t uniffi_rover_swift_fn_constructor_tilebackend_new(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_ACCESSIBILITY_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_ACCESSIBILITY_ENABLED
+int8_t uniffi_rover_swift_fn_method_tilebackend_accessibility_enabled(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_APPLY_TO_FRONTMOST
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_APPLY_TO_FRONTMOST
+RustBuffer uniffi_rover_swift_fn_method_tilebackend_apply_to_frontmost(uint64_t ptr, RustBuffer action, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_LIST_WINDOWS
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_LIST_WINDOWS
+RustBuffer uniffi_rover_swift_fn_method_tilebackend_list_windows(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_MOSAIC_VISIBLE_WINDOWS
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_MOSAIC_VISIBLE_WINDOWS
+uint32_t uniffi_rover_swift_fn_method_tilebackend_mosaic_visible_windows(uint64_t ptr, RustBuffer layout, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_REQUEST_ACCESSIBILITY
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_METHOD_TILEBACKEND_REQUEST_ACCESSIBILITY
+int8_t uniffi_rover_swift_fn_method_tilebackend_request_accessibility(uint64_t ptr, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_FUNC_AI_IS_AVAILABLE
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_FN_FUNC_AI_IS_AVAILABLE
 int8_t uniffi_rover_swift_fn_func_ai_is_available(RustCallStatus *_Nonnull out_status
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_ROVER_SWIFT_RUSTBUFFER_ALLOC
@@ -640,127 +681,163 @@ void ffi_rover_swift_rust_future_complete_void(uint64_t handle, RustCallStatus *
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_FUNC_AI_IS_AVAILABLE
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_FUNC_AI_IS_AVAILABLE
 uint16_t uniffi_rover_swift_checksum_func_ai_is_available(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_FUZZYENGINE_RANK
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_FUZZYENGINE_RANK
 uint16_t uniffi_rover_swift_checksum_method_fuzzyengine_rank(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_CLEAR_CLIPBOARD
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_CLEAR_CLIPBOARD
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_clear_clipboard(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_CLIPBOARD_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_CLIPBOARD_HISTORY
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_clipboard_history(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_DELETE_CLIPBOARD
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_DELETE_CLIPBOARD
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_delete_clipboard(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_GET_SETTING
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_GET_SETTING
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_get_setting(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_LIST_QUERY_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_LIST_QUERY_HISTORY
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_list_query_history(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_LOG_AI_AUDIT
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_LOG_AI_AUDIT
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_log_ai_audit(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_PUSH_CLIPBOARD
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_PUSH_CLIPBOARD
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_push_clipboard(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_PUSH_QUERY_HISTORY
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_PUSH_QUERY_HISTORY
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_push_query_history(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_SET_SETTING
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_ROVERDATABASE_SET_SETTING
 uint16_t uniffi_rover_swift_checksum_method_roverdatabase_set_setting(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_CLEAR_COLLECTION
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_CLEAR_COLLECTION
 uint16_t uniffi_rover_swift_checksum_method_semanticsearch_clear_collection(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_COUNT
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_COUNT
 uint16_t uniffi_rover_swift_checksum_method_semanticsearch_count(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_REMOVE
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_REMOVE
 uint16_t uniffi_rover_swift_checksum_method_semanticsearch_remove(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_SEARCH
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_SEARCH
 uint16_t uniffi_rover_swift_checksum_method_semanticsearch_search(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_UPSERT
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_UPSERT
 uint16_t uniffi_rover_swift_checksum_method_semanticsearch_upsert(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_UPSERT_BATCH
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_SEMANTICSEARCH_UPSERT_BATCH
 uint16_t uniffi_rover_swift_checksum_method_semanticsearch_upsert_batch(void
-
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_ACCESSIBILITY_ENABLED
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_ACCESSIBILITY_ENABLED
+uint16_t uniffi_rover_swift_checksum_method_tilebackend_accessibility_enabled(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_APPLY_TO_FRONTMOST
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_APPLY_TO_FRONTMOST
+uint16_t uniffi_rover_swift_checksum_method_tilebackend_apply_to_frontmost(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_LIST_WINDOWS
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_LIST_WINDOWS
+uint16_t uniffi_rover_swift_checksum_method_tilebackend_list_windows(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_MOSAIC_VISIBLE_WINDOWS
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_MOSAIC_VISIBLE_WINDOWS
+uint16_t uniffi_rover_swift_checksum_method_tilebackend_mosaic_visible_windows(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_REQUEST_ACCESSIBILITY
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_METHOD_TILEBACKEND_REQUEST_ACCESSIBILITY
+uint16_t uniffi_rover_swift_checksum_method_tilebackend_request_accessibility(void
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_FUZZYENGINE_NEW
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_FUZZYENGINE_NEW
 uint16_t uniffi_rover_swift_checksum_constructor_fuzzyengine_new(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_ROVERDATABASE_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_ROVERDATABASE_OPEN
 uint16_t uniffi_rover_swift_checksum_constructor_roverdatabase_open(void
-
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_SEMANTICSEARCH_OPEN
 #define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_SEMANTICSEARCH_OPEN
 uint16_t uniffi_rover_swift_checksum_constructor_semanticsearch_open(void
-
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_TILEBACKEND_NEW
+#define UNIFFI_FFIDEF_UNIFFI_ROVER_SWIFT_CHECKSUM_CONSTRUCTOR_TILEBACKEND_NEW
+uint16_t uniffi_rover_swift_checksum_constructor_tilebackend_new(void
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_FFI_ROVER_SWIFT_UNIFFI_CONTRACT_VERSION
 #define UNIFFI_FFIDEF_FFI_ROVER_SWIFT_UNIFFI_CONTRACT_VERSION
 uint32_t ffi_rover_swift_uniffi_contract_version(void
-
+    
 );
 #endif
 

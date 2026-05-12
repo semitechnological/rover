@@ -352,7 +352,7 @@ private func uniffiTraitInterfaceCallWithError<T, E>(
         callStatus.pointee.errorBuf = FfiConverterString.lower(String(describing: error))
     }
 }
-// Initial value and increment amount for handles.
+// Initial value and increment amount for handles. 
 // These ensure that SWIFT handles always have the lowest bit set
 fileprivate let UNIFFI_HANDLEMAP_INITIAL: UInt64 = 1
 fileprivate let UNIFFI_HANDLEMAP_DELTA: UInt64 = 2
@@ -467,6 +467,22 @@ fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterDouble: FfiConverterPrimitive {
+    typealias FfiType = Double
+    typealias SwiftType = Double
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Double {
+        return try lift(readDouble(&buf))
+    }
+
+    public static func write(_ value: Double, into buf: inout [UInt8]) {
+        writeDouble(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterBool : FfiConverter {
     typealias FfiType = Int8
     typealias SwiftType = Bool
@@ -539,13 +555,13 @@ fileprivate struct FfiConverterString: FfiConverter {
  * Allocate once and reuse — `FuzzyEngine` is stateless.
  */
 public protocol FuzzyEngineProtocol: AnyObject, Sendable {
-
+    
     /**
      * Score and rank `candidates` against `query`, best-first.
      * Non-matching candidates are excluded from the result.
      */
     func rank(query: String, candidates: [String])  -> [RankedItem]
-
+    
 }
 /**
  * Parallel skim-algorithm fuzzy scorer.
@@ -610,9 +626,9 @@ public convenience init() {
         try! rustCall { uniffi_rover_swift_fn_free_fuzzyengine(handle, $0) }
     }
 
+    
 
-
-
+    
     /**
      * Score and rank `candidates` against `query`, best-first.
      * Non-matching candidates are excluded from the result.
@@ -626,9 +642,9 @@ open func rank(query: String, candidates: [String]) -> [RankedItem]  {
     )
 })
 }
+    
 
-
-
+    
 }
 
 
@@ -684,52 +700,52 @@ public func FfiConverterTypeFuzzyEngine_lower(_ value: FuzzyEngine) -> UInt64 {
  * Opens (or creates) the database in `~/Library/Application Support/dev.undivisible.Rover/`.
  */
 public protocol RoverDatabaseProtocol: AnyObject, Sendable {
-
+    
     /**
      * Delete all clipboard entries.
      */
-    func clearClipboard() throws
-
+    func clearClipboard() throws 
+    
     /**
      * Return all clipboard entries, newest first.
      */
     func clipboardHistory() throws  -> [ClipboardEntry]
-
+    
     /**
      * Delete one clipboard entry by id.
      */
-    func deleteClipboard(id: Int64) throws
-
+    func deleteClipboard(id: Int64) throws 
+    
     /**
      * Read a setting. Returns `nil` if not set.
      */
     func getSetting(key: String) throws  -> String?
-
+    
     /**
      * Return the last `limit` queries, newest first.
      */
     func listQueryHistory(limit: UInt32) throws  -> [String]
-
+    
     /**
      * Log an AI tool call for audit purposes.
      */
-    func logAiAudit(toolName: String, argsJson: String, result: String) throws
-
+    func logAiAudit(toolName: String, argsJson: String, result: String) throws 
+    
     /**
      * Append a clipboard entry (deduplication handled by the DB layer).
      */
-    func pushClipboard(text: String) throws
-
+    func pushClipboard(text: String) throws 
+    
     /**
      * Push a query to history (max 100 entries, oldest auto-pruned).
      */
-    func pushQueryHistory(query: String) throws
-
+    func pushQueryHistory(query: String) throws 
+    
     /**
      * Write a setting.
      */
-    func setSetting(key: String, value: String) throws
-
+    func setSetting(key: String, value: String) throws 
+    
 }
 /**
  * SQLite-backed storage for clipboard history and key-value settings.
@@ -787,7 +803,7 @@ open class RoverDatabase: RoverDatabaseProtocol, @unchecked Sendable {
         try! rustCall { uniffi_rover_swift_fn_free_roverdatabase(handle, $0) }
     }
 
-
+    
     /**
      * Open or create the Rover database.
      */
@@ -797,9 +813,9 @@ public static func `open`()throws  -> RoverDatabase  {
     )
 })
 }
+    
 
-
-
+    
     /**
      * Delete all clipboard entries.
      */
@@ -809,7 +825,7 @@ open func clearClipboard()throws   {try rustCallWithError(FfiConverterTypeRoverE
     )
 }
 }
-
+    
     /**
      * Return all clipboard entries, newest first.
      */
@@ -820,7 +836,7 @@ open func clipboardHistory()throws  -> [ClipboardEntry]  {
     )
 })
 }
-
+    
     /**
      * Delete one clipboard entry by id.
      */
@@ -831,7 +847,7 @@ open func deleteClipboard(id: Int64)throws   {try rustCallWithError(FfiConverter
     )
 }
 }
-
+    
     /**
      * Read a setting. Returns `nil` if not set.
      */
@@ -843,7 +859,7 @@ open func getSetting(key: String)throws  -> String?  {
     )
 })
 }
-
+    
     /**
      * Return the last `limit` queries, newest first.
      */
@@ -855,7 +871,7 @@ open func listQueryHistory(limit: UInt32)throws  -> [String]  {
     )
 })
 }
-
+    
     /**
      * Log an AI tool call for audit purposes.
      */
@@ -868,7 +884,7 @@ open func logAiAudit(toolName: String, argsJson: String, result: String)throws  
     )
 }
 }
-
+    
     /**
      * Append a clipboard entry (deduplication handled by the DB layer).
      */
@@ -879,7 +895,7 @@ open func pushClipboard(text: String)throws   {try rustCallWithError(FfiConverte
     )
 }
 }
-
+    
     /**
      * Push a query to history (max 100 entries, oldest auto-pruned).
      */
@@ -890,7 +906,7 @@ open func pushQueryHistory(query: String)throws   {try rustCallWithError(FfiConv
     )
 }
 }
-
+    
     /**
      * Write a setting.
      */
@@ -902,9 +918,9 @@ open func setSetting(key: String, value: String)throws   {try rustCallWithError(
     )
 }
 }
+    
 
-
-
+    
 }
 
 
@@ -965,28 +981,28 @@ public func FfiConverterTypeRoverDatabase_lower(_ value: RoverDatabase) -> UInt6
  * from a background thread, never from the main actor.
  */
 public protocol SemanticSearchProtocol: AnyObject, Sendable {
-
+    
     /**
      * Remove all documents in a collection.
      */
-    func clearCollection(collection: String) throws
-
+    func clearCollection(collection: String) throws 
+    
     /**
      * Number of indexed documents.
      */
     func count()  -> UInt32
-
+    
     /**
      * Remove a document by id.
      */
-    func remove(id: String) throws
-
+    func remove(id: String) throws 
+    
     /**
      * Return the `top_k` most semantically similar documents to `query`.
      * Pass an empty string for `collection` to search all collections.
      */
     func search(query: String, collection: String, topK: UInt32) throws  -> [SemanticResult]
-
+    
     /**
      * Index (or re-index) a single document.
      *
@@ -994,14 +1010,14 @@ public protocol SemanticSearchProtocol: AnyObject, Sendable {
      * - `collection`: logical group: `"apps"`, `"files"`, `"clipboard"`, `"commands"`.
      * - `text`: the content to embed.
      */
-    func upsert(id: String, collection: String, text: String) throws
-
+    func upsert(id: String, collection: String, text: String) throws 
+    
     /**
      * Batch-index multiple documents in one embedding call (more efficient than
      * calling `upsert` in a loop).
      */
-    func upsertBatch(docs: [SemanticDoc]) throws
-
+    func upsertBatch(docs: [SemanticDoc]) throws 
+    
 }
 /**
  * On-device semantic search using fastembed embeddings (AllMiniLML6V2, ~33 MB).
@@ -1064,7 +1080,7 @@ open class SemanticSearch: SemanticSearchProtocol, @unchecked Sendable {
         try! rustCall { uniffi_rover_swift_fn_free_semanticsearch(handle, $0) }
     }
 
-
+    
     /**
      * Open or create the semantic index.
      * Blocks while the embedding model loads — call off the main thread.
@@ -1075,9 +1091,9 @@ public static func `open`()throws  -> SemanticSearch  {
     )
 })
 }
+    
 
-
-
+    
     /**
      * Remove all documents in a collection.
      */
@@ -1088,7 +1104,7 @@ open func clearCollection(collection: String)throws   {try rustCallWithError(Ffi
     )
 }
 }
-
+    
     /**
      * Number of indexed documents.
      */
@@ -1099,7 +1115,7 @@ open func count() -> UInt32  {
     )
 })
 }
-
+    
     /**
      * Remove a document by id.
      */
@@ -1110,7 +1126,7 @@ open func remove(id: String)throws   {try rustCallWithError(FfiConverterTypeRove
     )
 }
 }
-
+    
     /**
      * Return the `top_k` most semantically similar documents to `query`.
      * Pass an empty string for `collection` to search all collections.
@@ -1125,7 +1141,7 @@ open func search(query: String, collection: String, topK: UInt32)throws  -> [Sem
     )
 })
 }
-
+    
     /**
      * Index (or re-index) a single document.
      *
@@ -1142,7 +1158,7 @@ open func upsert(id: String, collection: String, text: String)throws   {try rust
     )
 }
 }
-
+    
     /**
      * Batch-index multiple documents in one embedding call (more efficient than
      * calling `upsert` in a loop).
@@ -1154,9 +1170,9 @@ open func upsertBatch(docs: [SemanticDoc])throws   {try rustCallWithError(FfiCon
     )
 }
 }
+    
 
-
-
+    
 }
 
 
@@ -1203,6 +1219,171 @@ public func FfiConverterTypeSemanticSearch_lower(_ value: SemanticSearch) -> UIn
 
 
 
+
+
+public protocol TileBackendProtocol: AnyObject, Sendable {
+    
+    func accessibilityEnabled()  -> Bool
+    
+    func applyToFrontmost(action: String) throws  -> TileFrame
+    
+    func listWindows()  -> [TileWindowInfo]
+    
+    func mosaicVisibleWindows(layout: String) throws  -> UInt32
+    
+    func requestAccessibility()  -> Bool
+    
+}
+open class TileBackend: TileBackendProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_rover_swift_fn_clone_tilebackend(self.handle, $0) }
+    }
+public convenience init() {
+    let handle =
+        try! rustCall() {
+    uniffi_rover_swift_fn_constructor_tilebackend_new($0
+    )
+}
+    self.init(unsafeFromHandle: handle)
+}
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_rover_swift_fn_free_tilebackend(handle, $0) }
+    }
+
+    
+
+    
+open func accessibilityEnabled() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_rover_swift_fn_method_tilebackend_accessibility_enabled(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func applyToFrontmost(action: String)throws  -> TileFrame  {
+    return try  FfiConverterTypeTileFrame_lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_tilebackend_apply_to_frontmost(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(action),$0
+    )
+})
+}
+    
+open func listWindows() -> [TileWindowInfo]  {
+    return try!  FfiConverterSequenceTypeTileWindowInfo.lift(try! rustCall() {
+    uniffi_rover_swift_fn_method_tilebackend_list_windows(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+open func mosaicVisibleWindows(layout: String)throws  -> UInt32  {
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypeRoverError_lift) {
+    uniffi_rover_swift_fn_method_tilebackend_mosaic_visible_windows(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(layout),$0
+    )
+})
+}
+    
+open func requestAccessibility() -> Bool  {
+    return try!  FfiConverterBool.lift(try! rustCall() {
+    uniffi_rover_swift_fn_method_tilebackend_request_accessibility(
+            self.uniffiCloneHandle(),$0
+    )
+})
+}
+    
+
+    
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTileBackend: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = TileBackend
+
+    public static func lift(_ handle: UInt64) throws -> TileBackend {
+        return TileBackend(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: TileBackend) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TileBackend {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: TileBackend, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTileBackend_lift(_ handle: UInt64) throws -> TileBackend {
+    return try FfiConverterTypeTileBackend.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTileBackend_lower(_ value: TileBackend) -> UInt64 {
+    return FfiConverterTypeTileBackend.lower(value)
+}
+
+
+
+
 /**
  * One clipboard history entry.
  */
@@ -1216,7 +1397,7 @@ public struct ClipboardEntry: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: Int64, content: String,
+    public init(id: Int64, content: String, 
         /**
          * Unix timestamp (seconds since epoch).
          */timestamp: Int64) {
@@ -1225,9 +1406,9 @@ public struct ClipboardEntry: Equatable, Hashable {
         self.timestamp = timestamp
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -1241,8 +1422,8 @@ public struct FfiConverterTypeClipboardEntry: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> ClipboardEntry {
         return
             try ClipboardEntry(
-                id: FfiConverterInt64.read(from: &buf),
-                content: FfiConverterString.read(from: &buf),
+                id: FfiConverterInt64.read(from: &buf), 
+                content: FfiConverterString.read(from: &buf), 
                 timestamp: FfiConverterInt64.read(from: &buf)
         )
     }
@@ -1282,7 +1463,7 @@ public struct RankedItem: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(candidate: String,
+    public init(candidate: String, 
         /**
          * Skim score — higher is better. Typical range 0–10 000.
          */score: Int64) {
@@ -1290,9 +1471,9 @@ public struct RankedItem: Equatable, Hashable {
         self.score = score
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -1306,7 +1487,7 @@ public struct FfiConverterTypeRankedItem: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> RankedItem {
         return
             try RankedItem(
-                candidate: FfiConverterString.read(from: &buf),
+                candidate: FfiConverterString.read(from: &buf), 
                 score: FfiConverterInt64.read(from: &buf)
         )
     }
@@ -1349,9 +1530,9 @@ public struct SemanticDoc: Equatable, Hashable {
         self.text = text
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -1365,8 +1546,8 @@ public struct FfiConverterTypeSemanticDoc: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SemanticDoc {
         return
             try SemanticDoc(
-                id: FfiConverterString.read(from: &buf),
-                collection: FfiConverterString.read(from: &buf),
+                id: FfiConverterString.read(from: &buf), 
+                collection: FfiConverterString.read(from: &buf), 
                 text: FfiConverterString.read(from: &buf)
         )
     }
@@ -1408,7 +1589,7 @@ public struct SemanticResult: Equatable, Hashable {
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, collection: String, text: String,
+    public init(id: String, collection: String, text: String, 
         /**
          * Cosine similarity score in [-1, 1]. Higher is more relevant.
          */score: Float) {
@@ -1418,9 +1599,9 @@ public struct SemanticResult: Equatable, Hashable {
         self.score = score
     }
 
+    
 
-
-
+    
 }
 
 #if compiler(>=6)
@@ -1434,9 +1615,9 @@ public struct FfiConverterTypeSemanticResult: FfiConverterRustBuffer {
     public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SemanticResult {
         return
             try SemanticResult(
-                id: FfiConverterString.read(from: &buf),
-                collection: FfiConverterString.read(from: &buf),
-                text: FfiConverterString.read(from: &buf),
+                id: FfiConverterString.read(from: &buf), 
+                collection: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf), 
                 score: FfiConverterFloat.read(from: &buf)
         )
     }
@@ -1465,25 +1646,145 @@ public func FfiConverterTypeSemanticResult_lower(_ value: SemanticResult) -> Rus
 }
 
 
+public struct TileFrame: Equatable, Hashable {
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TileFrame: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTileFrame: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TileFrame {
+        return
+            try TileFrame(
+                x: FfiConverterDouble.read(from: &buf), 
+                y: FfiConverterDouble.read(from: &buf), 
+                width: FfiConverterDouble.read(from: &buf), 
+                height: FfiConverterDouble.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TileFrame, into buf: inout [UInt8]) {
+        FfiConverterDouble.write(value.x, into: &buf)
+        FfiConverterDouble.write(value.y, into: &buf)
+        FfiConverterDouble.write(value.width, into: &buf)
+        FfiConverterDouble.write(value.height, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTileFrame_lift(_ buf: RustBuffer) throws -> TileFrame {
+    return try FfiConverterTypeTileFrame.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTileFrame_lower(_ value: TileFrame) -> RustBuffer {
+    return FfiConverterTypeTileFrame.lower(value)
+}
+
+
+public struct TileWindowInfo: Equatable, Hashable {
+    public var appName: String
+    public var title: String
+    public var frame: TileFrame
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(appName: String, title: String, frame: TileFrame) {
+        self.appName = appName
+        self.title = title
+        self.frame = frame
+    }
+
+    
+
+    
+}
+
+#if compiler(>=6)
+extension TileWindowInfo: Sendable {}
+#endif
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeTileWindowInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> TileWindowInfo {
+        return
+            try TileWindowInfo(
+                appName: FfiConverterString.read(from: &buf), 
+                title: FfiConverterString.read(from: &buf), 
+                frame: FfiConverterTypeTileFrame.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: TileWindowInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.appName, into: &buf)
+        FfiConverterString.write(value.title, into: &buf)
+        FfiConverterTypeTileFrame.write(value.frame, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTileWindowInfo_lift(_ buf: RustBuffer) throws -> TileWindowInfo {
+    return try FfiConverterTypeTileWindowInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeTileWindowInfo_lower(_ value: TileWindowInfo) -> RustBuffer {
+    return FfiConverterTypeTileWindowInfo.lower(value)
+}
+
+
 /**
  * Unified error type for all fallible Rover backend operations.
  */
 public enum RoverError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
-
-
+    
+    
     case Internal(message: String
     )
 
+    
 
+    
 
-
-
-
+    
     public var errorDescription: String? {
         String(reflecting: self)
     }
-
+    
 }
 
 #if compiler(>=6)
@@ -1500,9 +1801,9 @@ public struct FfiConverterTypeRoverError: FfiConverterRustBuffer {
         let variant: Int32 = try readInt(&buf)
         switch variant {
 
+        
 
-
-
+        
         case 1: return .Internal(
             message: try FfiConverterString.read(from: &buf)
             )
@@ -1514,14 +1815,14 @@ public struct FfiConverterTypeRoverError: FfiConverterRustBuffer {
     public static func write(_ value: RoverError, into buf: inout [UInt8]) {
         switch value {
 
+        
 
-
-
-
+        
+        
         case let .Internal(message):
             writeInt(&buf, Int32(1))
             FfiConverterString.write(message, into: &buf)
-
+            
         }
     }
 }
@@ -1689,6 +1990,31 @@ fileprivate struct FfiConverterSequenceTypeSemanticResult: FfiConverterRustBuffe
         return seq
     }
 }
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeTileWindowInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [TileWindowInfo]
+
+    public static func write(_ value: [TileWindowInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeTileWindowInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [TileWindowInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [TileWindowInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeTileWindowInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
 /**
  * Returns `true` if Apple Intelligence (FoundationModels) is available and ready
  * on this device. Cheap synchronous check — safe to call on any thread.
@@ -1766,6 +2092,21 @@ private let initializationResult: InitializationResult = {
     if (uniffi_rover_swift_checksum_method_semanticsearch_upsert_batch() != 51083) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_rover_swift_checksum_method_tilebackend_accessibility_enabled() != 13305) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_tilebackend_apply_to_frontmost() != 42098) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_tilebackend_list_windows() != 1717) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_tilebackend_mosaic_visible_windows() != 57698) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_method_tilebackend_request_accessibility() != 2228) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_rover_swift_checksum_constructor_fuzzyengine_new() != 3987) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -1773,6 +2114,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_rover_swift_checksum_constructor_semanticsearch_open() != 63876) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_rover_swift_checksum_constructor_tilebackend_new() != 46880) {
         return InitializationResult.apiChecksumMismatch
     }
 

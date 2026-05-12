@@ -49,6 +49,34 @@ struct PluginTests {
         #expect(value == "🚀")
     }
 
+    @Test func editorPluginRoutesModes() {
+        let plugin = EditorPlugin()
+
+        let markdown = plugin.query("markdown")
+        #expect(markdown.first?.title == "Markdown Editor")
+
+        let action = plugin.confirm(itemID: "editor.code", query: "code", secondary: false)
+        guard case .openEditor(let mode) = action else {
+            Issue.record("expected openEditor")
+            return
+        }
+        #expect(mode == .code)
+    }
+
+    @Test func tilePluginRoutesCommands() {
+        let plugin = TilePlugin()
+
+        let results = plugin.query("mosaic")
+        #expect(results.contains { $0.id == "tile.grid" })
+
+        let action = plugin.confirm(itemID: "tile.left-half", query: "tile left", secondary: false)
+        guard case .runTile(let command) = action else {
+            Issue.record("expected runTile")
+            return
+        }
+        #expect(command == .frontmost("left-half"))
+    }
+
     @Test func registrySortsPluginResultsByScore() {
         let registry = PluginRegistry()
         registry.register(CalculatorPlugin())

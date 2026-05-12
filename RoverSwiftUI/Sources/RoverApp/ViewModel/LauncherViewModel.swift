@@ -151,6 +151,14 @@ final class LauncherViewModel {
             openTerminalApp(command: cmd)
             dismiss()
 
+        case .openEditor(let mode):
+            EditorWindowController.shared.show(mode: mode)
+            dismiss()
+
+        case .runTile(let command):
+            runTile(command)
+            dismiss()
+
         case .openSettings:
             NotificationCenter.default.post(name: .roverOpenSettings, object: nil)
 
@@ -171,6 +179,26 @@ final class LauncherViewModel {
 
     private func openTerminalApp(command: String?) {
         TerminalWindowController.shared.show(command: command)
+    }
+
+    private func runTile(_ command: TileCommand) {
+        let tile = TileBackend()
+        do {
+            switch command {
+            case .frontmost(let action):
+                _ = try tile.applyToFrontmost(action: action)
+            case .mosaic(let layout):
+                _ = try tile.mosaicVisibleWindows(layout: layout)
+            case .requestAccessibility:
+                _ = tile.requestAccessibility()
+            }
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Tile action failed"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
     }
 
     private func appURL(named name: String) -> URL? {

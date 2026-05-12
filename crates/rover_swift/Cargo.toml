@@ -13,10 +13,12 @@ crate-type = ["cdylib", "staticlib"]
 rover_db               = { workspace = true }
 rover_fuzzy            = { workspace = true }
 rover_semantic         = { workspace = true }
+tile_ax                = { workspace = true }
+tile_core              = { workspace = true }
 rs_ai_local            = { workspace = true }
 
 # UniFFI / eqswift code generation
-eqswift  = { path = "../../../../../../eqswift/eq-swift" }
+eqswift  = { path = "../../../eqswift/eq-swift" }
 uniffi   = { version = "0.31", features = ["cli"] }
 
 # Utilities

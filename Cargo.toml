@@ -39,4 +39,6 @@ rayon       = "1"
 rover_db       = { path = "crates/rover_db" }
 rover_fuzzy    = { path = "crates/rover_fuzzy" }
 rover_semantic = { path = "crates/rover_semantic" }
+tile_ax        = { path = "crates/tile_ax" }
+tile_core      = { path = "crates/tile_core" }
 rs_ai_local    = { path = "/Users/undivisible/projects/rs_ai/crates/rs_ai_local", features = ["foundationmodels"] }

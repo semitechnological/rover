@@ -61,7 +61,10 @@ impl WindowObserverManager {
             let mut observer: CFTypeRef = std::ptr::null();
             let err = AXObserverCreate(pid, observer_callback, &mut observer);
             if err != K_AX_ERROR_SUCCESS || observer.is_null() {
-                warn!("Failed to create AX observer for pid {}: error {}", pid, err);
+                warn!(
+                    "Failed to create AX observer for pid {}: error {}",
+                    pid, err
+                );
                 return false;
             }
 

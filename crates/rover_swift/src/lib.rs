@@ -16,6 +16,7 @@
 use rover_db::{RoverDb, RoverDbOptions};
 use rover_fuzzy::{match_strings, normalize_query, StringMatchCandidate};
 use std::sync::{Arc, Mutex};
+use tile_core::{Rect, TileAction};
 
 eqswift::setup!();
 
@@ -342,6 +343,229 @@ fn semantic_db_path() -> anyhow::Result<std::path::PathBuf> {
 #[uniffi::export]
 pub fn ai_is_available() -> bool {
     rs_ai_local::foundationmodels::is_available()
+}
+
+#[derive(eqswift::Object, Default)]
+pub struct TileBackend;
+
+#[eqswift::export]
+impl TileBackend {
+    #[uniffi::constructor]
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn accessibility_enabled(&self) -> bool {
+        tile_ax::check_accessibility_permission()
+    }
+
+    pub fn request_accessibility(&self) -> bool {
+        tile_ax::request_accessibility_permission()
+    }
+
+    pub fn list_windows(&self) -> Vec<TileWindowInfo> {
+        tile_ax::list_visible_windows()
+            .into_iter()
+            .filter(|window| !window.is_minimized)
+            .map(|window| TileWindowInfo {
+                app_name: window.app_name,
+                title: window.title,
+                frame: TileFrame::from_rect(window.frame),
+            })
+            .collect()
+    }
+
+    pub fn apply_to_frontmost(&self, action: String) -> Result<TileFrame, RoverError> {
+        if !self.accessibility_enabled() {
+            return Err(RoverError::Internal {
+                message: "Accessibility permission is required for Tile actions".to_string(),
+            });
+        }
+
+        let action = tile_action_from_id(&action)?;
+        let (window, _ax_ref, _app) =
+            tile_ax::get_frontmost_window().ok_or_else(|| RoverError::Internal {
+                message: "No frontmost window found".to_string(),
+            })?;
+
+        let current = match tile_ax::get_window_frame_raw(window) {
+            Some(frame) => frame,
+            None => {
+                tile_ax::release_frontmost_window(window);
+                return Err(RoverError::Internal {
+                    message: "Could not read the frontmost window frame".to_string(),
+                });
+            }
+        };
+        let screen = match screen_for_rect(current) {
+            Some(screen) => screen,
+            None => {
+                tile_ax::release_frontmost_window(window);
+                return Err(RoverError::Internal {
+                    message: "Could not determine the active screen".to_string(),
+                });
+            }
+        };
+        let frame = match action.compute_frame(screen) {
+            Some(frame) => frame,
+            None => {
+                tile_ax::release_frontmost_window(window);
+                return Err(RoverError::Internal {
+                    message: "Unsupported Tile action".to_string(),
+                });
+            }
+        };
+
+        tile_ax::set_window_frame_raw(window, frame);
+        tile_ax::release_frontmost_window(window);
+        Ok(TileFrame::from_rect(frame))
+    }
+
+    pub fn mosaic_visible_windows(&self, layout: String) -> Result<u32, RoverError> {
+        if !self.accessibility_enabled() {
+            return Err(RoverError::Internal {
+                message: "Accessibility permission is required for Tile actions".to_string(),
+            });
+        }
+
+        let mut windows: Vec<_> = tile_ax::list_visible_windows()
+            .into_iter()
+            .filter(|window| !window.is_minimized)
+            .collect();
+        if windows.is_empty() {
+            return Ok(0);
+        }
+
+        windows.sort_by(|a, b| a.app_name.cmp(&b.app_name).then(a.title.cmp(&b.title)));
+        let screen =
+            tile_ax::get_usable_screen_frame(0).unwrap_or(Rect::new(0.0, 0.0, 1920.0, 1080.0));
+        let frames = mosaic_frames(&layout, screen, windows.len());
+
+        let count = windows.len().min(frames.len());
+        for (window, frame) in windows.iter().zip(frames.into_iter()).take(count) {
+            tile_ax::set_window_frame(&window.ax_ref, frame);
+        }
+
+        Ok(count as u32)
+    }
+}
+
+#[derive(eqswift::Record, Clone)]
+pub struct TileFrame {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+impl TileFrame {
+    fn from_rect(rect: Rect) -> Self {
+        Self {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+        }
+    }
+}
+
+#[derive(eqswift::Record, Clone)]
+pub struct TileWindowInfo {
+    pub app_name: String,
+    pub title: String,
+    pub frame: TileFrame,
+}
+
+fn tile_action_from_id(id: &str) -> Result<TileAction, RoverError> {
+    let action = match id {
+        "left-half" => TileAction::LeftHalf,
+        "right-half" => TileAction::RightHalf,
+        "top-half" => TileAction::TopHalf,
+        "bottom-half" => TileAction::BottomHalf,
+        "left-third" => TileAction::LeftThird,
+        "center-third" => TileAction::CenterThird,
+        "right-third" => TileAction::RightThird,
+        "left-two-thirds" => TileAction::LeftTwoThirds,
+        "center-two-thirds" => TileAction::CenterTwoThirds,
+        "right-two-thirds" => TileAction::RightTwoThirds,
+        "top-left" => TileAction::TopLeftQuarter,
+        "top-right" => TileAction::TopRightQuarter,
+        "bottom-left" => TileAction::BottomLeftQuarter,
+        "bottom-right" => TileAction::BottomRightQuarter,
+        "maximize" => TileAction::Maximize,
+        "center" => TileAction::Center,
+        other => {
+            return Err(RoverError::Internal {
+                message: format!("Unknown Tile action: {other}"),
+            })
+        }
+    };
+    Ok(action)
+}
+
+fn screen_for_rect(rect: Rect) -> Option<Rect> {
+    let (cx, cy) = rect.center();
+    let screens = tile_ax::all_usable_frames();
+    screens
+        .iter()
+        .copied()
+        .find(|screen| screen.contains_point(cx, cy))
+        .or_else(|| screens.first().copied())
+}
+
+fn mosaic_frames(layout: &str, screen: Rect, count: usize) -> Vec<Rect> {
+    match layout {
+        "columns" => columns_frames(screen, count),
+        "rows" => rows_frames(screen, count),
+        _ => grid_frames(screen, count),
+    }
+}
+
+fn columns_frames(screen: Rect, count: usize) -> Vec<Rect> {
+    let width = screen.width / count.max(1) as f64;
+    (0..count)
+        .map(|index| {
+            Rect::new(
+                screen.x + width * index as f64,
+                screen.y,
+                width,
+                screen.height,
+            )
+        })
+        .collect()
+}
+
+fn rows_frames(screen: Rect, count: usize) -> Vec<Rect> {
+    let height = screen.height / count.max(1) as f64;
+    (0..count)
+        .map(|index| {
+            Rect::new(
+                screen.x,
+                screen.y + height * index as f64,
+                screen.width,
+                height,
+            )
+        })
+        .collect()
+}
+
+fn grid_frames(screen: Rect, count: usize) -> Vec<Rect> {
+    let columns = (count as f64).sqrt().ceil().max(1.0) as usize;
+    let rows = count.div_ceil(columns).max(1);
+    let width = screen.width / columns as f64;
+    let height = screen.height / rows as f64;
+    (0..count)
+        .map(|index| {
+            let column = index % columns;
+            let row = index / columns;
+            Rect::new(
+                screen.x + width * column as f64,
+                screen.y + height * row as f64,
+                width,
+                height,
+            )
+        })
+        .collect()
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -43,9 +43,23 @@ public enum ConfirmAction: Sendable {
     case runShell(String)
     case copyToClipboard(String)
     case openTerminal(initialCommand: String?)
+    case openEditor(EditorMode)
+    case runTile(TileCommand)
     case openSettings
     case enterSubmenu(title: String, pluginID: String)
     case stay
+}
+
+public enum EditorMode: String, Sendable {
+    case code
+    case text
+    case markdown
+}
+
+public enum TileCommand: Sendable, Equatable {
+    case frontmost(String)
+    case mosaic(String)
+    case requestAccessibility
 }
 
 // MARK: - Inline card

@@ -56,9 +56,7 @@ impl Node {
             return Some(self);
         }
         match self {
-            Node::Split {
-                first, second, ..
-            } => first.find(target).or_else(|| second.find(target)),
+            Node::Split { first, second, .. } => first.find(target).or_else(|| second.find(target)),
             Node::Pane { .. } => None,
         }
     }
@@ -69,9 +67,7 @@ impl Node {
             return Some(self);
         }
         match self {
-            Node::Split {
-                first, second, ..
-            } => {
+            Node::Split { first, second, .. } => {
                 if let Some(n) = first.find_mut(target) {
                     Some(n)
                 } else {
@@ -92,9 +88,7 @@ impl Node {
                     None
                 }
             }
-            Node::Split {
-                first, second, ..
-            } => first
+            Node::Split { first, second, .. } => first
                 .find_pane_with_window(window_id)
                 .or_else(|| second.find_pane_with_window(window_id)),
         }
@@ -110,9 +104,7 @@ impl Node {
                     None
                 }
             }
-            Node::Split {
-                first, second, ..
-            } => first
+            Node::Split { first, second, .. } => first
                 .find_pane_by_pid(pid)
                 .or_else(|| second.find_pane_by_pid(pid)),
         }
@@ -122,9 +114,7 @@ impl Node {
     pub fn pane_ids(&self) -> Vec<NodeId> {
         match self {
             Node::Pane { id, .. } => vec![*id],
-            Node::Split {
-                first, second, ..
-            } => {
+            Node::Split { first, second, .. } => {
                 let mut ids = first.pane_ids();
                 ids.extend(second.pane_ids());
                 ids
@@ -136,9 +126,7 @@ impl Node {
     pub fn all_windows(&self) -> Vec<&ManagedWindow> {
         match self {
             Node::Pane { tabs, .. } => tabs.iter().collect(),
-            Node::Split {
-                first, second, ..
-            } => {
+            Node::Split { first, second, .. } => {
                 let mut wins = first.all_windows();
                 wins.extend(second.all_windows());
                 wins
@@ -150,9 +138,7 @@ impl Node {
     pub fn pane_count(&self) -> usize {
         match self {
             Node::Pane { .. } => 1,
-            Node::Split {
-                first, second, ..
-            } => first.pane_count() + second.pane_count(),
+            Node::Split { first, second, .. } => first.pane_count() + second.pane_count(),
         }
     }
 
@@ -160,9 +146,7 @@ impl Node {
     pub fn window_count(&self) -> usize {
         match self {
             Node::Pane { tabs, .. } => tabs.len(),
-            Node::Split {
-                first, second, ..
-            } => first.window_count() + second.window_count(),
+            Node::Split { first, second, .. } => first.window_count() + second.window_count(),
         }
     }
 
@@ -203,9 +187,7 @@ impl Node {
             return None;
         }
         match self {
-            Node::Split {
-                first, second, ..
-            } => first
+            Node::Split { first, second, .. } => first
                 .split_pane(pane_id, orientation, ratio)
                 .or_else(|| second.split_pane(pane_id, orientation, ratio)),
             Node::Pane { .. } => None,
@@ -215,14 +197,14 @@ impl Node {
     /// Add a window as a tab to the specified pane.
     pub fn stack_window(&mut self, pane_id: NodeId, window: ManagedWindow) -> bool {
         match self {
-            Node::Pane { tabs, active, id, .. } if *id == pane_id => {
+            Node::Pane {
+                tabs, active, id, ..
+            } if *id == pane_id => {
                 tabs.push(window);
                 *active = tabs.len() - 1;
                 true
             }
-            Node::Split {
-                first, second, ..
-            } => {
+            Node::Split { first, second, .. } => {
                 if first.stack_window(pane_id, window.clone()) {
                     true
                 } else {
@@ -248,9 +230,7 @@ impl Node {
                     None
                 }
             }
-            Node::Split {
-                first, second, ..
-            } => first
+            Node::Split { first, second, .. } => first
                 .remove_window(window_id)
                 .or_else(|| second.remove_window(window_id)),
         }
@@ -258,10 +238,7 @@ impl Node {
 
     /// Remove empty panes and collapse single-child splits.
     pub fn cleanup(&mut self) {
-        if let Node::Split {
-            first, second, ..
-        } = self
-        {
+        if let Node::Split { first, second, .. } = self {
             first.cleanup();
             second.cleanup();
 
@@ -299,9 +276,9 @@ impl Node {
                 *zoomed = !*zoomed;
                 true
             }
-            Node::Split {
-                first, second, ..
-            } => first.toggle_zoom(pane_id) || second.toggle_zoom(pane_id),
+            Node::Split { first, second, .. } => {
+                first.toggle_zoom(pane_id) || second.toggle_zoom(pane_id)
+            }
             _ => false,
         }
     }
@@ -310,9 +287,9 @@ impl Node {
     pub fn has_zoomed_pane(&self) -> Option<NodeId> {
         match self {
             Node::Pane { id, zoomed, .. } if *zoomed => Some(*id),
-            Node::Split {
-                first, second, ..
-            } => first.has_zoomed_pane().or_else(|| second.has_zoomed_pane()),
+            Node::Split { first, second, .. } => {
+                first.has_zoomed_pane().or_else(|| second.has_zoomed_pane())
+            }
             _ => None,
         }
     }
@@ -364,10 +341,7 @@ impl Node {
 
     pub fn first_split_id(&self) -> Option<NodeId> {
         match self {
-            Node::Split {
-                id,
-                ..
-            } => Some(*id),
+            Node::Split { id, .. } => Some(*id),
             Node::Pane { .. } => None,
         }
     }
@@ -556,7 +530,13 @@ impl TileTree {
     /// Returns the index of the newly active tab, or None if the pane was not found
     /// or has fewer than 2 tabs.
     pub fn cycle_tab(&mut self, pane_id: NodeId, forward: bool) -> Option<usize> {
-        if let Some(Node::Pane { tabs, active, id: _, .. }) = self.root.find_mut(pane_id) {
+        if let Some(Node::Pane {
+            tabs,
+            active,
+            id: _,
+            ..
+        }) = self.root.find_mut(pane_id)
+        {
             if tabs.len() < 2 {
                 return None;
             }
@@ -834,7 +814,9 @@ mod tests {
     fn test_split_nested() {
         let mut node = Node::new_pane_with(test_window("win1"));
         let pane_id = node.id();
-        let new_id = node.split_pane(pane_id, Orientation::Horizontal, 0.5).unwrap();
+        let new_id = node
+            .split_pane(pane_id, Orientation::Horizontal, 0.5)
+            .unwrap();
         let newer_id = node.split_pane(new_id, Orientation::Vertical, 0.5);
         assert!(newer_id.is_some());
         assert_eq!(node.pane_count(), 3);
@@ -906,7 +888,9 @@ mod tests {
     fn test_stack_window_in_nested_split() {
         let mut node = Node::new_pane_with(test_window("win1"));
         let pane_id = node.id();
-        let new_id = node.split_pane(pane_id, Orientation::Horizontal, 0.5).unwrap();
+        let new_id = node
+            .split_pane(pane_id, Orientation::Horizontal, 0.5)
+            .unwrap();
         let success = node.stack_window(new_id, test_window("stacked"));
         assert!(success);
         assert_eq!(node.window_count(), 2);
@@ -975,7 +959,10 @@ mod tests {
     #[test]
     fn test_navigate_focus_all_four_directions() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
         tree.add_window(test_window("tl"));
         tree.add_window(test_window("tr"));
 
@@ -1083,7 +1070,10 @@ mod tests {
     #[test]
     fn test_layout_single_pane_fills_screen() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
         tree.add_window(test_window("win1"));
 
         let layout = tree.compute_layout(screen());
@@ -1098,7 +1088,10 @@ mod tests {
     #[test]
     fn test_layout_single_pane_with_gaps() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 10.0, inner: 8.0 };
+        tree.gaps = GapConfig {
+            outer: 10.0,
+            inner: 8.0,
+        };
         tree.add_window(test_window("win1"));
 
         let layout = tree.compute_layout(screen());
@@ -1113,7 +1106,10 @@ mod tests {
     #[test]
     fn test_layout_two_horizontal_panes_split_width() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
         tree.add_window(test_window("win1"));
         tree.add_window(test_window("win2"));
 
@@ -1131,7 +1127,10 @@ mod tests {
     #[test]
     fn test_layout_two_vertical_panes_split_height() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
 
         let w1 = test_window("top");
         tree.add_window(w1);
@@ -1153,7 +1152,10 @@ mod tests {
     #[test]
     fn test_layout_nested_splits() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
         tree.add_window(test_window("win1"));
         tree.add_window(test_window("win2"));
         tree.add_window(test_window("win3"));
@@ -1169,7 +1171,10 @@ mod tests {
     #[test]
     fn test_layout_zoomed_pane_fills_screen() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
         tree.add_window(test_window("win1"));
         tree.add_window(test_window("win2"));
 
@@ -1187,7 +1192,10 @@ mod tests {
     #[test]
     fn test_layout_with_inner_gaps() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 20.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 20.0,
+        };
         tree.add_window(test_window("win1"));
         tree.add_window(test_window("win2"));
 
@@ -1209,7 +1217,10 @@ mod tests {
     #[test]
     fn test_layout_uneven_ratio() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
         tree.add_window(test_window("win1"));
         tree.add_window(test_window("win2"));
 
@@ -1252,7 +1263,13 @@ mod tests {
         tree.add_window(test_window("win3"));
 
         fn set_ratios(node: &mut Node, val: f32) {
-            if let Node::Split { ratio, first, second, .. } = node {
+            if let Node::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } = node
+            {
                 *ratio = val;
                 set_ratios(first, val);
                 set_ratios(second, val);
@@ -1263,7 +1280,13 @@ mod tests {
         tree.root.equalize_all();
 
         fn check_ratios(node: &Node) {
-            if let Node::Split { ratio, first, second, .. } = node {
+            if let Node::Split {
+                ratio,
+                first,
+                second,
+                ..
+            } = node
+            {
                 assert_eq!(*ratio, 0.5);
                 check_ratios(first);
                 check_ratios(second);
@@ -1310,7 +1333,10 @@ mod tests {
     #[test]
     fn test_zoom_affects_layout() {
         let mut tree = TileTree::new();
-        tree.gaps = GapConfig { outer: 0.0, inner: 0.0 };
+        tree.gaps = GapConfig {
+            outer: 0.0,
+            inner: 0.0,
+        };
         tree.add_window(test_window("win1"));
         tree.add_window(test_window("win2"));
         tree.add_window(test_window("win3"));
@@ -1373,7 +1399,13 @@ mod tests {
         tree.root.rotate_tree();
 
         fn count_orientations(node: &Node, h: &mut usize, v: &mut usize) {
-            if let Node::Split { orientation, first, second, .. } = node {
+            if let Node::Split {
+                orientation,
+                first,
+                second,
+                ..
+            } = node
+            {
                 match orientation {
                     Orientation::Horizontal => *h += 1,
                     Orientation::Vertical => *v += 1,
@@ -1492,7 +1524,8 @@ mod tests {
         tree.add_window(test_window("win3"));
 
         let pane_ids = tree.root.pane_ids();
-        tree.root.stack_window(pane_ids[0], test_window("tab_on_first"));
+        tree.root
+            .stack_window(pane_ids[0], test_window("tab_on_first"));
 
         if let Node::Split { ratio, .. } = &mut tree.root {
             *ratio = 0.7;
@@ -1540,7 +1573,11 @@ mod tests {
 
         let json = tree.root.serialize();
         let restored = Node::deserialize(&json).unwrap();
-        let titles: Vec<_> = restored.all_windows().iter().map(|w| w.title.clone()).collect();
+        let titles: Vec<_> = restored
+            .all_windows()
+            .iter()
+            .map(|w| w.title.clone())
+            .collect();
         assert!(titles.contains(&"Alpha".to_string()));
         assert!(titles.contains(&"Beta".to_string()));
     }
@@ -1589,7 +1626,9 @@ mod tests {
     fn test_cleanup_empty_first_child() {
         let mut node = Node::new_pane();
         let pane_id = node.id();
-        let new_id = node.split_pane(pane_id, Orientation::Horizontal, 0.5).unwrap();
+        let new_id = node
+            .split_pane(pane_id, Orientation::Horizontal, 0.5)
+            .unwrap();
         node.stack_window(new_id, test_window("in_second"));
 
         assert_eq!(node.pane_count(), 2);
@@ -1743,12 +1782,8 @@ mod tests {
         let target = Rect::new(100.0, 50.0, 800.0, 600.0);
         let source = Rect::new(0.0, 0.0, 500.0, 400.0);
 
-        let result = TileTree::snap_window_beside(
-            target,
-            source,
-            crate::types::SnapSide::Right,
-            screen,
-        );
+        let result =
+            TileTree::snap_window_beside(target, source, crate::types::SnapSide::Right, screen);
 
         assert_eq!(result.x, 900.0);
         assert_eq!(result.y, 50.0);
@@ -1762,12 +1797,8 @@ mod tests {
         let target = Rect::new(500.0, 50.0, 800.0, 600.0);
         let source = Rect::new(0.0, 0.0, 400.0, 400.0);
 
-        let result = TileTree::snap_window_beside(
-            target,
-            source,
-            crate::types::SnapSide::Left,
-            screen,
-        );
+        let result =
+            TileTree::snap_window_beside(target, source, crate::types::SnapSide::Left, screen);
 
         assert_eq!(result.x, 100.0);
         assert_eq!(result.y, 50.0);
@@ -1781,12 +1812,8 @@ mod tests {
         let target = Rect::new(100.0, 50.0, 800.0, 600.0);
         let source = Rect::new(0.0, 0.0, 500.0, 400.0);
 
-        let result = TileTree::snap_window_beside(
-            target,
-            source,
-            crate::types::SnapSide::Left,
-            screen,
-        );
+        let result =
+            TileTree::snap_window_beside(target, source, crate::types::SnapSide::Left, screen);
         assert_eq!(result.x, 0.0);
     }
 
@@ -1797,12 +1824,8 @@ mod tests {
         // Source wider than half screen
         let source = Rect::new(0.0, 0.0, 1200.0, 400.0);
 
-        let result = TileTree::snap_window_beside(
-            target,
-            source,
-            crate::types::SnapSide::Right,
-            screen,
-        );
+        let result =
+            TileTree::snap_window_beside(target, source, crate::types::SnapSide::Right, screen);
         // Width should be clamped to half screen = 960
         assert_eq!(result.width, 960.0);
     }

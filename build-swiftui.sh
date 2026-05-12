@@ -15,7 +15,7 @@ PROFILE="${RELEASE:+release}"
 PROFILE="${PROFILE:-debug}"
 
 # eqswift is a sibling of the rover repo inside the shared projects/ dir.
-PROJECTS_DIR="$(cd "${REPO_ROOT}/../../../.." && pwd)"
+PROJECTS_DIR="$(cd "${REPO_ROOT}/.." && pwd)"
 EQSWIFT="${PROJECTS_DIR}/eqswift"
 
 if [ ! -f "${EQSWIFT}/eq-swift/Cargo.toml" ]; then

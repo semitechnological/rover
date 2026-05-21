@@ -40,7 +40,7 @@ public final class TerminalPlugin: RoverPlugin {
                 id: "__open_terminal__",
                 pluginID: id,
                 title: "Terminal",
-                subtitle: "Open Terminal.app",
+                subtitle: "Open embedded terminal",
                 iconName: "terminal",
                 score: 0.85
             ),

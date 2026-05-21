@@ -52,7 +52,7 @@ struct LauncherView: View {
         // Measure natural height and notify the panel.
         .background(
             GeometryReader { geo in
-                Color.clear.preference(key: PanelHeightKey.self, value: geo.size.height)
+                SwiftUI.Color.clear.preference(key: PanelHeightKey.self, value: geo.size.height)
             }
         )
         .onPreferenceChange(PanelHeightKey.self) { height in

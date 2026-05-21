@@ -80,13 +80,13 @@ private struct RoverEditorView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(28)
                     }
-                    .background(Color(nsColor: .textBackgroundColor))
+                    .background(SwiftUI.Color(nsColor: .textBackgroundColor))
                 } else {
                     TextEditor(text: $text)
                         .font(mode == .code ? .system(.body, design: .monospaced) : .system(.body, design: .default))
                         .scrollContentBackground(.hidden)
                         .padding(20)
-                        .background(Color(nsColor: .textBackgroundColor))
+                        .background(SwiftUI.Color(nsColor: .textBackgroundColor))
                 }
             }
             Divider()

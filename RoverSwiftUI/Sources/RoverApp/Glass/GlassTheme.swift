@@ -23,7 +23,7 @@ extension View {
     func selectedRowBackground() -> some View {
         self.background(
             RoundedRectangle(cornerRadius: RoverGlass.rowRadius, style: .continuous)
-                .fill(Color.accentColor.opacity(0.22))
+                .fill(SwiftUI.Color.accentColor.opacity(0.22))
         )
     }
 
@@ -31,7 +31,7 @@ extension View {
     func hoverRowBackground() -> some View {
         self.background(
             RoundedRectangle(cornerRadius: RoverGlass.rowRadius, style: .continuous)
-                .fill(Color.primary.opacity(0.06))
+                .fill(SwiftUI.Color.primary.opacity(0.06))
         )
     }
 }

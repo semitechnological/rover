@@ -40,6 +40,7 @@ private struct SettingsView: View {
     enum Section: String, CaseIterable, Identifiable {
         case general  = "General"
         case hotkeys  = "Hotkeys"
+        case plugins  = "Plugins"
         case ai       = "AI"
         case data     = "Data"
         case about    = "About"
@@ -49,6 +50,7 @@ private struct SettingsView: View {
             switch self {
             case .general: "gear"
             case .hotkeys: "keyboard"
+            case .plugins: "puzzlepiece.extension"
             case .ai:      "sparkles"
             case .data:    "externaldrive"
             case .about:   "info.circle"
@@ -70,6 +72,7 @@ private struct SettingsView: View {
                 switch selectedSection {
                 case .general: GeneralSection()
                 case .hotkeys: HotkeysSection()
+                case .plugins: PluginsSection()
                 case .ai:      AISection()
                 case .data:    DataSection()
                 case .about:   AboutSection()
@@ -138,7 +141,7 @@ private struct GeneralSection: View {
                     .font(.system(size: 12, design: .monospaced))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.08)))
+                    .background(RoundedRectangle(cornerRadius: 5).fill(SwiftUI.Color.primary.opacity(0.08)))
             }
         }
     }
@@ -147,16 +150,7 @@ private struct GeneralSection: View {
 // MARK: - Hotkeys Section
 
 private struct HotkeysSection: View {
-    @AppStorage("rover.hotkeyPreset") private var hotkeyPreset = HotkeyPreset.commandSpace.rawValue
-
-    var selectedPreset: Binding<String> {
-        Binding {
-            hotkeyPreset
-        } set: { value in
-            hotkeyPreset = value
-            NotificationCenter.default.post(name: .roverHotkeyChanged, object: nil)
-        }
-    }
+    @State private var hotkey = HotkeyConfiguration.current()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -171,13 +165,10 @@ private struct HotkeysSection: View {
                         .foregroundStyle(.secondary)
                 }
             } control: {
-                Picker("", selection: selectedPreset) {
-                    ForEach(HotkeyPreset.allCases) { preset in
-                        Text(preset.display).tag(preset.rawValue)
-                    }
+                HotkeyRecorderControl(configuration: $hotkey) { configuration in
+                    configuration.save()
+                    NotificationCenter.default.post(name: .roverHotkeyChanged, object: nil)
                 }
-                .labelsHidden()
-                .frame(width: 180)
             }
 
             settingRow {
@@ -204,6 +195,151 @@ private struct HotkeysSection: View {
                 kbdBadge("⌘K")
             }
         }
+        .onAppear { hotkey = HotkeyConfiguration.current() }
+    }
+}
+
+private struct HotkeyRecorderControl: View {
+    @Binding var configuration: HotkeyConfiguration
+    let onRecord: (HotkeyConfiguration) -> Void
+    @State private var isRecording = false
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            Button {
+                message = nil
+                isRecording = true
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: isRecording ? "record.circle" : "keyboard")
+                    Text(isRecording ? "Recording..." : configuration.display)
+                        .font(.system(size: 12, design: .monospaced))
+                }
+                .frame(width: 170)
+            }
+            .buttonStyle(.bordered)
+
+            if isRecording {
+                HotkeyCaptureView { configuration in
+                    self.configuration = configuration
+                    self.onRecord(configuration)
+                    self.message = "Saved"
+                    self.isRecording = false
+                } onInvalid: {
+                    self.message = "Use at least one modifier"
+                } onCancel: {
+                    self.isRecording = false
+                    self.message = nil
+                }
+                .frame(width: 170, height: 1)
+            }
+
+            if let message {
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(message == "Saved" ? SwiftUI.Color.secondary : SwiftUI.Color.red)
+            }
+        }
+    }
+}
+
+private struct HotkeyCaptureView: NSViewRepresentable {
+    let onRecord: (HotkeyConfiguration) -> Void
+    let onInvalid: () -> Void
+    let onCancel: () -> Void
+
+    func makeNSView(context: Context) -> HotkeyCaptureNSView {
+        HotkeyCaptureNSView(onRecord: onRecord, onInvalid: onInvalid, onCancel: onCancel)
+    }
+
+    func updateNSView(_ nsView: HotkeyCaptureNSView, context: Context) {
+        nsView.onRecord = onRecord
+        nsView.onInvalid = onInvalid
+        nsView.onCancel = onCancel
+        DispatchQueue.main.async { nsView.window?.makeFirstResponder(nsView) }
+    }
+}
+
+private final class HotkeyCaptureNSView: NSView {
+    var onRecord: (HotkeyConfiguration) -> Void
+    var onInvalid: () -> Void
+    var onCancel: () -> Void
+
+    init(
+        onRecord: @escaping (HotkeyConfiguration) -> Void,
+        onInvalid: @escaping () -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.onRecord = onRecord
+        self.onInvalid = onInvalid
+        self.onCancel = onCancel
+        super.init(frame: .zero)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 {
+            onCancel()
+            return
+        }
+        guard let configuration = HotkeyConfiguration.from(event: event) else {
+            onInvalid()
+            return
+        }
+        onRecord(configuration)
+    }
+}
+
+private struct PluginsSection: View {
+    private let plugins: [(String, String, String)] = [
+        ("Rover Commands", "Settings, browser, terminal, quit", "command.square"),
+        ("Apps", "Launch installed macOS apps", "app.dashed"),
+        ("Calculator", "Inline arithmetic", "function"),
+        ("Clipboard", "Search clipboard history", "doc.on.clipboard"),
+        ("Files", "Find local files", "folder"),
+        ("Terminal", "Run shell commands in an embedded terminal", "terminal"),
+        ("Editors", "Code, text, and Markdown editor windows", "curlybraces.square"),
+        ("Browser", "Open Rover's WebKit browser", "globe"),
+        ("Tile", "Window mosaics and tiling actions", "rectangle.3.group"),
+        ("Web Search", "Search the web", "magnifyingglass"),
+        ("Google", "Google Calendar, Drive, Docs, Sheets, Gmail", "g.circle"),
+        ("macOS Tools", "System actions and utility commands", "desktopcomputer"),
+        ("Emoji", "Emoji picker and emoji search", "face.smiling"),
+        ("Help", "Plugin and shortcut hints", "questionmark.circle"),
+        ("AI", "Apple Intelligence answers", "sparkles"),
+        ("Semantic", "Local semantic search", "brain"),
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                sectionHeader("Plugins")
+                ForEach(plugins, id: \.0) { plugin in
+                    HStack(alignment: .center, spacing: 10) {
+                        Image(systemName: plugin.2)
+                            .frame(width: 18)
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(plugin.0)
+                                .font(.system(size: 13))
+                            Text(plugin.1)
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("On")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 9)
+                    Divider()
+                }
+            }
+        }
     }
 }
 
@@ -211,6 +347,7 @@ private struct HotkeysSection: View {
 
 private struct AISection: View {
     @AppStorage("rover.ai_enabled") private var aiEnabled = true
+    @AppStorage("rover.ai_auto_fallback") private var aiAutoFallback = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -226,6 +363,20 @@ private struct AISection: View {
                 }
             } control: {
                 Toggle("", isOn: $aiEnabled)
+                    .labelsHidden()
+                .toggleStyle(.switch)
+            }
+
+            settingRow {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("AI Fallback While Typing")
+                        .font(.system(size: 13))
+                    Text("Automatically ask Apple Intelligence when a query looks like a question.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+            } control: {
+                Toggle("", isOn: $aiAutoFallback)
                     .labelsHidden()
                     .toggleStyle(.switch)
             }
@@ -412,8 +563,8 @@ private func kbdBadge(_ text: String) -> some View {
         .font(.system(size: 11, design: .monospaced))
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
-        .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(0.08)))
-        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color.primary.opacity(0.15)))
+        .background(RoundedRectangle(cornerRadius: 4).fill(SwiftUI.Color.primary.opacity(0.08)))
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(SwiftUI.Color.primary.opacity(0.15)))
 }
 
 // MARK: - Import guard for FoundationModels check

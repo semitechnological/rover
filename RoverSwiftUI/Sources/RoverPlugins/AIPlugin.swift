@@ -270,7 +270,8 @@ public final class AIPlugin: RoverPlugin {
         }
         let q = query.trimmingCharacters(in: .whitespaces)
         let isExplicit = q.hasPrefix("?") || q.lowercased().hasPrefix("ai ")
-        let isLong = q.count >= 6
+        let autoFallback = UserDefaults.standard.bool(forKey: "rover.ai_auto_fallback")
+        let isLong = autoFallback && q.count >= 6
 
         guard isExplicit || isLong else {
             cancelAI()
@@ -373,7 +374,7 @@ public final class AIPlugin: RoverPlugin {
             }
         } catch {
             guard !Task.isCancelled else { return }
-            currentCard = InlineCard(kind: .ai, content: "Error: \(error.localizedDescription)")
+            currentCard = InlineCard(kind: .ai, content: Self.errorMessage(for: error))
             postUpdate()
         }
         #else
@@ -384,6 +385,17 @@ public final class AIPlugin: RoverPlugin {
 
     private func postUpdate() {
         NotificationCenter.default.post(name: .roverAIUpdate, object: nil)
+    }
+
+    private static func errorMessage(for error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.code == -1 {
+            return "Apple Intelligence failed with error -1. Disable AI fallback while typing or retry with ? after the model is ready."
+        }
+        if nsError.localizedDescription.isEmpty {
+            return "Apple Intelligence failed."
+        }
+        return "Apple Intelligence failed: \(nsError.localizedDescription)"
     }
 }
 

@@ -47,9 +47,9 @@ struct ResultRow: View {
         .contentShape(RoundedRectangle(cornerRadius: RoverGlass.rowRadius))
         .background {
             if isSelected {
-                Color.clear.selectedRowBackground()
+                SwiftUI.Color.clear.selectedRowBackground()
             } else if isHovered {
-                Color.clear.hoverRowBackground()
+                SwiftUI.Color.clear.hoverRowBackground()
             }
         }
         .padding(.horizontal, 6)

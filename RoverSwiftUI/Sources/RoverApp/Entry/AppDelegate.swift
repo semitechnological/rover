@@ -41,10 +41,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         setupStatusItem()
 
-        let preset = HotkeyPreset(rawValue: UserDefaults.standard.string(forKey: "rover.hotkeyPreset") ?? "")
-            ?? .commandSpace
-        hotkey = GlobalHotkey(id: 1, modifiers: preset.carbonModifiers) { [weak self] in self?.panel.toggle() }
-        emojiHotkey = GlobalHotkey(id: 2, modifiers: HotkeyPreset.commandOptionSpace.carbonModifiers) { [weak self] in
+        let configuredHotkey = HotkeyConfiguration.current()
+        hotkey = GlobalHotkey(id: 1, keyCode: configuredHotkey.keyCode, modifiers: configuredHotkey.modifiers) { [weak self] in self?.panel.toggle() }
+        emojiHotkey = GlobalHotkey(id: 2, keyCode: HotkeyConfiguration.defaultEmoji.keyCode, modifiers: HotkeyConfiguration.defaultEmoji.modifiers) { [weak self] in
             self?.panel.showEmojiPicker()
         }
 
@@ -103,8 +102,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func reloadHotkey() {
-        let preset = HotkeyPreset(rawValue: UserDefaults.standard.string(forKey: "rover.hotkeyPreset") ?? "")
-            ?? .commandSpace
-        hotkey.update(modifiers: preset.carbonModifiers)
+        hotkey.update(HotkeyConfiguration.current())
     }
 }

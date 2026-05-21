@@ -34,7 +34,7 @@ public final class BuiltinCommandsPlugin: RoverPlugin {
         Command(
             itemID: "rover.terminal",
             title: "Open Terminal",
-            subtitle: "Launch Terminal.app",
+            subtitle: "Open embedded terminal",
             iconName: "terminal",
             keywords: ["terminal", "shell", "console", "rover"],
             action: .openTerminal(initialCommand: nil)

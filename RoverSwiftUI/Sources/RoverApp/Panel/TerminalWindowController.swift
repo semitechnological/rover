@@ -25,7 +25,7 @@ final class TerminalWindowController: NSWindowController, NSWindowDelegate {
 
     func show(command: String? = nil) {
         lastCommand = command
-        let termView = SwiftTermView(initialCommand: command)
+        let termView = GhosttyTerminalView(initialCommand: command)
         let hosting = NSHostingView(rootView: termView)
         window?.contentView = hosting
         window?.makeKeyAndOrderFront(nil)

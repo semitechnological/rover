@@ -1,0 +1,36 @@
+dependencies = []
+
+[package]
+name = "RoverSwiftUI"
+version = "0.1.0"
+
+[app]
+bundle_id = "dev.undivisible.Rover"
+deployment_target = "26"
+sources = ".brisk-sources"
+resources = ["Resources"]
+asset_catalogs = []
+frameworks = ["AppKit", "WebKit", "Metal", "MetalKit", "CoreText", "Carbon", "CoreVideo", "QuartzCore"]
+linker_flags = ["-L", "lib", "-lrover_swift", "-L", ".build/artifacts/libghostty-spm/libghostty/GhosttyKit.xcframework/macos-arm64_x86_64", "-lghostty", "-lc++"]
+swift_flags = ["-I", "Sources/rover_swiftFFI", "-I", ".build/artifacts/libghostty-spm/libghostty/GhosttyKit.xcframework/macos-arm64_x86_64/Headers"]
+
+[app.info]
+CFBundleDisplayName = "Rover"
+CFBundleName = "Rover"
+NSHighResolutionCapable = true
+
+[build]
+architectures = ["arm64"]
+platform = "macos"
+
+[signing]
+identity = "-"
+hardened_runtime = false
+notarize = false
+
+[test]
+sources = "Tests"
+xctest = false
+
+[archive]
+zip = false

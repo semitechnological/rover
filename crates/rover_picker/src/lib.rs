@@ -77,12 +77,59 @@ pub trait PickerDelegate: Sized + 'static {
     fn execute_action(&mut self, _action_ix: usize, _cx: &mut Context<Picker<Self>>) -> bool {
         false
     }
+
+    /// Optional section header label rendered above item `ix` in the Tinycast list
+    fn section_header(&self, _ix: usize) -> Option<SharedString> {
+        None
+    }
+
+    /// Primary action verb shown in the bottom-right Liquid-Glass capsule
+    fn primary_action_label(&self) -> SharedString {
+        "Open".into()
+    }
 }
 
 #[derive(Clone)]
 pub struct ItemAction {
     pub name: SharedString,
     pub shortcut: Option<SharedString>,
+}
+
+// Tinycast Theme Token Ramp (white alpha ramp over dark scrim)
+pub const TC_SCRIM: u32 = 0x161618;
+pub const TC_PANEL_STROKE: u32 = 0x323238;
+pub const TC_SELECTION: u32 = 0x2d2d32; // white 0.10 over scrim
+pub const TC_GLASS_BG: u32 = 0x26262b; // Liquid-Glass surface
+pub const TC_BORDER: u32 = 0x46464e; // white 0.20 border for KeyCapChips & PopoverMenu
+pub const TC_CARD_FILL: u32 = 0x202025; // white 0.05 card fill
+pub const TC_CARD_STROKE: u32 = 0x2e2e34; // white 0.10 card stroke
+pub const TC_TEXT_PRIMARY: u32 = 0xffffff; // white 1.00
+pub const TC_TEXT_SECONDARY: u32 = 0x9a9aa0; // white 0.60
+pub const TC_TEXT_TERTIARY: u32 = 0x68686e; // white 0.40
+
+pub fn render_keycap_chip(label: impl Into<SharedString>) -> Div {
+    div()
+        .h(px(18.0))
+        .min_w(px(18.0))
+        .px(px(5.0))
+        .rounded(px(5.0))
+        .bg(rgb(TC_CARD_FILL))
+        .border_1()
+        .border_color(rgb(TC_BORDER))
+        .flex()
+        .items_center()
+        .justify_center()
+        .text_size(px(10.5))
+        .text_color(rgb(TC_TEXT_SECONDARY))
+        .child(label.into())
+}
+
+pub fn render_keycap_sequence(keys: &[&str]) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(3.0))
+        .children(keys.iter().map(|k| render_keycap_chip(SharedString::from((*k).to_string()))))
 }
 
 pub struct Picker<D: PickerDelegate> {
@@ -146,7 +193,7 @@ impl<D: PickerDelegate> Picker<D> {
         if self.show_actions {
             let actions = self.delegate.actions_for_selected();
             if !actions.is_empty() {
-                self.action_selected_ix = (self.action_selected_ix + 1).min(actions.len() - 1);
+                self.action_selected_ix = (self.action_selected_ix + 1) % actions.len();
                 cx.notify();
             }
             return;
@@ -167,7 +214,14 @@ impl<D: PickerDelegate> Picker<D> {
 
     fn handle_select_prev(&mut self, _: &SelectPrev, _window: &mut Window, cx: &mut Context<Self>) {
         if self.show_actions {
-            self.action_selected_ix = self.action_selected_ix.saturating_sub(1);
+            let actions = self.delegate.actions_for_selected();
+            if !actions.is_empty() {
+                self.action_selected_ix = if self.action_selected_ix == 0 {
+                    actions.len() - 1
+                } else {
+                    self.action_selected_ix - 1
+                };
+            }
             cx.notify();
             return;
         }
@@ -260,84 +314,113 @@ impl<D: PickerDelegate> Focusable for Picker<D> {
 
 impl<D: PickerDelegate> Render for Picker<D> {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let colors = {
-            let t = theme(cx);
-            t.colors.clone()
-        };
+        let _ = theme(cx);
         let match_count = self.delegate.match_count();
         let query_is_empty = self.text_input.read(cx).text().is_empty();
-
         let no_matches = self.delegate.no_matches_text();
-        let bg = colors.surface_background;
-        let border_v = colors.border_variant;
-        let text_muted = colors.text_muted;
-
         let in_submenu = self.delegate.in_submenu();
+        let primary_label = self.delegate.primary_action_label();
 
-        // In compact mode, hide suggestions until user starts typing
         let show_items = if self.compact {
             !query_is_empty && match_count > 0
         } else {
             match_count > 0
         };
 
-        // Build pills container (flex-wrap)
-        let pills = if show_items {
-            let mut pills_div = div()
-                .flex()
-                .flex_row()
-                .flex_wrap()
-                .gap(px(4.0))
-                .px_2()
-                .py_1();
-
-            for ix in 0..match_count {
-                let selected = ix == self.delegate.selected_index();
-                if let Some(el) = self.delegate.render_match(ix, selected, cx) {
-                    pills_div = pills_div.child(el);
-                }
-            }
-            Some(pills_div)
-        } else {
-            None
-        };
-
-        // Input row
+        // Tinycast floating 44px borderless search header
         let input_row = div()
-            .px_3()
-            .py_2()
-            .border_b_1()
-            .border_color(border_v)
+            .w_full()
+            .h(px(44.0))
+            .px(px(16.0))
             .flex()
             .items_center()
-            .gap_2()
-            .when(in_submenu, |el| {
-                el.child(
-                    div()
-                        .text_color(colors.text_muted)
-                        .text_size(px(14.0))
-                        .child(SharedString::from("‹ ")),
-                )
+            .gap(px(12.0))
+            .child(if in_submenu {
+                div()
+                    .w(px(28.0))
+                    .h(px(28.0))
+                    .rounded(px(8.0))
+                    .bg(rgb(TC_CARD_FILL))
+                    .border_1()
+                    .border_color(rgb(TC_CARD_STROKE))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(TC_TEXT_SECONDARY))
+                    .text_size(px(16.0))
+                    .child(SharedString::from("‹"))
+            } else {
+                div()
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(rgb(TC_TEXT_SECONDARY))
+                    .text_size(px(15.0))
+                    .child(SharedString::from("⌕"))
             })
             .child(
                 div()
                     .flex_grow()
-                    .text_color(colors.text)
-                    .text_size(px(16.0))
+                    .text_color(rgb(TC_TEXT_PRIMARY))
+                    .text_size(px(19.0))
                     .line_height(px(24.0))
                     .child(self.text_input.clone()),
             );
+
+        // Full-bleed vertical scrollable LauncherList with section headers
+        let list_view = if show_items {
+            let mut list_div = div()
+                .id("picker-launcher-list")
+                .w_full()
+                .flex_1()
+                .overflow_y_scroll()
+                .px(px(8.0))
+                .pt(px(4.0))
+                .pb(px(10.0))
+                .flex()
+                .flex_col()
+                .gap(px(2.0));
+
+            for ix in 0..match_count {
+                if let Some(sec) = self.delegate.section_header(ix) {
+                    list_div = list_div.child(
+                        div()
+                            .w_full()
+                            .px(px(10.0))
+                            .pt(px(8.0))
+                            .pb(px(4.0))
+                            .text_size(px(11.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(TC_TEXT_SECONDARY))
+                            .child(sec),
+                    );
+                }
+                let selected = ix == self.delegate.selected_index();
+                if let Some(el) = self.delegate.render_match(ix, selected, cx) {
+                    list_div = list_div.child(el);
+                }
+            }
+            Some(list_div)
+        } else {
+            None
+        };
 
         let mut root = div()
             .id("picker")
             .key_context("Picker")
             .track_focus(&self.focus_handle)
+            .relative()
             .size_full()
             .flex()
             .flex_col()
+            .justify_between()
             .overflow_hidden()
-            .bg(bg)
-            .rounded_xl()
+            .bg(rgb(TC_SCRIM))
+            .border_1()
+            .border_color(rgb(TC_PANEL_STROKE))
+            .rounded(px(26.0))
             .shadow_lg()
             .on_action(cx.listener(Self::handle_select_next))
             .on_action(cx.listener(Self::handle_select_prev))
@@ -345,115 +428,173 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .on_action(cx.listener(Self::handle_cancel))
             .on_action(cx.listener(Self::handle_show_actions));
 
-        if self.compact {
-            // Compact mode: pills above input
-            if let Some(pills_div) = pills {
-                root = root.child(pills_div);
-            }
-            root = root.child(input_row);
-        } else {
-            // Normal mode: input on top, pills below
-            root = root.child(input_row);
-            if let Some(pills_div) = pills {
-                root = root.child(pills_div);
-            } else if !query_is_empty {
-                root = root.child(div().px_3().py_4().text_color(text_muted).child(no_matches));
-            }
+        root = root.child(input_row);
+        if let Some(list_div) = list_view {
+            root = root.child(list_div);
+        } else if !query_is_empty {
+            root = root.child(
+                div()
+                    .w_full()
+                    .flex_1()
+                    .px(px(18.0))
+                    .py(px(20.0))
+                    .text_size(px(13.5))
+                    .text_color(rgb(TC_TEXT_SECONDARY))
+                    .child(no_matches),
+            );
         }
 
-        // Action bar overlay
+        // Tinycast floating 52px Liquid-Glass bottom bar:
+        // Left: 36x36 circular `=` menu button
+        // Right: 36px-high Liquid-Glass Action Capsule (`Open [↵] | Actions [⌘] [K]`)
+        let bottom_bar = div()
+            .w_full()
+            .h(px(52.0))
+            .px(px(12.0))
+            .pb(px(10.0))
+            .pt(px(6.0))
+            .flex()
+            .items_center()
+            .justify_between()
+            .child(
+                div()
+                    .w(px(36.0))
+                    .h(px(36.0))
+                    .rounded(px(18.0))
+                    .bg(rgb(TC_GLASS_BG))
+                    .border_1()
+                    .border_color(rgb(TC_BORDER))
+                    .shadow_sm()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(15.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(TC_TEXT_SECONDARY))
+                    .child(SharedString::from("=")),
+            )
+            .child(
+                div()
+                    .h(px(36.0))
+                    .px(px(6.0))
+                    .rounded(px(18.0))
+                    .bg(rgb(TC_GLASS_BG))
+                    .border_1()
+                    .border_color(rgb(TC_BORDER))
+                    .shadow_sm()
+                    .flex()
+                    .items_center()
+                    .gap(px(2.0))
+                    .child(
+                        div()
+                            .h(px(28.0))
+                            .px(px(8.0))
+                            .rounded(px(14.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(TC_TEXT_PRIMARY))
+                                    .child(primary_label),
+                            )
+                            .child(render_keycap_chip("↵")),
+                    )
+                    .child(div().w(px(1.0)).h(px(14.0)).bg(rgb(TC_BORDER)))
+                    .child(
+                        div()
+                            .h(px(28.0))
+                            .px(px(8.0))
+                            .rounded(px(14.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(TC_TEXT_SECONDARY))
+                                    .child(SharedString::from("Actions")),
+                            )
+                            .child(render_keycap_sequence(&["⌘", "K"])),
+                    ),
+            );
+
+        root = root.child(bottom_bar);
+
+        // Tinycast 284px PopoverMenu floating above the bottom bar
         if self.show_actions {
             let actions = self.delegate.actions_for_selected();
             if !actions.is_empty() {
                 root = root.child(
                     div()
-                        .border_t_1()
-                        .border_color(border_v)
-                        .bg(colors.surface_background)
-                        .px_1()
-                        .py_1()
+                        .absolute()
+                        .bottom(px(52.0))
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .px(px(12.0))
+                        .pb(px(4.0))
                         .flex()
-                        .flex_col()
-                        .gap(px(2.0))
-                        .children(actions.iter().enumerate().map(|(ix, action)| {
-                            let selected = ix == self.action_selected_ix;
-                            let mut row = div()
-                                .px_2()
-                                .py(px(4.0))
-                                .rounded_md()
+                        .justify_end()
+                        .child(
+                            div()
+                                .w(px(284.0))
+                                .rounded(px(16.0))
+                                .bg(rgb(0x1e1e22))
+                                .border_1()
+                                .border_color(rgb(TC_BORDER))
+                                .shadow_lg()
+                                .p(px(6.0))
                                 .flex()
-                                .items_center()
-                                .justify_between();
-                            if selected {
-                                row = row.bg(colors.element_selected);
-                            }
-                            row.child(
-                                div()
-                                    .text_color(colors.text)
-                                    .text_size(px(13.0))
-                                    .child(action.name.clone()),
-                            )
-                            .when(
-                                action.shortcut.is_some(),
-                                |el: Div| {
-                                    let shortcut = action.shortcut.clone().unwrap();
-                                    el.child(
-                                        div()
-                                            .text_color(colors.text_muted)
-                                            .text_size(px(11.0))
-                                            .child(shortcut),
-                                    )
-                                },
-                            )
-                        })),
+                                .flex_col()
+                                .gap(px(2.0))
+                                .children(actions.iter().enumerate().map(|(ix, action)| {
+                                    let selected = ix == self.action_selected_ix;
+                                    div()
+                                        .px(px(10.0))
+                                        .py(px(6.0))
+                                        .rounded(px(10.0))
+                                        .bg(rgb(if selected { TC_SELECTION } else { 0x1e1e22 }))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_color(rgb(TC_TEXT_PRIMARY))
+                                                .text_size(px(12.5))
+                                                .child(action.name.clone()),
+                                        )
+                                        .when_some(action.shortcut.clone(), |el, shortcut| {
+                                            el.child(render_keycap_chip(shortcut))
+                                        })
+                                }))
+                                .child(
+                                    div()
+                                        .mt(px(4.0))
+                                        .pt(px(6.0))
+                                        .px(px(10.0))
+                                        .pb(px(4.0))
+                                        .border_t_1()
+                                        .border_color(rgb(TC_CARD_STROKE))
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(rgb(TC_TEXT_TERTIARY))
+                                                .child(SharedString::from("Search for actions...")),
+                                        )
+                                        .child(render_keycap_sequence(&["⌘", "K"])),
+                                ),
+                        ),
                 );
             }
-        }
-
-        // Footer
-        let footer_left = if in_submenu {
-            "ESC to go back"
-        } else if self.show_actions {
-            "ESC to close"
-        } else {
-            ""
-        };
-
-        let footer_right = if self.show_actions {
-            SharedString::from("Actions")
-        } else if in_submenu {
-            SharedString::from(format!("{} items", match_count))
-        } else if match_count > 0 {
-            SharedString::from("\u{2318}K Actions")
-        } else {
-            SharedString::default()
-        };
-
-        if !footer_left.is_empty() || !footer_right.is_empty() {
-            root = root.child(
-                div()
-                    .px_3()
-                    .py_1()
-                    .border_t_1()
-                    .border_color(border_v)
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(11.0))
-                            .child(SharedString::from(footer_left)),
-                    )
-                    .child(
-                        div()
-                            .text_color(colors.text_muted)
-                            .text_size(px(11.0))
-                            .child(footer_right),
-                    ),
-            );
         }
 
         root
     }
 }
+

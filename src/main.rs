@@ -42,6 +42,8 @@ impl Global for WindowOpenGlobal {}
 enum CliCommand {
     /// No CLI args — normal GUI launch.
     None,
+    /// Explicitly open the Tinycast launcher picker.
+    Launcher,
     /// Open the browser at a specific URL.
     OpenUrl(String),
     /// Search the web (opens browser).
@@ -162,6 +164,8 @@ fn parse_args() -> CliCommand {
         }
 
         Some("browser") | Some("b") => CliCommand::Browser,
+
+        Some("launcher") | Some("picker") => CliCommand::Launcher,
 
         Some(unknown) => {
             eprintln!("Unknown command: {unknown}\nRun `rover help` for usage.");
@@ -321,7 +325,10 @@ fn main() {
         .detach();
 
         match cli {
-            CliCommand::None | CliCommand::Browser => {
+            CliCommand::None | CliCommand::Launcher => {
+                open_window(commands, db, cx);
+            }
+            CliCommand::Browser => {
                 rover_browser::open_browser_window(cx, Some(db));
             }
             CliCommand::OpenUrl(url) => {
@@ -340,7 +347,7 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
     let window_open_flag = cx.global::<WindowOpenGlobal>().0.clone();
     window_open_flag.store(true, Ordering::Relaxed);
 
-    let bounds = Bounds::centered(None, size(px(680.0), px(420.0)), cx);
+    let bounds = Bounds::centered(None, size(px(750.0), px(475.0)), cx);
 
     let ai_session = if cx
         .global::<DbGlobal>()

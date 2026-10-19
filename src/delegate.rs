@@ -241,190 +241,402 @@ impl RoverDelegate {
         RowOffsets { has_terminal, has_url, has_calc, has_ai, has_help, terminal_ix, url_ix, calc_ix, ai_ix, help_ix, command_offset }
     }
 
-    // ── Pill rendering helpers ──────────────────────────────────────────────
+    // ── Tinycast row rendering helpers ──────────────────────────────────────
 
-    fn pill(selected: bool, colors: &rover_theme::ThemeColors) -> Div {
-        let mut p = div()
-            .px_2()
-            .py(px(4.0))
-            .rounded_full()
-            .border_1()
+    fn icon_tile(glyph: &str, bg_hex: u32, running: bool) -> Div {
+        div()
+            .w(px(26.0))
+            .h(px(26.0))
             .flex()
+            .flex_col()
             .items_center()
-            .gap_1()
-            .cursor_pointer();
-        if selected {
-            p = p
-                .bg(colors.element_selected)
-                .border_color(colors.text_accent);
-        } else {
-            p = p
-                .bg(colors.surface_background)
-                .border_color(colors.border_variant);
-        }
-        p
+            .justify_center()
+            .child(
+                div()
+                    .w(px(24.0))
+                    .h(px(24.0))
+                    .rounded(px(6.0))
+                    .bg(rgb(bg_hex))
+                    .border_1()
+                    .border_color(rgb(0x3a3a42))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(12.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(rgb(0xffffff))
+                    .child(SharedString::from(glyph.to_string())),
+            )
+            .when(running, |tile| {
+                tile.child(
+                    div()
+                        .mt(px(1.0))
+                        .w(px(4.0))
+                        .h(px(4.0))
+                        .rounded(px(2.0))
+                        .bg(rgb(0xd4d4d8)),
+                )
+            })
     }
 
-    fn state_pill(label: &str, bg_color: Rgba, text_color: Hsla, selected: bool, colors: &rover_theme::ThemeColors) -> Div {
-        let mut p = div()
-            .px_2()
-            .py(px(4.0))
-            .rounded_full()
-            .border_1()
+    fn tinycast_row(
+        title: impl Into<String>,
+        glyph: &str,
+        bg_hex: u32,
+        running: bool,
+        keycaps: &[&str],
+        kind_label: &str,
+        selected: bool,
+    ) -> AnyElement {
+        div()
+            .w_full()
+            .h(px(36.0))
+            .px(px(10.0))
+            .rounded(px(10.0))
+            .bg(rgb(if selected {
+                rover_picker::TC_SELECTION
+            } else {
+                rover_picker::TC_SCRIM
+            }))
             .flex()
             .items_center()
-            .gap_1()
-            .cursor_pointer();
-        if selected {
-            p = p.bg(colors.element_selected).border_color(text_color);
-        } else {
-            p = p.bg(bg_color).border_color(colors.border_variant);
+            .justify_between()
+            .gap(px(10.0))
+            .cursor_pointer()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .overflow_hidden()
+                    .child(Self::icon_tile(glyph, bg_hex, running))
+                    .child(
+                        div()
+                            .text_size(px(13.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(rover_picker::TC_TEXT_PRIMARY))
+                            .child(SharedString::from(title.into())),
+                    )
+                    .when(!keycaps.is_empty(), |left| {
+                        left.child(rover_picker::render_keycap_sequence(keycaps))
+                    }),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(rgb(rover_picker::TC_TEXT_SECONDARY))
+                    .child(SharedString::from(kind_label.to_string())),
+            )
+            .into_any_element()
+    }
+
+    fn classify_command(
+        command: &Command,
+    ) -> (&'static str, &'static str, &'static str, u32, bool, Vec<&'static str>) {
+        let lower = command.name.to_ascii_lowercase();
+        match &command.kind {
+            CommandKind::LaunchApp { .. } => {
+                let is_fav = lower.contains("safari")
+                    || lower.contains("ghostty")
+                    || lower.contains("terminal")
+                    || lower.contains("zed")
+                    || lower.contains("finder");
+                let glyph = if lower.contains("safari") {
+                    "🧭"
+                } else if lower.contains("terminal") || lower.contains("ghostty") {
+                    ">_"
+                } else if lower.contains("finder") {
+                    "📁"
+                } else {
+                    "⌘"
+                };
+                (
+                    if is_fav { "Favorites" } else { "Applications" },
+                    "Application",
+                    glyph,
+                    0x2563eb,
+                    is_fav,
+                    Vec::new(),
+                )
+            }
+            CommandKind::BuiltIn { id } => match id {
+                BuiltInCommand::Browser => (
+                    "Favorites",
+                    "Browser",
+                    "🌐",
+                    0x0ea5e9,
+                    true,
+                    vec!["⌘", "B"],
+                ),
+                BuiltInCommand::OpenTerminal => (
+                    "Applications",
+                    "Application",
+                    ">_",
+                    0x10b981,
+                    true,
+                    vec!["⌘", "J"],
+                ),
+                BuiltInCommand::ClipboardHistory => (
+                    "Applications",
+                    "Application",
+                    "📋",
+                    0x0d9488,
+                    false,
+                    vec!["⌘", "⇧", "V"],
+                ),
+                BuiltInCommand::FileSearch => (
+                    "Applications",
+                    "Application",
+                    "🔎",
+                    0x3b82f6,
+                    false,
+                    vec!["⌘", "F"],
+                ),
+                BuiltInCommand::Settings => (
+                    "Applications",
+                    "Settings",
+                    "⚙",
+                    0x6366f1,
+                    false,
+                    vec!["⌘", ","],
+                ),
+                BuiltInCommand::Help => (
+                    "Applications",
+                    "Guide",
+                    "?",
+                    0x8b5cf6,
+                    false,
+                    vec!["⌘", "?"],
+                ),
+                BuiltInCommand::Snippets => (
+                    "Applications",
+                    "Command",
+                    "✂",
+                    0x64748b,
+                    false,
+                    Vec::new(),
+                ),
+            },
+            CommandKind::Action(_) => {
+                if lower.starts_with("left half") {
+                    (
+                        "Favorites",
+                        "Window Management",
+                        "◧",
+                        0x0284c7,
+                        false,
+                        vec!["⌃", "⌥", "←"],
+                    )
+                } else if lower.starts_with("right half") {
+                    (
+                        "Favorites",
+                        "Window Management",
+                        "◨",
+                        0x0284c7,
+                        false,
+                        vec!["⌃", "⌥", "→"],
+                    )
+                } else if lower == "maximize" {
+                    (
+                        "Window Management",
+                        "Window Management",
+                        "⬜",
+                        0x0284c7,
+                        false,
+                        vec!["⌃", "⌥", "↵"],
+                    )
+                } else if lower == "center" {
+                    (
+                        "Window Management",
+                        "Window Management",
+                        "⊡",
+                        0x0284c7,
+                        false,
+                        vec!["⌃", "⌥", "C"],
+                    )
+                } else if lower.contains("room") {
+                    (
+                        "Favorites",
+                        "Room",
+                        "⊞",
+                        0x7c5cff,
+                        true,
+                        vec!["⌘", "Space"],
+                    )
+                } else if lower.contains("niri") {
+                    (
+                        "Favorites",
+                        "Niri Strip",
+                        "↔",
+                        0x2563eb,
+                        false,
+                        vec!["⌘", "R"],
+                    )
+                } else {
+                    (
+                        "Window Management",
+                        "Command",
+                        "⌘",
+                        0x4f46e5,
+                        false,
+                        Vec::new(),
+                    )
+                }
+            }
+            CommandKind::OpenUrl { .. } => ("Favorites", "Browser", "🌐", 0x0ea5e9, false, Vec::new()),
+            CommandKind::Calculator { .. } => (
+                "Results",
+                "Calculator",
+                "=",
+                0xf59e0b,
+                false,
+                vec!["↵"],
+            ),
         }
-        p.child(
-            div()
-                .text_color(text_color)
-                .text_size(px(10.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(SharedString::from(label.to_string())),
-        )
+    }
+
+    fn section_for_index(&self, ix: usize) -> &'static str {
+        if !self.query.trim().is_empty() {
+            return "Results";
+        }
+        match self.view_mode {
+            ViewMode::Main => {
+                let o = self.row_offsets();
+                if ix < o.command_offset {
+                    return "Results";
+                }
+                let match_ix = ix.saturating_sub(o.command_offset);
+                if let Some(m) = self.matches.get(match_ix) {
+                    if let Some(cmd) = self.all_commands.get(m.candidate_id) {
+                        return Self::classify_command(cmd).0;
+                    }
+                }
+                "Applications"
+            }
+            ViewMode::ClipboardHistory => "Clipboard History",
+            ViewMode::FileSearch => "Files",
+        }
     }
 
     fn render_calculator_pill(
         &self,
         selected: bool,
-        colors: &rover_theme::ThemeColors,
+        _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
         let result = self.calculator_result.as_ref().unwrap();
-        Self::pill(selected, colors)
-            .child(
-                div()
-                    .text_color(colors.text_muted)
-                    .text_size(px(11.0))
-                    .child(SharedString::from("=")),
-            )
-            .child(
-                div()
-                    .text_color(colors.text_accent)
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(SharedString::from(result.clone())),
-            )
-            .into_any_element()
+        Self::tinycast_row(
+            format!("= {result}"),
+            "=",
+            0xf59e0b,
+            false,
+            &["↵"],
+            "Calculator",
+            selected,
+        )
     }
 
     fn render_command_pill(
         &self,
         command: &Command,
         selected: bool,
-        colors: &rover_theme::ThemeColors,
+        _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        let text_color = if selected { colors.text_accent } else { colors.text };
-        Self::pill(selected, colors)
-            .child(
-                div()
-                    .text_color(text_color)
-                    .text_size(px(12.0))
-                    .child(SharedString::from(command.name.clone())),
-            )
-            .when(command.has_submenu, |el| {
-                el.child(
-                    div()
-                        .text_color(colors.text_muted)
-                        .text_size(px(10.0))
-                        .child(SharedString::from(">")),
-                )
-            })
-            .into_any_element()
+        let (_sec, kind_label, glyph, bg_hex, running, keycaps) = Self::classify_command(command);
+        Self::tinycast_row(
+            command.name.clone(),
+            glyph,
+            bg_hex,
+            running,
+            &keycaps,
+            kind_label,
+            selected,
+        )
     }
 
     fn render_clipboard_pill(
         &self,
         entry: &ClipboardEntry,
         selected: bool,
-        colors: &rover_theme::ThemeColors,
+        _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
         let preview: String = entry
             .content
             .chars()
-            .take(30)
+            .take(56)
             .collect::<String>()
             .replace('\n', " ");
-        Self::pill(selected, colors)
-            .child(
-                div()
-                    .text_color(colors.text)
-                    .text_size(px(11.0))
-                    .overflow_hidden()
-                    .child(SharedString::from(preview)),
-            )
-            .into_any_element()
+        Self::tinycast_row(
+            preview,
+            "📋",
+            0x0d9488,
+            false,
+            &["↵"],
+            "Clipboard",
+            selected,
+        )
     }
 
     fn render_file_pill(
         &self,
         file: &file_search::FileResult,
         selected: bool,
-        colors: &rover_theme::ThemeColors,
+        _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        Self::pill(selected, colors)
-            .child(
-                div()
-                    .text_color(colors.text)
-                    .text_size(px(11.0))
-                    .child(SharedString::from(file.name.clone())),
-            )
-            .into_any_element()
+        Self::tinycast_row(
+            file.name.clone(),
+            "📄",
+            0x3b82f6,
+            false,
+            &["↵"],
+            "File",
+            selected,
+        )
     }
 
     fn render_terminal_pill(
         &self,
         command: &str,
         selected: bool,
-        colors: &rover_theme::ThemeColors,
+        _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        Self::state_pill("$", rgba(0x88888826u32), colors.text_muted, selected, colors)
-            .child(
-                div()
-                    .text_color(colors.text)
-                    .text_size(px(11.0))
-                    .child(SharedString::from(command.to_string())),
-            )
-            .into_any_element()
+        Self::tinycast_row(
+            format!("Run in Shell: {command}"),
+            ">_",
+            0x10b981,
+            true,
+            &["↵"],
+            "Inline Shell",
+            selected,
+        )
     }
 
     fn render_url_pill(
         &self,
         url: &str,
         selected: bool,
-        colors: &rover_theme::ThemeColors,
+        _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
-        Self::state_pill("URL", rgba(0x5588cc26u32), colors.text_accent, selected, colors)
-            .child(
-                div()
-                    .text_color(colors.text)
-                    .text_size(px(11.0))
-                    .child(SharedString::from(url.to_string())),
-            )
-            .into_any_element()
+        Self::tinycast_row(
+            format!("Open {url}"),
+            "🌐",
+            0x0ea5e9,
+            true,
+            &["↵"],
+            "Browser",
+            selected,
+        )
     }
 
-    fn render_ai_pill(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
+    fn render_ai_pill(&self, selected: bool, _colors: &rover_theme::ThemeColors) -> AnyElement {
         let text = if self.ai_loading {
             "...".to_string()
         } else {
             self.ai_result.clone().unwrap_or_default()
         };
-        Self::state_pill("AI", rgba(0x5588cc26u32), colors.text_accent, selected, colors)
-            .child(
-                div()
-                    .text_color(colors.text)
-                    .text_size(px(11.0))
-                    .child(SharedString::from(text)),
-            )
-            .into_any_element()
+        Self::tinycast_row(text, "✦", 0x7c5cff, false, &["↵"], "AI", selected)
     }
 
-    fn render_help_pill(&self, selected: bool, colors: &rover_theme::ThemeColors) -> AnyElement {
+    fn render_help_pill(&self, selected: bool, _colors: &rover_theme::ThemeColors) -> AnyElement {
         let text = if self.help_loading {
             "Searching...".to_string()
         } else if let Some(result) = &self.help_result {
@@ -436,14 +648,7 @@ impl RoverDelegate {
         } else {
             format!("Help: {}", self.help_query.as_deref().unwrap_or(""))
         };
-        Self::state_pill("?", rgba(0x34c75926u32), colors.text_accent, selected, colors)
-            .child(
-                div()
-                    .text_color(colors.text)
-                    .text_size(px(11.0))
-                    .child(SharedString::from(text)),
-            )
-            .into_any_element()
+        Self::tinycast_row(text, "?", 0x8b5cf6, false, &["↵"], "Guide", selected)
     }
 
     pub fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
@@ -492,7 +697,7 @@ impl PickerDelegate for RoverDelegate {
 
     fn placeholder_text(&self) -> Arc<str> {
         match self.view_mode {
-            ViewMode::Main => Arc::from("Do anything..."),
+            ViewMode::Main => Arc::from("Search for apps and commands..."),
             ViewMode::ClipboardHistory => Arc::from("Search clipboard history..."),
             ViewMode::FileSearch => Arc::from("Search for files..."),
         }
@@ -1160,4 +1365,50 @@ impl PickerDelegate for RoverDelegate {
             }
         }
     }
+
+    fn section_header(&self, ix: usize) -> Option<SharedString> {
+        let current = self.section_for_index(ix);
+        if ix == 0 {
+            return Some(SharedString::from(current));
+        }
+        let prev = self.section_for_index(ix - 1);
+        if current != prev {
+            Some(SharedString::from(current))
+        } else {
+            None
+        }
+    }
+
+    fn primary_action_label(&self) -> SharedString {
+        match self.view_mode {
+            ViewMode::Main => {
+                let o = self.row_offsets();
+                if o.has_terminal && self.selected_ix == o.terminal_ix {
+                    return "Run Command".into();
+                }
+                if o.has_url && self.selected_ix == o.url_ix {
+                    return "Open in Browser".into();
+                }
+                if o.has_calc && self.selected_ix == o.calc_ix {
+                    return "Copy Result".into();
+                }
+                let match_ix = self.selected_ix.saturating_sub(o.command_offset);
+                if let Some(m) = self.matches.get(match_ix) {
+                    if let Some(cmd) = self.all_commands.get(m.candidate_id) {
+                        let (_sec, kind_label, _, _, _, _) = Self::classify_command(cmd);
+                        return match kind_label {
+                            "Window Management" | "Room" | "Niri Strip" => "Manage Window".into(),
+                            "Browser" => "Open Browser".into(),
+                            "Application" => "Open Application".into(),
+                            _ => "Run Command".into(),
+                        };
+                    }
+                }
+                "Open".into()
+            }
+            ViewMode::ClipboardHistory => "Paste".into(),
+            ViewMode::FileSearch => "Open File".into(),
+        }
+    }
 }
+

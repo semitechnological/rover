@@ -137,12 +137,159 @@ impl QueryHistory {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TextMacro {
+    trigger: &'static str,
+    alt_trigger: &'static str,
+    name: &'static str,
+    template: &'static str,
+}
+
+const TEXT_MACROS: &[TextMacro] = &[
+    TextMacro {
+        trigger: "!shrug",
+        alt_trigger: ";shrug",
+        name: "Shrug",
+        template: "¯\\_(ツ)_/¯",
+    },
+    TextMacro {
+        trigger: "!flip",
+        alt_trigger: ";flip",
+        name: "Table Flip",
+        template: "(╯°□°)╯︵ ┻━┻",
+    },
+    TextMacro {
+        trigger: "!check",
+        alt_trigger: ";check",
+        name: "Checkmark",
+        template: "✓",
+    },
+    TextMacro {
+        trigger: "!date",
+        alt_trigger: ";date",
+        name: "Current Date",
+        template: "{date}",
+    },
+    TextMacro {
+        trigger: "!time",
+        alt_trigger: ";time",
+        name: "Current Time",
+        template: "{time}",
+    },
+    TextMacro {
+        trigger: "!iso",
+        alt_trigger: ";iso",
+        name: "ISO Timestamp",
+        template: "{iso}",
+    },
+    TextMacro {
+        trigger: "!uuid",
+        alt_trigger: ";uuid",
+        name: "Generate UUID",
+        template: "{uuid}",
+    },
+    TextMacro {
+        trigger: "!sig",
+        alt_trigger: ";sig",
+        name: "Signature",
+        template: "Signed-off-by: User <user@localhost>",
+    },
+    TextMacro {
+        trigger: "!local",
+        alt_trigger: ";local",
+        name: "Localhost URL",
+        template: "http://127.0.0.1:8080",
+    },
+];
+
+fn expand_macro(template: &str, arg: &str) -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(1_760_000_000);
+    let days = secs / 86_400;
+    let rem = secs % 86_400;
+    let hh = rem / 3600;
+    let mm = (rem % 3600) / 60;
+    let ss = rem % 60;
+    let year = 1970 + (days * 400) / 146_097;
+    let day_of_year = days.saturating_sub(((year - 1970) * 365) + ((year - 1969) / 4));
+    let month = ((day_of_year / 30) + 1).clamp(1, 12);
+    let day = ((day_of_year % 30) + 1).clamp(1, 28);
+    let date_str = format!("{year:04}-{month:02}-{day:02}");
+    let time_str = format!("{hh:02}:{mm:02}:{ss:02}");
+    let iso_str = format!("{date_str}T{time_str}Z");
+    let uuid_str = format!(
+        "{:08x}-{:04x}-4{:03x}-a{:03x}-{:012x}",
+        (secs & 0xffff_ffff) as u32,
+        ((secs >> 16) & 0xffff) as u16,
+        ((secs >> 4) & 0x0fff) as u16,
+        (secs & 0x0fff) as u16,
+        secs.wrapping_mul(0x9e37_79b9_7f4a_7c15) & 0xffff_ffff_ffff
+    );
+    template
+        .replace("{date}", &date_str)
+        .replace("{time}", &time_str)
+        .replace("{iso}", &iso_str)
+        .replace("{uuid}", &uuid_str)
+        .replace("{argument}", arg)
+}
+
+fn resolve_text_macro(input: &str) -> Option<(String, String)> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let (head, arg) = match trimmed.split_once(char::is_whitespace) {
+        Some((h, rest)) => (h, rest.trim()),
+        None => (trimmed, ""),
+    };
+    let lower = head.to_ascii_lowercase();
+    for m in TEXT_MACROS {
+        if lower == m.trigger || lower == m.alt_trigger {
+            return Some((m.name.to_string(), expand_macro(m.template, arg)));
+        }
+    }
+    None
+}
+
+fn parse_search_bang(input: &str) -> Option<(String, String)> {
+    let trimmed = input.trim();
+    let (head, rest) = trimmed.split_once(char::is_whitespace)?;
+    let query = rest.trim();
+    if query.is_empty() {
+        return None;
+    }
+    let bang = head.strip_prefix('!').unwrap_or(head).to_ascii_lowercase();
+    let encoded: String = query
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            b' ' => "+".to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    match bang.as_str() {
+        "g" | "google" => Some((format!("Search Google for '{query}'"), format!("https://www.google.com/search?q={encoded}"))),
+        "ddg" | "duckduckgo" => Some((format!("Search DuckDuckGo for '{query}'"), format!("https://duckduckgo.com/?q={encoded}"))),
+        "gh" | "github" => Some((format!("Search GitHub for '{query}'"), format!("https://github.com/search?q={encoded}"))),
+        "yt" | "youtube" => Some((format!("Search YouTube for '{query}'"), format!("https://www.youtube.com/results?search_query={encoded}"))),
+        "wiki" | "wikipedia" => Some((format!("Search Wikipedia for '{query}'"), format!("https://en.wikipedia.org/w/index.php?search={encoded}"))),
+        "rs" | "docs" => Some((format!("Search docs.rs for '{query}'"), format!("https://docs.rs/releases/search?query={encoded}"))),
+        "crates" | "cargo" => Some((format!("Search crates.io for '{query}'"), format!("https://crates.io/search?q={encoded}"))),
+        "hn" => Some((format!("Search Hacker News for '{query}'"), format!("https://hn.algolia.com/?q={encoded}"))),
+        _ => None,
+    }
+}
+
 struct RowOffsets {
+    has_macro: bool,
     has_terminal: bool,
     has_url: bool,
     has_calc: bool,
     has_ai: bool,
     has_help: bool,
+    macro_ix: usize,
     terminal_ix: usize,
     url_ix: usize,
     calc_ix: usize,
@@ -219,68 +366,68 @@ impl RoverDelegate {
         cx.notify();
     }
 
-    /// Returns `(has_terminal, has_url, has_calc, has_ai, terminal_ix, url_ix, calc_ix, ai_ix, command_offset)`.
     fn row_offsets(&self) -> RowOffsets {
+        let has_macro = resolve_text_macro(&self.query).is_some();
         let has_terminal = self.inline_terminal.is_some();
         let has_url = self.url_result.is_some();
         let has_calc = self.calculator_result.is_some();
         let has_ai = self.ai_loading || self.ai_result.is_some();
         let mut next = 0usize;
+        let macro_ix = next;
+        if has_macro {
+            next += 1;
+        }
         let terminal_ix = next;
-        if has_terminal { next += 1; }
+        if has_terminal {
+            next += 1;
+        }
         let url_ix = next;
-        if has_url { next += 1; }
+        if has_url {
+            next += 1;
+        }
         let calc_ix = next;
-        if has_calc { next += 1; }
+        if has_calc {
+            next += 1;
+        }
         let ai_ix = next;
-        if has_ai { next += 1; }
+        if has_ai {
+            next += 1;
+        }
         let has_help = self.help_query.is_some();
         let help_ix = next;
-        if has_help { next += 1; }
+        if has_help {
+            next += 1;
+        }
         let command_offset = next;
-        RowOffsets { has_terminal, has_url, has_calc, has_ai, has_help, terminal_ix, url_ix, calc_ix, ai_ix, help_ix, command_offset }
+        RowOffsets {
+            has_macro,
+            has_terminal,
+            has_url,
+            has_calc,
+            has_ai,
+            has_help,
+            macro_ix,
+            terminal_ix,
+            url_ix,
+            calc_ix,
+            ai_ix,
+            help_ix,
+            command_offset,
+        }
     }
 
-    // ── Tinycast row rendering helpers ──────────────────────────────────────
-
     fn icon_tile(glyph: &str, bg_hex: u32, running: bool) -> Div {
-        div()
-            .w(px(26.0))
-            .h(px(26.0))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .w(px(24.0))
-                    .h(px(24.0))
-                    .rounded(px(6.0))
-                    .bg(rgb(bg_hex))
-                    .border_1()
-                    .border_color(rgb(0x3a3a42))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(12.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(0xffffff))
-                    .child(SharedString::from(glyph.to_string())),
-            )
-            .when(running, |tile| {
-                tile.child(
-                    div()
-                        .mt(px(1.0))
-                        .w(px(4.0))
-                        .h(px(4.0))
-                        .rounded(px(2.0))
-                        .bg(rgb(0xd4d4d8)),
-                )
-            })
+        rover_picker::components::icon_tile(
+            rover_picker::icons::SfSymbol::from_glyph(glyph),
+            bg_hex,
+            0xf4f4f6,
+            running,
+        )
     }
 
     fn tinycast_row(
         title: impl Into<String>,
+        subtitle: Option<String>,
         glyph: &str,
         bg_hex: u32,
         running: bool,
@@ -290,14 +437,11 @@ impl RoverDelegate {
     ) -> AnyElement {
         div()
             .w_full()
-            .h(px(36.0))
-            .px(px(10.0))
+            .h(px(38.0))
+            .px(px(8.0))
+            .py(px(6.0))
             .rounded(px(10.0))
-            .bg(rgb(if selected {
-                rover_picker::TC_SELECTION
-            } else {
-                rover_picker::TC_SCRIM
-            }))
+            .when(selected, |el| el.bg(rgb(rover_picker::TC_SELECTION)))
             .flex()
             .items_center()
             .justify_between()
@@ -313,18 +457,25 @@ impl RoverDelegate {
                     .child(
                         div()
                             .text_size(px(13.5))
-                            .font_weight(FontWeight::MEDIUM)
                             .text_color(rgb(rover_picker::TC_TEXT_PRIMARY))
                             .child(SharedString::from(title.into())),
                     )
+                    .when_some(subtitle, |left, sub| {
+                        left.child(
+                            div()
+                                .text_size(px(12.5))
+                                .text_color(rgb(rover_picker::TC_TEXT_SECONDARY))
+                                .child(SharedString::from(sub)),
+                        )
+                    })
                     .when(!keycaps.is_empty(), |left| {
                         left.child(rover_picker::render_keycap_sequence(keycaps))
                     }),
             )
             .child(
                 div()
-                    .text_size(px(12.0))
-                    .text_color(rgb(rover_picker::TC_TEXT_SECONDARY))
+                    .text_size(px(12.5))
+                    .text_color(rgb(rover_picker::TC_TEXT_TERTIARY))
                     .child(SharedString::from(kind_label.to_string())),
             )
             .into_any_element()
@@ -348,7 +499,7 @@ impl RoverDelegate {
                 } else if lower.contains("finder") {
                     "📁"
                 } else {
-                    "⌘"
+                    "◆"
                 };
                 (
                     if is_fav { "Favorites" } else { "Applications" },
@@ -361,58 +512,58 @@ impl RoverDelegate {
             }
             CommandKind::BuiltIn { id } => match id {
                 BuiltInCommand::Browser => (
-                    "Favorites",
-                    "Browser",
+                    "Suggestions",
+                    "Command",
                     "🌐",
-                    0x0ea5e9,
-                    true,
+                    rover_picker::TC_ICON_SURFACE,
+                    false,
                     vec!["⌘", "B"],
                 ),
                 BuiltInCommand::OpenTerminal => (
-                    "Applications",
+                    "Suggestions",
                     "Application",
                     ">_",
-                    0x10b981,
+                    0x1f2937,
                     true,
                     vec!["⌘", "J"],
                 ),
                 BuiltInCommand::ClipboardHistory => (
-                    "Applications",
-                    "Application",
+                    "Suggestions",
+                    "Command",
                     "📋",
-                    0x0d9488,
+                    rover_picker::TC_ICON_SURFACE,
                     false,
                     vec!["⌘", "⇧", "V"],
                 ),
                 BuiltInCommand::FileSearch => (
-                    "Applications",
-                    "Application",
+                    "Suggestions",
+                    "Command",
                     "🔎",
-                    0x3b82f6,
+                    rover_picker::TC_ICON_SURFACE,
                     false,
                     vec!["⌘", "F"],
                 ),
                 BuiltInCommand::Settings => (
-                    "Applications",
-                    "Settings",
+                    "Commands",
+                    "Command",
                     "⚙",
-                    0x6366f1,
+                    rover_picker::TC_ICON_SURFACE,
                     false,
                     vec!["⌘", ","],
                 ),
                 BuiltInCommand::Help => (
-                    "Applications",
-                    "Guide",
+                    "Commands",
+                    "Command",
                     "?",
-                    0x8b5cf6,
+                    rover_picker::TC_ICON_SURFACE,
                     false,
-                    vec!["⌘", "?"],
+                    Vec::new(),
                 ),
                 BuiltInCommand::Snippets => (
-                    "Applications",
-                    "Command",
-                    "✂",
-                    0x64748b,
+                    "Commands",
+                    "Snippet",
+                    "{}",
+                    rover_picker::TC_ICON_SURFACE,
                     false,
                     Vec::new(),
                 ),
@@ -421,76 +572,83 @@ impl RoverDelegate {
                 if lower.starts_with("left half") {
                     (
                         "Favorites",
-                        "Window Management",
+                        "Window",
                         "◧",
-                        0x0284c7,
+                        rover_picker::TC_ICON_SURFACE,
                         false,
                         vec!["⌃", "⌥", "←"],
                     )
                 } else if lower.starts_with("right half") {
                     (
                         "Favorites",
-                        "Window Management",
+                        "Window",
                         "◨",
-                        0x0284c7,
+                        rover_picker::TC_ICON_SURFACE,
                         false,
                         vec!["⌃", "⌥", "→"],
                     )
                 } else if lower == "maximize" {
                     (
-                        "Window Management",
-                        "Window Management",
-                        "⬜",
-                        0x0284c7,
+                        "Favorites",
+                        "Window",
+                        "⤢",
+                        rover_picker::TC_ICON_SURFACE,
                         false,
                         vec!["⌃", "⌥", "↵"],
                     )
                 } else if lower == "center" {
                     (
-                        "Window Management",
-                        "Window Management",
-                        "⊡",
-                        0x0284c7,
+                        "Commands",
+                        "Window",
+                        "⌖",
+                        rover_picker::TC_ICON_SURFACE,
                         false,
                         vec!["⌃", "⌥", "C"],
                     )
                 } else if lower.contains("room") {
                     (
                         "Favorites",
-                        "Room",
+                        "Window",
                         "⊞",
-                        0x7c5cff,
-                        true,
+                        rover_picker::TC_ICON_SURFACE,
+                        false,
                         vec!["⌘", "Space"],
                     )
-                } else if lower.contains("niri") {
+                } else if lower.contains("column width") {
                     (
                         "Favorites",
-                        "Niri Strip",
+                        "Window",
                         "↔",
-                        0x2563eb,
+                        rover_picker::TC_ICON_SURFACE,
                         false,
                         vec!["⌘", "R"],
                     )
                 } else {
                     (
-                        "Window Management",
-                        "Command",
-                        "⌘",
-                        0x4f46e5,
+                        "Commands",
+                        "Window",
+                        "⊞",
+                        rover_picker::TC_ICON_SURFACE,
                         false,
                         Vec::new(),
                     )
                 }
             }
-            CommandKind::OpenUrl { .. } => ("Favorites", "Browser", "🌐", 0x0ea5e9, false, Vec::new()),
+            CommandKind::OpenUrl { .. } => (
+                "Suggestions",
+                "Quicklink",
+                "🌐",
+                rover_picker::TC_ICON_SURFACE,
+                false,
+                Vec::new(),
+            ),
             CommandKind::Calculator { .. } => (
                 "Results",
                 "Calculator",
                 "=",
                 0xf59e0b,
                 false,
-                vec!["↵"],
+                Vec::new(),
             ),
         }
     }
@@ -518,6 +676,20 @@ impl RoverDelegate {
         }
     }
 
+    fn render_macro_pill(&self, selected: bool) -> AnyElement {
+        let (name, expanded) = resolve_text_macro(&self.query).unwrap_or_default();
+        Self::tinycast_row(
+            name,
+            Some(expanded),
+            "{}",
+            0xa855f7,
+            false,
+            &[],
+            "Snippet",
+            selected,
+        )
+    }
+
     fn render_calculator_pill(
         &self,
         selected: bool,
@@ -526,10 +698,11 @@ impl RoverDelegate {
         let result = self.calculator_result.as_ref().unwrap();
         Self::tinycast_row(
             format!("= {result}"),
+            Some(self.query.trim().to_string()),
             "=",
             0xf59e0b,
             false,
-            &["↵"],
+            &[],
             "Calculator",
             selected,
         )
@@ -544,6 +717,7 @@ impl RoverDelegate {
         let (_sec, kind_label, glyph, bg_hex, running, keycaps) = Self::classify_command(command);
         Self::tinycast_row(
             command.name.clone(),
+            None,
             glyph,
             bg_hex,
             running,
@@ -567,11 +741,12 @@ impl RoverDelegate {
             .replace('\n', " ");
         Self::tinycast_row(
             preview,
+            None,
             "📋",
-            0x0d9488,
+            rover_picker::TC_ICON_SURFACE,
             false,
-            &["↵"],
-            "Clipboard",
+            &[],
+            "Snippet",
             selected,
         )
     }
@@ -584,10 +759,11 @@ impl RoverDelegate {
     ) -> AnyElement {
         Self::tinycast_row(
             file.name.clone(),
+            None,
             "📄",
-            0x3b82f6,
+            rover_picker::TC_ICON_SURFACE,
             false,
-            &["↵"],
+            &[],
             "File",
             selected,
         )
@@ -600,12 +776,13 @@ impl RoverDelegate {
         _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
         Self::tinycast_row(
-            format!("Run in Shell: {command}"),
+            format!("Run '{command}'"),
+            None,
             ">_",
             0x10b981,
             true,
-            &["↵"],
-            "Inline Shell",
+            &[],
+            "Command",
             selected,
         )
     }
@@ -616,13 +793,19 @@ impl RoverDelegate {
         selected: bool,
         _colors: &rover_theme::ThemeColors,
     ) -> AnyElement {
+        let title = if let Some((bang_title, _)) = parse_search_bang(&self.query) {
+            bang_title
+        } else {
+            format!("Open {url}")
+        };
         Self::tinycast_row(
-            format!("Open {url}"),
+            title,
+            Some(url.to_string()),
             "🌐",
             0x0ea5e9,
-            true,
-            &["↵"],
-            "Browser",
+            false,
+            &[],
+            "Quicklink",
             selected,
         )
     }
@@ -633,7 +816,7 @@ impl RoverDelegate {
         } else {
             self.ai_result.clone().unwrap_or_default()
         };
-        Self::tinycast_row(text, "✦", 0x7c5cff, false, &["↵"], "AI", selected)
+        Self::tinycast_row(text, None, "✦", 0x7c5cff, false, &[], "Command", selected)
     }
 
     fn render_help_pill(&self, selected: bool, _colors: &rover_theme::ThemeColors) -> AnyElement {
@@ -648,7 +831,7 @@ impl RoverDelegate {
         } else {
             format!("Help: {}", self.help_query.as_deref().unwrap_or(""))
         };
-        Self::tinycast_row(text, "?", 0x8b5cf6, false, &["↵"], "Guide", selected)
+        Self::tinycast_row(text, None, "?", 0x8b5cf6, false, &[], "Command", selected)
     }
 
     pub fn select_history(&mut self, up: bool, query: &str) -> Option<String> {
@@ -680,10 +863,10 @@ impl PickerDelegate for RoverDelegate {
         match self.view_mode {
             ViewMode::Main => {
                 let o = self.row_offsets();
-                o.command_offset + self.matches.len()
+                (o.command_offset + self.matches.len()).min(8)
             }
-            ViewMode::ClipboardHistory => self.clipboard_filtered.len(),
-            ViewMode::FileSearch => self.file_results.len(),
+            ViewMode::ClipboardHistory => self.clipboard_filtered.len().min(8),
+            ViewMode::FileSearch => self.file_results.len().min(8),
         }
     }
 
@@ -711,7 +894,7 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let normalized = normalize_query(&query);
 
-                // Priority 1: explicit terminal prefix (> cmd or ! cmd) — exclusive mode
+                // Priority 1: explicit terminal prefix (> cmd or ! cmd with space) — exclusive mode
                 let terminal_prefix = query.starts_with("> ") || query.starts_with("! ");
                 if terminal_prefix {
                     let cmd = query[2..].trim().to_string();
@@ -734,7 +917,7 @@ impl PickerDelegate for RoverDelegate {
                 if help_prefix {
                     let topic = query.split_once(' ').map(|(_, t)| t.trim()).unwrap_or("");
                     self.help_query = if topic.is_empty() {
-                        Some("How to use Rover".to_string())
+                        Some("Keyboard shortcuts".to_string())
                     } else {
                         Some(topic.to_string())
                     };
@@ -746,8 +929,10 @@ impl PickerDelegate for RoverDelegate {
                     self.help_loading = false;
                 }
 
-                // Priority 1b: URL detection → open in Rover browser
-                if rover_browser::looks_like_url(&query) && !query.is_empty() {
+                // Priority 1b: Search bangs (!g, !gh, !yt, !wiki, !rs, !crates) or URL detection
+                if let Some((_, bang_url)) = parse_search_bang(&query) {
+                    self.url_result = Some(bang_url);
+                } else if rover_browser::looks_like_url(&query) && !query.is_empty() {
                     let url = if query.starts_with("http://") || query.starts_with("https://") {
                         query.clone()
                     } else {
@@ -774,7 +959,7 @@ impl PickerDelegate for RoverDelegate {
                 self.matches = match_strings(&self.candidates, &normalized, 50);
                 self.selected_ix = 0;
 
-                // Priority 4: AI — show "Ask AI" hint row (don't fire until Enter)
+                // Priority 4: AI
                 let is_ai_explicit = self.ai_enabled
                     && self.ai_session.is_some()
                     && (query.starts_with("? ") || query.starts_with("ai "));
@@ -785,10 +970,11 @@ impl PickerDelegate for RoverDelegate {
                     && !query.is_empty()
                     && query.len() >= 6
                     && !has_good_matches
-                    && self.calculator_result.is_none();
+                    && self.calculator_result.is_none()
+                    && self.url_result.is_none()
+                    && resolve_text_macro(&query).is_none();
 
                 if is_ai_explicit || is_ai_fallback {
-                    // Show "Ask AI" row but don't fire the request yet
                     self.ai_result = Some("Press Enter to ask AI".to_string());
                     self.ai_loading = false;
                     self.ai_debounce = None;
@@ -826,6 +1012,13 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let o = self.row_offsets();
 
+                if o.has_macro && self.selected_ix == o.macro_ix {
+                    if let Some((_, expanded)) = resolve_text_macro(&self.query) {
+                        cx.write_to_clipboard(ClipboardItem::new_string(expanded));
+                    }
+                    return true;
+                }
+
                 if o.has_terminal && self.selected_ix == o.terminal_ix {
                     if let Some(cmd) = &self.inline_terminal {
                         let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
@@ -856,7 +1049,6 @@ impl PickerDelegate for RoverDelegate {
                 }
 
                 if o.has_ai && self.selected_ix == o.ai_ix {
-                    // If AI hasn't run yet, fire the request now
                     if !self.ai_loading && self.ai_result.as_deref() == Some("Press Enter to ask AI") {
                         if let Some(session) = self.ai_session.clone() {
                             let prompt = if self.query.starts_with("? ") {
@@ -885,7 +1077,6 @@ impl PickerDelegate for RoverDelegate {
                         }
                         return false;
                     }
-                    // If AI has a result, copy it
                     if let Some(result) = &self.ai_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
@@ -894,16 +1085,13 @@ impl PickerDelegate for RoverDelegate {
 
                 if o.has_help && self.selected_ix == o.help_ix {
                     if !self.help_loading && self.help_result.is_none() {
-                        // Do vector search then pass context to AI
                         let topic = self.help_query.clone().unwrap_or_default();
                         let semantic = self.semantic.clone();
                         let session = self.ai_session.clone();
                         self.help_loading = true;
                         cx.spawn(async move |this, cx: &mut AsyncApp| {
-                            // Vector search for relevant docs (help docs + visited pages)
                             let context = if let Some(sem) = &semantic {
                                 let idx = sem.lock().unwrap();
-                                // Search all collections — help docs and indexed pages
                                 idx.search(&topic, None, 6)
                                     .unwrap_or_default()
                                     .into_iter()
@@ -935,7 +1123,6 @@ impl PickerDelegate for RoverDelegate {
                                     Err(e) => format!("Error: {e}"),
                                 }
                             } else if !context.is_empty() {
-                                // No AI, just show raw docs
                                 context
                             } else {
                                 "No help available for this topic.".to_string()
@@ -951,7 +1138,6 @@ impl PickerDelegate for RoverDelegate {
                         }).detach();
                         return false;
                     }
-                    // If we already have a result, copy it
                     if let Some(result) = &self.help_result {
                         cx.write_to_clipboard(ClipboardItem::new_string(result.clone()));
                     }
@@ -982,7 +1168,6 @@ impl PickerDelegate for RoverDelegate {
                                 }
                                 BuiltInCommand::Snippets => return false,
                                 BuiltInCommand::Help => {
-                                    // Pre-populate help query so user sees help results
                                     self.update_matches("help ".to_string(), cx).detach();
                                     return false;
                                 }
@@ -1057,6 +1242,13 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let o = self.row_offsets();
 
+                if o.has_macro && self.selected_ix == o.macro_ix {
+                    return vec![ItemAction {
+                        name: "Paste Snippet".into(),
+                        shortcut: Some("\u{21A9}".into()),
+                    }];
+                }
+
                 if o.has_terminal && self.selected_ix == o.terminal_ix {
                     return vec![ItemAction {
                         name: "Run".into(),
@@ -1066,7 +1258,7 @@ impl PickerDelegate for RoverDelegate {
 
                 if o.has_url && self.selected_ix == o.url_ix {
                     return vec![ItemAction {
-                        name: "Open in Rover Browser".into(),
+                        name: "Open URL".into(),
                         shortcut: Some("\u{21A9}".into()),
                     }];
                 }
@@ -1131,7 +1323,7 @@ impl PickerDelegate for RoverDelegate {
                             }
                             _ => {
                                 actions.push(ItemAction {
-                                    name: "Execute".into(),
+                                    name: "Open".into(),
                                     shortcut: Some("\u{21A9}".into()),
                                 });
                             }
@@ -1180,6 +1372,10 @@ impl PickerDelegate for RoverDelegate {
         match self.view_mode {
             ViewMode::Main => {
                 let o = self.row_offsets();
+
+                if o.has_macro && self.selected_ix == o.macro_ix {
+                    return self.confirm(cx);
+                }
 
                 if o.has_terminal && self.selected_ix == o.terminal_ix {
                     if let Some(cmd) = &self.inline_terminal {
@@ -1327,6 +1523,10 @@ impl PickerDelegate for RoverDelegate {
             ViewMode::Main => {
                 let o = self.row_offsets();
 
+                if o.has_macro && ix == o.macro_ix {
+                    return Some(self.render_macro_pill(selected));
+                }
+
                 if o.has_terminal && ix == o.terminal_ix {
                     let cmd = self.inline_terminal.as_deref().unwrap_or("");
                     return Some(self.render_terminal_pill(cmd, selected, colors));
@@ -1380,35 +1580,7 @@ impl PickerDelegate for RoverDelegate {
     }
 
     fn primary_action_label(&self) -> SharedString {
-        match self.view_mode {
-            ViewMode::Main => {
-                let o = self.row_offsets();
-                if o.has_terminal && self.selected_ix == o.terminal_ix {
-                    return "Run Command".into();
-                }
-                if o.has_url && self.selected_ix == o.url_ix {
-                    return "Open in Browser".into();
-                }
-                if o.has_calc && self.selected_ix == o.calc_ix {
-                    return "Copy Result".into();
-                }
-                let match_ix = self.selected_ix.saturating_sub(o.command_offset);
-                if let Some(m) = self.matches.get(match_ix) {
-                    if let Some(cmd) = self.all_commands.get(m.candidate_id) {
-                        let (_sec, kind_label, _, _, _, _) = Self::classify_command(cmd);
-                        return match kind_label {
-                            "Window Management" | "Room" | "Niri Strip" => "Manage Window".into(),
-                            "Browser" => "Open Browser".into(),
-                            "Application" => "Open Application".into(),
-                            _ => "Run Command".into(),
-                        };
-                    }
-                }
-                "Open".into()
-            }
-            ViewMode::ClipboardHistory => "Paste".into(),
-            ViewMode::FileSearch => "Open File".into(),
-        }
+        "Open".into()
     }
 }
 

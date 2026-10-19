@@ -1,3 +1,5 @@
+pub mod components;
+pub mod icons;
 mod text_input;
 
 pub use text_input::{bind_input_keys, TextInput, TextInputEvent};
@@ -97,39 +99,24 @@ pub struct ItemAction {
 
 // Tinycast Theme Token Ramp (white alpha ramp over dark scrim)
 pub const TC_SCRIM: u32 = 0x161618;
-pub const TC_PANEL_STROKE: u32 = 0x323238;
-pub const TC_SELECTION: u32 = 0x2d2d32; // white 0.10 over scrim
-pub const TC_GLASS_BG: u32 = 0x26262b; // Liquid-Glass surface
-pub const TC_BORDER: u32 = 0x46464e; // white 0.20 border for KeyCapChips & PopoverMenu
-pub const TC_CARD_FILL: u32 = 0x202025; // white 0.05 card fill
-pub const TC_CARD_STROKE: u32 = 0x2e2e34; // white 0.10 card stroke
+pub const TC_PANEL_STROKE: u32 = 0x26262b;
+pub const TC_SELECTION: u32 = 0x2a2a30; // white 0.10 over scrim
+pub const TC_GLASS_BG: u32 = 0x242429; // controlSurface / glass capsule
+pub const TC_BORDER: u32 = 0x3e3e46; // white 0.20 outline border for KeyCapChips & PopoverMenu
+pub const TC_CARD_FILL: u32 = 0x1f1f24; // white 0.05 surface fill
+pub const TC_CARD_STROKE: u32 = 0x2b2b31; // white 0.10 separator / hairline
+pub const TC_ICON_SURFACE: u32 = 0x28282f; // white 0.09 flat symbol tile
 pub const TC_TEXT_PRIMARY: u32 = 0xffffff; // white 1.00
 pub const TC_TEXT_SECONDARY: u32 = 0x9a9aa0; // white 0.60
 pub const TC_TEXT_TERTIARY: u32 = 0x68686e; // white 0.40
 
 pub fn render_keycap_chip(label: impl Into<SharedString>) -> Div {
-    div()
-        .h(px(18.0))
-        .min_w(px(18.0))
-        .px(px(5.0))
-        .rounded(px(5.0))
-        .bg(rgb(TC_CARD_FILL))
-        .border_1()
-        .border_color(rgb(TC_BORDER))
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_size(px(10.5))
-        .text_color(rgb(TC_TEXT_SECONDARY))
-        .child(label.into())
+    let s: SharedString = label.into();
+    components::keycap_chip(s.as_ref())
 }
 
 pub fn render_keycap_sequence(keys: &[&str]) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(3.0))
-        .children(keys.iter().map(|k| render_keycap_chip(SharedString::from((*k).to_string()))))
+    components::keycap_group(keys)
 }
 
 pub struct Picker<D: PickerDelegate> {
@@ -327,7 +314,6 @@ impl<D: PickerDelegate> Render for Picker<D> {
             match_count > 0
         };
 
-        // Tinycast floating 44px borderless search header
         let input_row = div()
             .w_full()
             .h(px(44.0))
@@ -337,18 +323,17 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .gap(px(12.0))
             .child(if in_submenu {
                 div()
-                    .w(px(28.0))
-                    .h(px(28.0))
-                    .rounded(px(8.0))
-                    .bg(rgb(TC_CARD_FILL))
-                    .border_1()
-                    .border_color(rgb(TC_CARD_STROKE))
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .rounded(px(6.0))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(rgb(TC_TEXT_SECONDARY))
-                    .text_size(px(16.0))
-                    .child(SharedString::from("‹"))
+                    .child(icons::sf_icon(
+                        icons::SfSymbol::ChevronLeft,
+                        15.0,
+                        TC_TEXT_SECONDARY,
+                    ))
             } else {
                 div()
                     .w(px(22.0))
@@ -356,20 +341,21 @@ impl<D: PickerDelegate> Render for Picker<D> {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(rgb(TC_TEXT_SECONDARY))
-                    .text_size(px(15.0))
-                    .child(SharedString::from("⌕"))
+                    .child(icons::sf_icon(
+                        icons::SfSymbol::MagnifyingGlass,
+                        15.0,
+                        TC_TEXT_SECONDARY,
+                    ))
             })
             .child(
                 div()
                     .flex_grow()
                     .text_color(rgb(TC_TEXT_PRIMARY))
-                    .text_size(px(19.0))
+                    .text_size(px(20.0))
                     .line_height(px(24.0))
                     .child(self.text_input.clone()),
             );
 
-        // Full-bleed vertical scrollable LauncherList with section headers
         let list_view = if show_items {
             let mut list_div = div()
                 .id("picker-launcher-list")
@@ -378,24 +364,17 @@ impl<D: PickerDelegate> Render for Picker<D> {
                 .overflow_y_scroll()
                 .px(px(8.0))
                 .pt(px(4.0))
-                .pb(px(10.0))
+                .pb(px(8.0))
                 .flex()
                 .flex_col()
-                .gap(px(2.0));
+                .gap(px(0.0));
 
+            let mut first_section = true;
             for ix in 0..match_count {
                 if let Some(sec) = self.delegate.section_header(ix) {
-                    list_div = list_div.child(
-                        div()
-                            .w_full()
-                            .px(px(10.0))
-                            .pt(px(8.0))
-                            .pb(px(4.0))
-                            .text_size(px(11.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(TC_TEXT_SECONDARY))
-                            .child(sec),
-                    );
+                    let is_first = first_section;
+                    first_section = false;
+                    list_div = list_div.child(components::section_header(sec, is_first));
                 }
                 let selected = ix == self.delegate.selected_index();
                 if let Some(el) = self.delegate.render_match(ix, selected, cx) {
@@ -413,6 +392,7 @@ impl<D: PickerDelegate> Render for Picker<D> {
             .track_focus(&self.focus_handle)
             .relative()
             .size_full()
+            .pt(px(10.0))
             .flex()
             .flex_col()
             .justify_between()
@@ -436,52 +416,32 @@ impl<D: PickerDelegate> Render for Picker<D> {
                 div()
                     .w_full()
                     .flex_1()
-                    .px(px(18.0))
-                    .py(px(20.0))
-                    .text_size(px(13.5))
+                    .px(px(16.0))
+                    .py(px(16.0))
+                    .text_size(px(13.0))
                     .text_color(rgb(TC_TEXT_SECONDARY))
                     .child(no_matches),
             );
         }
 
-        // Tinycast floating 52px Liquid-Glass bottom bar:
-        // Left: 36x36 circular `=` menu button
-        // Right: 36px-high Liquid-Glass Action Capsule (`Open [↵] | Actions [⌘] [K]`)
         let bottom_bar = div()
             .w_full()
             .h(px(52.0))
-            .px(px(12.0))
-            .pb(px(10.0))
-            .pt(px(6.0))
+            .px(px(8.0))
             .flex()
             .items_center()
             .justify_between()
-            .child(
-                div()
-                    .w(px(36.0))
-                    .h(px(36.0))
-                    .rounded(px(18.0))
-                    .bg(rgb(TC_GLASS_BG))
-                    .border_1()
-                    .border_color(rgb(TC_BORDER))
-                    .shadow_sm()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(15.0))
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(rgb(TC_TEXT_SECONDARY))
-                    .child(SharedString::from("=")),
-            )
+            .child(components::circle_icon_button(
+                "picker-app-menu-btn",
+                icons::SfSymbol::Equal,
+                false,
+            ))
             .child(
                 div()
                     .h(px(36.0))
-                    .px(px(6.0))
+                    .p(px(4.0))
                     .rounded(px(18.0))
                     .bg(rgb(TC_GLASS_BG))
-                    .border_1()
-                    .border_color(rgb(TC_BORDER))
-                    .shadow_sm()
                     .flex()
                     .items_center()
                     .gap(px(2.0))
@@ -495,27 +455,31 @@ impl<D: PickerDelegate> Render for Picker<D> {
                             .gap(px(6.0))
                             .child(
                                 div()
-                                    .text_size(px(12.0))
+                                    .text_size(px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(TC_TEXT_PRIMARY))
                                     .child(primary_label),
                             )
                             .child(render_keycap_chip("↵")),
                     )
-                    .child(div().w(px(1.0)).h(px(14.0)).bg(rgb(TC_BORDER)))
                     .child(
                         div()
                             .h(px(28.0))
                             .px(px(8.0))
                             .rounded(px(14.0))
+                            .when(self.show_actions, |b| b.bg(rgb(TC_SELECTION)))
                             .flex()
                             .items_center()
                             .gap(px(6.0))
                             .child(
                                 div()
-                                    .text_size(px(12.0))
+                                    .text_size(px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(TC_TEXT_SECONDARY))
+                                    .text_color(rgb(if self.show_actions {
+                                        TC_TEXT_PRIMARY
+                                    } else {
+                                        TC_TEXT_SECONDARY
+                                    }))
                                     .child(SharedString::from("Actions")),
                             )
                             .child(render_keycap_sequence(&["⌘", "K"])),
@@ -524,7 +488,6 @@ impl<D: PickerDelegate> Render for Picker<D> {
 
         root = root.child(bottom_bar);
 
-        // Tinycast 284px PopoverMenu floating above the bottom bar
         if self.show_actions {
             let actions = self.delegate.actions_for_selected();
             if !actions.is_empty() {
@@ -534,15 +497,15 @@ impl<D: PickerDelegate> Render for Picker<D> {
                         .bottom(px(52.0))
                         .left(px(0.0))
                         .right(px(0.0))
-                        .px(px(12.0))
+                        .px(px(8.0))
                         .pb(px(4.0))
                         .flex()
                         .justify_end()
                         .child(
                             div()
-                                .w(px(284.0))
-                                .rounded(px(16.0))
-                                .bg(rgb(0x1e1e22))
+                                .w(px(272.0))
+                                .rounded(px(18.0))
+                                .bg(rgb(0x1f1f24))
                                 .border_1()
                                 .border_color(rgb(TC_BORDER))
                                 .shadow_lg()
@@ -553,10 +516,10 @@ impl<D: PickerDelegate> Render for Picker<D> {
                                 .children(actions.iter().enumerate().map(|(ix, action)| {
                                     let selected = ix == self.action_selected_ix;
                                     div()
+                                        .h(px(32.0))
                                         .px(px(10.0))
-                                        .py(px(6.0))
                                         .rounded(px(10.0))
-                                        .bg(rgb(if selected { TC_SELECTION } else { 0x1e1e22 }))
+                                        .when(selected, |el| el.bg(rgb(TC_SELECTION)))
                                         .flex()
                                         .items_center()
                                         .justify_between()
@@ -570,24 +533,16 @@ impl<D: PickerDelegate> Render for Picker<D> {
                                             el.child(render_keycap_chip(shortcut))
                                         })
                                 }))
+                                .child(div().my(px(4.0)).h(px(1.0)).w_full().bg(rgb(TC_CARD_STROKE)))
                                 .child(
                                     div()
-                                        .mt(px(4.0))
-                                        .pt(px(6.0))
+                                        .h(px(26.0))
                                         .px(px(10.0))
-                                        .pb(px(4.0))
-                                        .border_t_1()
-                                        .border_color(rgb(TC_CARD_STROKE))
                                         .flex()
                                         .items_center()
-                                        .justify_between()
-                                        .child(
-                                            div()
-                                                .text_size(px(12.0))
-                                                .text_color(rgb(TC_TEXT_TERTIARY))
-                                                .child(SharedString::from("Search for actions...")),
-                                        )
-                                        .child(render_keycap_sequence(&["⌘", "K"])),
+                                        .text_size(px(12.5))
+                                        .text_color(rgb(TC_TEXT_TERTIARY))
+                                        .child(SharedString::from("Search for actions...")),
                                 ),
                         ),
                 );

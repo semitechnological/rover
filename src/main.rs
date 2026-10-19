@@ -177,7 +177,9 @@ fn parse_args() -> CliCommand {
 fn main() {
     let cli = parse_args();
 
-    Application::new().run(|cx| {
+    Application::new()
+        .with_assets(rover_picker::icons::IconAssets)
+        .run(|cx| {
         rover_theme::init(cx);
 
         if let Ok(extensions) = load_extensions() {

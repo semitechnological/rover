@@ -92,8 +92,8 @@ pub fn register_browser(registry: &mut CommandRegistry) {
 /// Register built-in commands that open sub-menus
 pub fn register_builtins(registry: &mut CommandRegistry) {
     registry.register(Command {
-        name: "Left Half (Cycle ½ → ⅓ → ⅔)".into(),
-        description: "Snap frontmost window to left half / third / two-thirds".into(),
+        name: "Left Half".into(),
+        description: "Snap frontmost window to left half".into(),
         icon: None,
         kind: CommandKind::Action(Arc::new(|| {
             let _ = std::process::Command::new("osascript")
@@ -108,8 +108,8 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         has_submenu: false,
     });
     registry.register(Command {
-        name: "Right Half (Cycle ½ → ⅓ → ⅔)".into(),
-        description: "Snap frontmost window to right half / third / two-thirds".into(),
+        name: "Right Half".into(),
+        description: "Snap frontmost window to right half".into(),
         icon: None,
         kind: CommandKind::Action(Arc::new(|| {
             let _ = std::process::Command::new("osascript")
@@ -156,15 +156,15 @@ pub fn register_builtins(registry: &mut CommandRegistry) {
         has_submenu: false,
     });
     registry.register(Command {
-        name: "Cycle Room Layout (Focus → Stack → Columns → Grid)".into(),
-        description: "Cycle Tinycast Room layout for active workspace".into(),
+        name: "Switch Room".into(),
+        description: "Switch room layout for active workspace".into(),
         icon: None,
         kind: CommandKind::Action(Arc::new(|| {})),
         has_submenu: false,
     });
     registry.register(Command {
-        name: "Niri: Cycle Column Width (1/3 → 1/2 → 2/3 → Full)".into(),
-        description: "Cycle scrollable Niri column width".into(),
+        name: "Cycle Column Width".into(),
+        description: "Cycle scrollable column width".into(),
         icon: None,
         kind: CommandKind::Action(Arc::new(|| {})),
         has_submenu: false,

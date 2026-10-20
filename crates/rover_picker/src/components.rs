@@ -18,7 +18,11 @@ impl Theme {
     pub const BOTTOM_BAR_HEIGHT: f32 = 52.0;
 
     pub const BG: u32 = 0x161619;
+    pub const PANEL_SCRIM: u32 = 0x161618;
     pub const PANEL_BORDER: u32 = 0x2c2c31;
+    pub const PANEL_STROKE: u32 = 0x26262b;
+    pub const CARD_BORDER: u32 = 0x3e3e46;
+    pub const CARD_STROKE: u32 = 0x2b2b31;
     pub const ROW_SELECTED: u32 = 0x2a2a30;
     pub const ICON_SURFACE: u32 = 0x28282f;
     pub const BAR_SURFACE: u32 = 0x242429;

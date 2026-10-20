@@ -59,6 +59,14 @@ pub enum SfSymbol {
     Power,
     PlusSquareOnSquare,
     MinusSquare,
+    ArrowClockwise,
+    ArrowDownCircle,
+    Bookmark,
+    PlayFill,
+    Trash,
+    ChevronDown,
+    ChevronUp,
+    ArrowUpRightSquare,
     Custom(&'static str),
 }
 
@@ -112,7 +120,52 @@ impl SfSymbol {
             Self::Power => "power",
             Self::PlusSquareOnSquare => "plus.square.on.square",
             Self::MinusSquare => "minus.square",
+            Self::ArrowClockwise => "arrow.clockwise",
+            Self::ArrowDownCircle => "arrow.down.circle",
+            Self::Bookmark => "bookmark",
+            Self::PlayFill => "play.fill",
+            Self::Trash => "trash",
+            Self::ChevronDown => "chevron.down",
+            Self::ChevronUp => "chevron.up",
+            Self::ArrowUpRightSquare => "arrow.up.right.square",
             Self::Custom(name) => name,
+        }
+    }
+
+    /// Maps an `SfSymbol` to its Freedesktop XDG symbolic icon counterpart on Linux.
+    pub const fn freedesktop_name(self) -> &'static str {
+        match self {
+            Self::MagnifyingGlass => "system-search-symbolic",
+            Self::ChevronLeft => "go-previous-symbolic",
+            Self::ChevronRight => "go-next-symbolic",
+            Self::ChevronUp => "pan-up-symbolic",
+            Self::ChevronDown => "pan-down-symbolic",
+            Self::ArrowLeft => "go-previous-symbolic",
+            Self::ArrowRight => "go-next-symbolic",
+            Self::ArrowUp => "go-up-symbolic",
+            Self::ArrowDown => "go-down-symbolic",
+            Self::ArrowClockwise => "view-refresh-symbolic",
+            Self::ArrowDownCircle => "folder-download-symbolic",
+            Self::Bookmark => "user-bookmarks-symbolic",
+            Self::PlayFill => "media-playback-start-symbolic",
+            Self::Trash => "user-trash-symbolic",
+            Self::ArrowUpRightSquare => "adw-external-link-symbolic",
+            Self::DocOnDoc => "edit-copy-symbolic",
+            Self::DocTextMagnifyingGlass => "system-search-symbolic",
+            Self::Link => "insert-link-symbolic",
+            Self::Folder => "folder-symbolic",
+            Self::Terminal => "utilities-terminal-symbolic",
+            Self::Globe => "web-browser-symbolic",
+            Self::Gearshape => "emblem-system-symbolic",
+            Self::SpeakerWave2 => "audio-volume-high-symbolic",
+            Self::MoonFill => "weather-clear-night-symbolic",
+            Self::LockFill => "system-lock-screen-symbolic",
+            Self::Power => "system-shutdown-symbolic",
+            Self::Checkmark => "object-select-symbolic",
+            Self::Xmark => "window-close-symbolic",
+            Self::Clock => "preferences-system-time-symbolic",
+            Self::Custom(name) => name,
+            _ => "applications-system-symbolic",
         }
     }
 
@@ -132,6 +185,8 @@ impl SfSymbol {
             "⌕" | "magnifyingglass" => Self::MagnifyingGlass,
             "‹" | "chevron.left" => Self::ChevronLeft,
             "›" | "chevron.right" => Self::ChevronRight,
+            "⌄" | "chevron.down" => Self::ChevronDown,
+            "⌃" | "chevron.up" => Self::ChevronUp,
             "◧" | "rectangle.lefthalf.filled" => Self::RectangleLeftHalfFilled,
             "◨" | "rectangle.righthalf.filled" => Self::RectangleRightHalfFilled,
             "⬒" | "rectangle.tophalf.filled" => Self::RectangleTopHalfFilled,
@@ -149,6 +204,12 @@ impl SfSymbol {
             "▢" | "macwindow" => Self::MacWindow,
             "⌖" | "rectangle.center.inset.filled" => Self::RectangleCenterInsetFilled,
             "↺" | "arrow.uturn.backward" => Self::ArrowUturnBackward,
+            "↻" | "arrow.clockwise" => Self::ArrowClockwise,
+            "⬇" | "↓◯" | "arrow.down.circle" => Self::ArrowDownCircle,
+            "★" | "bookmark" => Self::Bookmark,
+            "▶" | "play.fill" => Self::PlayFill,
+            "🗑" | "trash" => Self::Trash,
+            "↗" | "arrow.up.right.square" => Self::ArrowUpRightSquare,
             "⊞" | "door.left.hand.open" | "square.grid.2x2" => Self::SquareGrid2x2,
             "↔" | "arrow.left.and.right.square" => Self::ArrowLeftAndRightSquare,
             "←" | "arrow.left" => Self::ArrowLeft,
@@ -195,10 +256,27 @@ pub fn sf_icon(symbol: SfSymbol, size_px: f32, color_hex: u32) -> Svg {
     symbol.render(size_px, color_hex)
 }
 
+/// Renders a Linux Freedesktop XDG application or symbolic icon by name (`xdg/<name>.svg`),
+/// falling back to the built-in SF/Lucide vector library if no system SVG is installed.
+pub fn xdg_icon(name: &str, size_px: f32, color_hex: u32) -> Svg {
+    svg()
+        .path(SharedString::from(format!("xdg/{name}.svg")))
+        .size(px(size_px))
+        .text_color(rgb(color_hex))
+}
+
 pub struct IconAssets;
 
 impl AssetSource for IconAssets {
     fn load(&self, path: &str) -> GpuiResult<Option<Cow<'static, [u8]>>> {
+        if let Some(xdg_name) = path
+            .strip_prefix("xdg/")
+            .and_then(|s| s.strip_suffix(".svg"))
+        {
+            if let Some(svg_bytes) = lookup_xdg_or_sf_svg(xdg_name) {
+                return Ok(Some(Cow::Borrowed(svg_bytes)));
+            }
+        }
         let name = path
             .strip_prefix("sf/")
             .and_then(|s| s.strip_suffix(".svg"))
@@ -215,6 +293,70 @@ impl AssetSource for IconAssets {
             .map(|(name, _)| SharedString::from(format!("sf/{name}.svg")))
             .collect())
     }
+}
+
+/// Resolves a Freedesktop XDG SVG icon from standard Linux icon theme directories
+/// (`/usr/share/icons/hicolor/scalable/apps`, `Adwaita`, `Papirus`, `breeze`, `/usr/share/pixmaps`,
+/// `~/.local/share/icons`, Flatpak exports), normalizing `fill` to `currentColor` when needed.
+pub fn resolve_linux_xdg_svg(icon_name: &str) -> Option<String> {
+    let clean = icon_name
+        .trim()
+        .trim_end_matches(".svg")
+        .trim_end_matches(".png");
+    if clean.is_empty() || clean.contains('/') || clean.contains("..") {
+        return None;
+    }
+
+    let mut search_paths = Vec::new();
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME").map(std::path::PathBuf::from) {
+        search_paths.push(data_home.join(format!("icons/hicolor/scalable/apps/{clean}.svg")));
+    }
+    if let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) {
+        search_paths.push(home.join(format!(
+            ".local/share/icons/hicolor/scalable/apps/{clean}.svg"
+        )));
+    }
+    for dir in [
+        "/usr/share/icons/hicolor/scalable/apps",
+        "/usr/share/icons/Adwaita/scalable/apps",
+        "/usr/share/icons/Adwaita/symbolic/actions",
+        "/usr/share/icons/Adwaita/symbolic/apps",
+        "/usr/share/icons/Adwaita/symbolic/places",
+        "/usr/share/icons/Adwaita/symbolic/status",
+        "/usr/share/icons/Papirus/48x48/apps",
+        "/usr/share/icons/breeze/apps/48",
+        "/usr/share/pixmaps",
+        "/var/lib/flatpak/exports/share/icons/hicolor/scalable/apps",
+    ] {
+        search_paths.push(std::path::PathBuf::from(format!("{dir}/{clean}.svg")));
+    }
+
+    for candidate in search_paths {
+        if let Ok(raw) = std::fs::read_to_string(&candidate) {
+            if raw.contains("<svg") && raw.contains("<path") {
+                return Some(raw);
+            }
+        }
+    }
+    None
+}
+
+pub fn lookup_xdg_or_sf_svg(name: &str) -> Option<&'static [u8]> {
+    static XDG_CACHE: OnceLock<Mutex<HashMap<String, &'static [u8]>>> = OnceLock::new();
+    let cache = XDG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(guard) = cache.lock() {
+        if let Some(&bytes) = guard.get(name) {
+            return Some(bytes);
+        }
+    }
+    if let Some(svg_str) = resolve_linux_xdg_svg(name) {
+        let leaked: &'static [u8] = Box::leak(svg_str.into_bytes().into_boxed_slice());
+        if let Ok(mut guard) = cache.lock() {
+            guard.insert(name.to_string(), leaked);
+        }
+        return Some(leaked);
+    }
+    lookup_sf_symbol_svg(name)
 }
 
 pub fn lookup_sf_symbol_svg(name: &str) -> Option<&'static [u8]> {
@@ -235,11 +377,14 @@ pub fn lookup_sf_symbol_svg(name: &str) -> Option<&'static [u8]> {
             return Some(leaked);
         }
     }
-    BUILTIN_SF_SYMBOLS
-        .iter()
-        .find(|(k, _)| *k == name)
-        .map(|(_, v)| v.as_bytes())
-        .or_else(|| BUILTIN_SF_SYMBOLS.first().map(|(_, v)| v.as_bytes()))
+    if let Some((_, v)) = BUILTIN_SF_SYMBOLS.iter().find(|(k, _)| *k == name) {
+        return Some(v.as_bytes());
+    }
+    if let Some(svg_str) = resolve_linux_xdg_svg(name) {
+        let leaked: &'static [u8] = Box::leak(svg_str.into_bytes().into_boxed_slice());
+        return Some(leaked);
+    }
+    BUILTIN_SF_SYMBOLS.first().map(|(_, v)| v.as_bytes())
 }
 
 #[cfg(target_os = "macos")]
@@ -633,6 +778,38 @@ pub const BUILTIN_SF_SYMBOLS: &[(&str, &str)] = &[
         "minus.square",
         r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M5.74 21.50L18.26 21.50C20.42 21.50 21.49 20.42 21.49 18.30L21.49 5.71C21.49 3.58 20.42 2.50 18.26 2.50L5.74 2.50C3.59 2.50 2.51 3.57 2.51 5.71L2.51 18.30C2.51 20.43 3.59 21.50 5.74 21.50ZM5.77 19.83C4.74 19.83 4.16 19.28 4.16 18.21L4.16 5.79C4.16 4.71 4.74 4.17 5.77 4.17L18.23 4.17C19.25 4.17 19.84 4.71 19.84 5.79L19.84 18.21C19.84 19.28 19.25 19.83 18.23 19.83ZM7.96 12.88L16.05 12.88C16.63 12.88 17.02 12.57 17.02 12.03C17.02 11.47 16.66 11.15 16.05 11.15L7.96 11.15C7.37 11.15 6.98 11.47 6.98 12.03C6.98 12.57 7.39 12.88 7.96 12.88Z"/></svg>"#,
     ),
+    (
+        "arrow.clockwise",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12.00 4.00C14.12 4.00 16.05 4.83 17.48 6.18L19.60 4.06C19.99 3.67 20.66 3.95 20.66 4.50L20.66 10.00C20.66 10.55 20.21 11.00 19.66 11.00L14.16 11.00C13.61 11.00 13.33 10.33 13.72 9.94L15.96 7.70C14.90 6.72 13.52 6.12 12.00 6.12C8.75 6.12 6.12 8.75 6.12 12.00C6.12 15.25 8.75 17.88 12.00 17.88C14.68 17.88 16.94 16.08 17.65 13.62C17.81 13.06 18.40 12.74 18.96 12.90C19.52 13.06 19.84 13.65 19.68 14.21C18.71 17.56 15.64 20.00 12.00 20.00C7.58 20.00 4.00 16.42 4.00 12.00C4.00 7.58 7.58 4.00 12.00 4.00Z"/></svg>"#,
+    ),
+    (
+        "arrow.down.circle",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12.00 2.50C17.25 2.50 21.50 6.75 21.50 12.00C21.50 17.25 17.25 21.50 12.00 21.50C6.75 21.50 2.50 17.25 2.50 12.00C2.50 6.75 6.75 2.50 12.00 2.50ZM12.00 4.10C7.64 4.10 4.10 7.64 4.10 12.00C4.10 16.36 7.64 19.90 12.00 19.90C16.36 19.90 19.90 16.36 19.90 12.00C19.90 7.64 16.36 4.10 12.00 4.10ZM12.00 7.20C12.47 7.20 12.85 7.58 12.85 8.05L12.85 13.65L15.15 11.35C15.48 11.02 16.02 11.02 16.35 11.35C16.68 11.68 16.68 12.22 16.35 12.55L12.60 16.30C12.27 16.63 11.73 16.63 11.40 16.30L7.65 12.55C7.32 12.22 7.32 11.68 7.65 11.35C7.98 11.02 8.52 11.02 8.85 11.35L11.15 13.65L11.15 8.05C11.15 7.58 11.53 7.20 12.00 7.20Z"/></svg>"#,
+    ),
+    (
+        "bookmark",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M6.50 3.00L17.50 3.00C18.60 3.00 19.50 3.90 19.50 5.00L19.50 20.20C19.50 21.02 18.56 21.49 17.90 21.00L12.00 16.58L6.10 21.00C5.44 21.49 4.50 21.02 4.50 20.20L4.50 5.00C4.50 3.90 5.40 3.00 6.50 3.00ZM6.50 4.80L6.50 18.40L11.40 14.72C11.76 14.45 12.24 14.45 12.60 14.72L17.50 18.40L17.50 4.80Z"/></svg>"#,
+    ),
+    (
+        "play.fill",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M6.40 4.15C5.55 3.63 4.50 4.24 4.50 5.24L4.50 18.76C4.50 19.76 5.55 20.37 6.40 19.85L19.15 13.09C20.02 12.61 20.02 11.39 19.15 10.91Z"/></svg>"#,
+    ),
+    (
+        "trash",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M9.50 3.00L14.50 3.00C15.33 3.00 16.00 3.67 16.00 4.50L16.00 5.50L19.50 5.50C20.05 5.50 20.50 5.95 20.50 6.50C20.50 7.05 20.05 7.50 19.50 7.50L18.45 7.50L17.65 19.10C17.55 20.45 16.43 21.50 15.08 21.50L8.92 21.50C7.57 21.50 6.45 20.45 6.35 19.10L5.55 7.50L4.50 7.50C3.95 7.50 3.50 7.05 3.50 6.50C3.50 5.95 3.95 5.50 4.50 5.50L8.00 5.50L8.00 4.50C8.00 3.67 8.67 3.00 9.50 3.00ZM7.56 7.50L8.34 18.95C8.38 19.43 8.78 19.80 9.26 19.80L14.74 19.80C15.22 19.80 15.62 19.43 15.66 18.95L16.44 7.50Z"/></svg>"#,
+    ),
+    (
+        "chevron.down",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12.00 16.85C11.73 16.85 11.48 16.74 11.27 16.54L4.29 9.56C3.90 9.17 3.90 8.54 4.29 8.15C4.68 7.76 5.31 7.76 5.70 8.15L12.00 14.45L18.30 8.15C18.69 7.76 19.32 7.76 19.71 8.15C20.10 8.54 20.10 9.17 19.71 9.56L12.73 16.54C12.52 16.74 12.27 16.85 12.00 16.85Z"/></svg>"#,
+    ),
+    (
+        "chevron.up",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M12.00 7.15C12.27 7.15 12.52 7.26 12.73 7.46L19.71 14.44C20.10 14.83 20.10 15.46 19.71 15.85C19.32 16.24 18.69 16.24 18.30 15.85L12.00 9.55L5.70 15.85C5.31 16.24 4.68 16.24 4.29 15.85C3.90 15.46 3.90 14.83 4.29 14.44L11.27 7.46C11.48 7.26 11.73 7.15 12.00 7.15Z"/></svg>"#,
+    ),
+    (
+        "arrow.up.right.square",
+        r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="currentColor" d="M5.74 21.50L18.26 21.50C20.42 21.50 21.49 20.42 21.49 18.30L21.49 5.71C21.49 3.58 20.42 2.50 18.26 2.50L5.74 2.50C3.59 2.50 2.51 3.57 2.51 5.71L2.51 18.30C2.51 20.43 3.59 21.50 5.74 21.50ZM5.77 19.83C4.74 19.83 4.16 19.28 4.16 18.21L4.16 5.79C4.16 4.71 4.74 4.17 5.77 4.17L18.23 4.17C19.25 4.17 19.84 4.71 19.84 5.79L19.84 18.21C19.84 19.28 19.25 19.83 18.23 19.83ZM9.50 7.50C9.00 7.50 8.60 7.90 8.60 8.40C8.60 8.90 9.00 9.30 9.50 9.30L13.43 9.30L7.86 14.86C7.51 15.21 7.51 15.79 7.86 16.14C8.21 16.49 8.79 16.49 9.14 16.14L14.70 10.57L14.70 14.50C14.70 15.00 15.10 15.40 15.60 15.40C16.10 15.40 16.50 15.00 16.50 14.50L16.50 8.40C16.50 7.90 16.10 7.50 15.60 7.50Z"/></svg>"#,
+    ),
 ];
 
 #[cfg(test)]
@@ -659,6 +836,20 @@ mod tests {
         assert_eq!(SfSymbol::from_glyph("📋"), SfSymbol::DocOnDoc);
         assert_eq!(SfSymbol::from_glyph("🔗"), SfSymbol::Link);
         assert_eq!(SfSymbol::from_glyph("📁"), SfSymbol::Folder);
+        assert_eq!(SfSymbol::from_glyph("↻"), SfSymbol::ArrowClockwise);
+        assert_eq!(SfSymbol::from_glyph("⬇"), SfSymbol::ArrowDownCircle);
         assert_eq!(SfSymbol::from_keycap("↵"), Some(SfSymbol::Return));
+    }
+
+    #[test]
+    fn freedesktop_xdg_mapping_and_fallback_work_on_linux_and_macos() {
+        assert_eq!(
+            SfSymbol::Terminal.freedesktop_name(),
+            "utilities-terminal-symbolic"
+        );
+        assert_eq!(SfSymbol::Globe.freedesktop_name(), "web-browser-symbolic");
+        assert!(resolve_linux_xdg_svg("../invalid/path").is_none());
+        let fallback = lookup_xdg_or_sf_svg("terminal").expect("fallback svg");
+        assert!(std::str::from_utf8(fallback).unwrap().starts_with("<svg"));
     }
 }

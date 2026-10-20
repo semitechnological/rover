@@ -898,11 +898,13 @@ mod tests {
     // ── Always-runnable unit tests ────────────────────────────────────────────
 
     #[test]
+    #[ignore = "requires Apple Intelligence"]
     fn test_is_available_returns_without_panic() {
         let _ = is_available();
     }
 
     #[test]
+    #[ignore = "requires Apple Intelligence"]
     fn test_availability_result_is_consistent() {
         let avail = availability();
         assert_eq!(is_available(), avail.is_ok());
@@ -933,6 +935,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Apple Intelligence"]
     fn test_session_creation_fails_gracefully_when_unavailable() {
         if is_available() {
             return; // skip — integration tests cover the available path
@@ -942,6 +945,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires Apple Intelligence"]
     fn test_null_byte_in_prompt_returns_error() {
         if !is_available() {
             return;

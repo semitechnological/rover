@@ -1,16 +1,17 @@
 use rusty_foundationmodels::{Schema, SchemaProperty, SchemaPropertyType, ToolDefinition};
+use rover_db::RoverDb;
+use std::sync::Arc;
 
 /// Escapes a string for safe embedding inside an AppleScript double-quoted string literal.
 ///
-/// AppleScript has no backslash escape sequences; double-quotes are represented using
-/// the built-in `quote` constant via string concatenation. Control characters (newlines,
-/// carriage returns, etc.) are replaced with spaces to prevent statement injection.
+/// Backslashes are escaped and double-quotes use the built-in `quote` constant.
+/// Control characters are replaced with spaces to prevent statement injection.
 fn escape_applescript(s: &str) -> String {
     let sanitized: String = s
         .chars()
         .map(|c| if c.is_control() { ' ' } else { c })
         .collect();
-    sanitized.replace('"', "\" & quote & \"")
+    sanitized.replace('\\', "\\\\").replace('"', "\" & quote & \"")
 }
 
 /// Run an AppleScript via `osascript -e` and return trimmed stdout on success
@@ -28,12 +29,14 @@ fn run_osascript(script: &str) -> Result<String, String> {
     }
 }
 
-pub fn build_os_tools() -> Vec<ToolDefinition> {
-    vec![
-        applescript_tool(),
-        open_url_tool(),
+fn terminal_allowed(db: &RoverDb) -> bool {
+    matches!(db.get_setting("ai_terminal_enabled"), Ok(Some(value)) if value == "true")
+}
+
+pub fn build_os_tools(db: Arc<RoverDb>) -> Vec<ToolDefinition> {
+    let mut tools = vec![
+        open_url_tool(db.clone()),
         launch_app_tool(),
-        shell_tool(),
         system_info_tool(),
         get_frontmost_app_tool(),
         // Calendar / Siri-like
@@ -67,29 +70,38 @@ pub fn build_os_tools() -> Vec<ToolDefinition> {
         list_bluetooth_devices_tool(),
         // Keychain (read-only)
         get_keychain_secret_tool(),
-    ]
+    ];
+    if terminal_allowed(&db) {
+        tools.push(applescript_tool(db.clone()));
+        tools.push(shell_tool(db));
+    }
+    tools
 }
 
-fn applescript_tool() -> ToolDefinition {
+fn applescript_tool(db: Arc<RoverDb>) -> ToolDefinition {
     ToolDefinition::new(
         "run_applescript",
         "Run an AppleScript and return its output",
         Schema::new("RunApplescriptArgs")
             .property(SchemaProperty::new("script", SchemaPropertyType::String).description("The AppleScript source to execute")),
-        |args| {
-            let script = args["script"].as_str().unwrap_or("");
-            run_osascript(script)
-        },
+        move |args| run_ai_applescript(&db, args["script"].as_str().unwrap_or("")),
     )
 }
 
-fn open_url_tool() -> ToolDefinition {
+fn run_ai_applescript(db: &RoverDb, script: &str) -> Result<String, String> {
+    if !terminal_allowed(db) {
+        return Err("AI terminal commands are disabled".into());
+    }
+    run_osascript(script)
+}
+
+fn open_url_tool(db: Arc<RoverDb>) -> ToolDefinition {
     ToolDefinition::new(
         "open_url",
         "Open a URL in the default browser using AppleScript",
         Schema::new("OpenUrlArgs")
             .property(SchemaProperty::new("url", SchemaPropertyType::String).description("The URL to open")),
-        |args| {
+        move |args| {
             let url = args["url"]
                 .as_str()
                 .unwrap_or("")
@@ -97,6 +109,9 @@ fn open_url_tool() -> ToolDefinition {
                 .replace('"', "%22")
                 .replace('\n', "")
                 .replace('\r', "");
+            if !terminal_allowed(&db) && !(url.starts_with("https://") || url.starts_with("http://")) {
+                return Err("Only HTTP and HTTPS URLs are allowed while AI terminal commands are disabled".into());
+            }
             let script = format!(
                 r#"tell application "Safari"
     activate
@@ -129,28 +144,32 @@ fn launch_app_tool() -> ToolDefinition {
     )
 }
 
-fn shell_tool() -> ToolDefinition {
+fn shell_tool(db: Arc<RoverDb>) -> ToolDefinition {
     ToolDefinition::new(
         "run_shell",
         "Run a shell command and return its output",
         Schema::new("RunShellArgs")
             .property(SchemaProperty::new("command", SchemaPropertyType::String).description("Shell command to execute")),
-        |args| {
-            let command = args["command"].as_str().unwrap_or("").to_string();
-            let output = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .output()
-                .map_err(|e| e.to_string())?;
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            if output.status.success() {
-                Ok(stdout)
-            } else {
-                Ok(format!("stdout: {stdout}\nstderr: {stderr}"))
-            }
-        },
+        move |args| run_shell(&db, args["command"].as_str().unwrap_or("")),
     )
+}
+
+fn run_shell(db: &RoverDb, command: &str) -> Result<String, String> {
+    if !terminal_allowed(db) {
+        return Err("AI terminal commands are disabled".into());
+    }
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .map_err(|e| e.to_string())?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if output.status.success() {
+        Ok(stdout)
+    } else {
+        Ok(format!("stdout: {stdout}\nstderr: {stderr}"))
+    }
 }
 
 fn system_info_tool() -> ToolDefinition {
@@ -878,4 +897,34 @@ fn get_keychain_secret_tool() -> ToolDefinition {
             }
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn disabled_terminal_commands_do_not_offer_arbitrary_execution() {
+        let db = Arc::new(RoverDb::open_in_memory().unwrap());
+        let names: Vec<_> = build_os_tools(db.clone()).into_iter().map(|tool| tool.name).collect();
+        assert!(!names.iter().any(|name| name == "run_shell" || name == "run_applescript"));
+        assert!(names.iter().any(|name| name == "get_weather"));
+        assert!(run_shell(&db, "printf permitted").is_err());
+        db.set_setting("ai_terminal_enabled", "true").unwrap();
+        let names: Vec<_> = build_os_tools(db.clone()).into_iter().map(|tool| tool.name).collect();
+        assert!(names.iter().any(|name| name == "run_shell"));
+        assert!(names.iter().any(|name| name == "run_applescript"));
+        assert_eq!(run_shell(&db, "printf permitted").unwrap(), "permitted");
+        assert_eq!(run_ai_applescript(&db, "return \"permitted\"").unwrap(), "permitted");
+        db.set_setting("ai_terminal_enabled", "false").unwrap();
+        assert!(run_shell(&db, "printf forbidden").is_err());
+        assert!(run_ai_applescript(&db, "return \"forbidden\"").is_err());
+    }
+
+    #[test]
+    fn applescript_arguments_preserve_backslashes_and_quotes() {
+        let input = "literal \\\" & do shell script \\\"printf unsafe";
+        let script = format!("return \"{}\"", escape_applescript(input));
+        assert_eq!(run_osascript(&script).unwrap(), input);
+    }
 }

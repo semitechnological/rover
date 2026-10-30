@@ -119,6 +119,7 @@ const HELP_DOCS: &[DocChunk] = &[
     DocChunk {
         id: "clipboard-history",
         text: "Rover monitors your clipboard and keeps a history of up to 500 entries. \
+               Turn Clipboard History off in Data settings to stop recording; existing entries remain until cleared. \
                Open clipboard history from the launcher by selecting 'Clipboard History' \
                or searching for it. In the submenu, search entries by content. Press Enter \
                to paste the selected entry (copies it to clipboard).",

@@ -360,7 +360,7 @@ fn open_window(commands: Vec<rover_commands::Command>, db: Arc<RoverDb>, cx: &mu
         .map(|v| v == "true")
         .unwrap_or(false)
     {
-        ai::create_session().map(Arc::new)
+        ai::create_session(db.clone()).map(Arc::new)
     } else {
         None
     };

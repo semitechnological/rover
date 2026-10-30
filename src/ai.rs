@@ -1,15 +1,11 @@
 use rusty_foundationmodels::Session;
 use crate::tools::build_os_tools;
+use rover_db::RoverDb;
+use std::sync::Arc;
 
 const SYSTEM_INSTRUCTIONS: &str = "\
 You are Rover, a macOS assistant embedded in the launcher bar. \
-You have full access to macOS through AppleScript and system tools.\n\
-\n\
-Your primary tool for interacting with any app is run_applescript. \
-You write your own AppleScript — never ask the user to write it. \
-AppleScript gives you access to every scriptable macOS app: \
-Finder, Safari, Mail, Messages, Calendar, Reminders, Music, Notes, \
-System Events, Terminal, Preview, and more.\n\
+Use the available system tools to help the user.\n\
 \n\
 Routing rules (follow these automatically, never explain them):\n\
 - Calendar / schedule / appointments → get_calendar_events\n\
@@ -17,8 +13,6 @@ Routing rules (follow these automatically, never explain them):\n\
 - Weather → get_weather\n\
 - Music / playback → control_music\n\
 - Factual question (who is X, what is Y, history of Z) → search_wikipedia, then synthesise a 1-sentence answer from the result\n\
-- Any app interaction not covered above → write AppleScript and call run_applescript\n\
-- Shell/file operations → run_shell\n\
 \n\
 Style:\n\
 - Be concise: 1–2 sentences max unless a list is genuinely needed.\n\
@@ -26,9 +20,9 @@ Style:\n\
 - Never reveal tool names or say 'I ran a script'.\n\
 - When you perform an action (activated an app, added a reminder, skipped a track), just confirm it simply.";
 
-pub fn create_session() -> Option<Session> {
+pub fn create_session(db: Arc<RoverDb>) -> Option<Session> {
     if !rusty_foundationmodels::is_available() {
         return None;
     }
-    Session::with_tools(SYSTEM_INSTRUCTIONS, build_os_tools()).ok()
+    Session::with_tools(SYSTEM_INSTRUCTIONS, build_os_tools(db)).ok()
 }

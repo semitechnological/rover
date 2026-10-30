@@ -10,7 +10,7 @@ A macOS launcher and AI assistant bar. Sits in the menu bar and pops up system-w
 - **File search** — find files on your Mac
 - **AI assistant** — on-device Apple Intelligence (macOS 26+, Apple Silicon)
   - Asks calendar, reminders, weather, music, and more
-  - Writes and runs AppleScript autonomously
+  - Can run shell commands and AppleScript when enabled in settings
   - Wikipedia summaries
   - Falls back to AI when no app matches your query
 - **Browser** — keyboard-driven WebKit browser window (Cmd+\ for address bar)
@@ -52,8 +52,8 @@ DYLD_LIBRARY_PATH="/path/to/Xcode.app/Contents/Developer/Toolchains/XcodeDefault
 Open via the menu bar (Rover → Settings) or press Cmd+, after activation.
 
 - **General** — hotkey, bar position (Top / Center / Bottom)
-- **AI** — enable/disable Apple Intelligence, AI in terminal
-- **Data** — clear clipboard history, query history
+- **AI** — enable Apple Intelligence and allow or disable AI shell commands and arbitrary AppleScript. This does not disable commands you type yourself.
+- **Data** — turn clipboard history capture on or off, or clear clipboard and query history. Turning capture off keeps existing entries until you clear them.
 
 ## Architecture
 

@@ -16,6 +16,7 @@ pub struct SettingsView {
     launch_at_login: bool,
     ai_enabled: bool,
     ai_terminal_enabled: bool,
+    clipboard_history_enabled: bool,
     picker_position: String,
     compact_mode: bool,
     hotkey_key_name: String,
@@ -105,6 +106,11 @@ impl SettingsView {
             .flatten()
             .map(|v| v == "true")
             .unwrap_or(false);
+        let clipboard_history_enabled = match db.get_setting("clipboard_history_enabled") {
+            Ok(Some(value)) => value != "false",
+            Ok(None) => true,
+            Err(_) => false,
+        };
         let picker_position = db
             .get_setting("picker_position")
             .ok()
@@ -156,6 +162,7 @@ impl SettingsView {
             launch_at_login,
             ai_enabled,
             ai_terminal_enabled,
+            clipboard_history_enabled,
             picker_position,
             compact_mode,
             hotkey_key_name,
@@ -758,16 +765,18 @@ impl SettingsView {
                     .cursor_pointer()
                     .child(Self::setting_label(
                         "AI Terminal Commands",
-                        "Interpret free-text queries as terminal commands",
+                        "Allow AI to run shell commands and arbitrary AppleScript",
                         colors,
                     ))
                     .child(Self::toggle_pill(self.ai_terminal_enabled, colors))
                     .on_click(cx.listener(|this, _e, _w, cx| {
-                        this.ai_terminal_enabled = !this.ai_terminal_enabled;
-                        let _ = this.db.set_setting(
+                        let enabled = !this.ai_terminal_enabled;
+                        if this.db.set_setting(
                             "ai_terminal_enabled",
-                            &this.ai_terminal_enabled.to_string(),
-                        );
+                            &enabled.to_string(),
+                        ).is_ok() {
+                            this.ai_terminal_enabled = enabled;
+                        }
                         cx.notify();
                     })),
             )
@@ -778,6 +787,24 @@ impl SettingsView {
             .flex()
             .flex_col()
             .child(Self::section_header("Data", colors))
+            .child(
+                Self::setting_row(colors)
+                    .id("clipboard-history-enabled")
+                    .cursor_pointer()
+                    .child(Self::setting_label(
+                        "Clipboard History",
+                        "Save copied text. Turning this off keeps existing history",
+                        colors,
+                    ))
+                    .child(Self::toggle_pill(self.clipboard_history_enabled, colors))
+                    .on_click(cx.listener(|this, _e, _w, cx| {
+                        let enabled = !this.clipboard_history_enabled;
+                        if this.db.set_setting("clipboard_history_enabled", &enabled.to_string()).is_ok() {
+                            this.clipboard_history_enabled = enabled;
+                        }
+                        cx.notify();
+                    })),
+            )
             .child(
                 Self::setting_row(colors)
                     .child(Self::setting_label(

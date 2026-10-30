@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -45,7 +45,6 @@ impl RoverDb {
         Ok(db)
     }
 
-    #[cfg(test)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         let db = Self {
@@ -170,6 +169,16 @@ impl RoverDb {
             return Ok(());
         }
         let conn = self.conn.lock().unwrap();
+        let enabled: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'clipboard_history_enabled'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if enabled.as_deref() == Some("false") {
+            return Ok(());
+        }
         // Deduplicate: remove existing identical entry
         conn.execute(
             "DELETE FROM clipboard_history WHERE content = ?1",
@@ -483,6 +492,23 @@ mod tests {
         let entries = db.list_clipboard_history().unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].content, "first");
+    }
+
+    #[test]
+    fn clipboard_capture_can_be_disabled_and_reenabled() {
+        let db = RoverDb::open_in_memory().unwrap();
+        db.add_clipboard_entry("before").unwrap();
+        db.set_setting("clipboard_history_enabled", "false").unwrap();
+        db.add_clipboard_entry("private").unwrap();
+        db.set_setting("clipboard_history_enabled", "true").unwrap();
+        db.add_clipboard_entry("after").unwrap();
+        let contents: Vec<_> = db
+            .list_clipboard_history()
+            .unwrap()
+            .into_iter()
+            .map(|e| e.content)
+            .collect();
+        assert_eq!(contents, vec!["after", "before"]);
     }
 
     #[test]
